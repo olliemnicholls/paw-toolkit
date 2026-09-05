@@ -158,6 +158,15 @@ wheels = [
 ]
 
 [[package]]
+name = "interegular"
+version = "0.3.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/9d/8b6dde58a028a3962ce17e84d5fe73758df61378e00ef8ac3d85da34b0ff/interegular-0.3.3.tar.gz", hash = "sha256:d9b697b21b34884711399ba0f0376914b81899ce670032486d0d048344a76600", size = 24705, upload-time = "2024-01-06T23:01:22.372Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/01/72d6472f80651673716d1deda2a5bbb633e563ecf94f4479da5519d69d25/interegular-0.3.3-py37-none-any.whl", hash = "sha256:b0c07007d48c89d6d19f7204972d369b2a77222722e126b6aa63aa721dc3b19c", size = 23635, upload-time = "2024-01-06T23:01:20.829Z" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -192,6 +201,7 @@ name = "paw-kit"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "interegular" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "typer" },
@@ -205,6 +215,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "interegular", specifier = ">=0.3.3" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "typer", specifier = ">=0.12" },
