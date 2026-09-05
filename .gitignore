@@ -35,6 +35,7 @@ htmlcov/
 
 # PAW runtime artifacts
 .paw/
+.paw*/
 *.paw
 traces.db
 

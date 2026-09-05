@@ -21,6 +21,11 @@ test_app = typer.Typer(help="paw-test: Test runner and active-learning self-heal
 test_app.__test__ = False  # Prevent pytest from treating Typer instance as a test suite
 
 
+@test_app.callback()
+def test_app_main() -> None:
+    """paw-test: Test runner and active-learning self-healing suite."""
+
+
 @test_app.command(name="check")
 @app.command(name="check")
 def check(

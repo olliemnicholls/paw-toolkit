@@ -1,0 +1,38 @@
+task_name: date_normalizer
+spec: "Convert natural language date expressions into standard ISO-8601 YYYY-MM-DD format."
+adapter_path: "examples/date_normalizer/.paw_demo_dates/date_normalizer.paw"
+
+standard_cases:
+  - input: "January 15, 2026"
+    expected: "2026-01-15"
+  - input: "2026/09/05"
+    expected: "2026-09-05"
+  - input: "December 31st, 2025"
+    expected: "2025-12-31"
+  - input: "2024-02-29"
+    expected: "2024-02-29"
+
+assertions:
+  - rule: "regex_match"
+    pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+  - rule: "max_length"
+    value: 10
+  - rule: "min_length"
+    value: 10
+  - rule: "not_contains"
+    value: "ERROR"
+
+fuzzing:
+  inject_unicode: true
+  empty_inputs: false
+  whitespace_flood: true
+  payload_extremes: false
+  adversarial_probes:
+    - "  \t\n  2026-01-01  \n\t  "
+    - "2026年09月05日"
+    - "2026—12—31"
+
+active_learning:
+  auto_recompile: true
+  teacher_model: "claude-3-5-sonnet-20241022"
+  max_iterations: 3
