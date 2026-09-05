@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install Dependencies
+        run: uv sync --dev
+
+      - name: Run Test Suite with Coverage
+        run: uv run pytest --cov=paw_kit --cov-report=term-missing
+
+      - name: Verify CLI Suite Execution
+        run: uv run paw-test check examples/date_normalizer/suite.yaml
+
+      - name: Verify Package Distribution Build
+        run: uv build
+
+      - name: Verify CLI Entrypoints
+        run: |
+          uv run paw-kit --help
+          uv run paw-test --help
+          uv run paw-inspect --help
+          uv run paw-clean --help
