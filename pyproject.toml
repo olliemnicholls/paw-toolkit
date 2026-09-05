@@ -17,6 +17,12 @@ dev = [
     "pytest-cov>=4.0",
 ]
 
+[project.scripts]
+paw-kit = "paw_kit.cli:app"
+paw-test = "paw_kit.cli:test_app"
+paw-inspect = "paw_kit.cli:inspect_cli"
+paw-clean = "paw_kit.cli:clean_cli"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
