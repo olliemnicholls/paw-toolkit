@@ -1,0 +1,81 @@
+"""Adversarial mutation fuzzer for neural adapter robustness testing."""
+
+from typing import List, Optional
+from paw_kit.test.suite import FuzzingConfig
+
+UNICODE_MUTATIONS = [
+    "\u200B",  # Zero-width space
+    "\u200C",  # Zero-width non-joiner
+    "\u202E",  # Right-to-left override
+    "\uFEFF",  # Byte-order mark
+    "🔥🚀🚨",  # Multi-byte emojis
+    "\\u0000",  # Escaped null
+    "\x00\x1f",  # Raw control characters
+]
+
+WHITESPACE_MUTATIONS = [
+    "   ",
+    "\t\t\t",
+    "\n\n\r\n",
+    "   \t  \n  ",
+]
+
+
+class AdversarialFuzzer:
+    """Generates synthetic adversarial and edge-case inputs for test harnesses."""
+
+    @classmethod
+    def generate(
+        cls,
+        config: FuzzingConfig,
+        base_inputs: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Generate mutated inputs according to the FuzzingConfig rules.
+
+        Args:
+            config: Fuzzing configuration settings.
+            base_inputs: Optional base seed inputs to mutate.
+
+        Returns:
+            List of unique adversarial input strings.
+        """
+        seeds = base_inputs or ["example input"]
+        fuzzed: List[str] = []
+
+        # 1. Custom domain probes from suite.yaml
+        fuzzed.extend(config.adversarial_probes)
+
+        # 2. Empty inputs
+        if config.empty_inputs:
+            fuzzed.append("")
+
+        # 3. Whitespace floods
+        if config.whitespace_flood:
+            fuzzed.extend(WHITESPACE_MUTATIONS)
+            for seed in seeds:
+                fuzzed.append(f"   {seed}   \n")
+                fuzzed.append(f"\t\t{seed}\t\t")
+
+        # 4. Unicode & corruptions
+        if config.inject_unicode:
+            for u in UNICODE_MUTATIONS:
+                fuzzed.append(u)
+                for seed in seeds:
+                    fuzzed.append(f"{seed}{u}")
+                    fuzzed.append(f"{u}{seed}")
+
+        # 5. Payload length extremes
+        if config.payload_extremes:
+            fuzzed.append("A" * 5000)
+            for seed in seeds:
+                fuzzed.append(seed * 200)
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_fuzzed: List[str] = []
+        for item in fuzzed:
+            if item not in seen:
+                seen.add(item)
+                unique_fuzzed.append(item)
+
+        return unique_fuzzed
