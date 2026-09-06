@@ -49,7 +49,7 @@ def mock_adapter(tmp_path: Path) -> Path:
 def test_health_and_metrics_endpoints(mock_adapter: Path) -> None:
     """Verify /health and /metrics report proper uptime, status, and telemetry without leaking host paths."""
     backend = MockPAWBackend()
-    fastapi_app = create_app(mock_adapter, backend=backend)
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     client = TestClient(fastapi_app)
 
     # Health check
@@ -74,7 +74,7 @@ def test_health_and_metrics_endpoints(mock_adapter: Path) -> None:
 def test_invoke_endpoint(mock_adapter: Path) -> None:
     """Verify direct RPC /invoke executes adapter and tracks request latency."""
     backend = MockPAWBackend()
-    fastapi_app = create_app(mock_adapter, backend=backend)
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     client = TestClient(fastapi_app)
 
     res = client.post("/invoke", json={"input": "Urgent payment failure"})
@@ -92,7 +92,7 @@ def test_invoke_endpoint(mock_adapter: Path) -> None:
 def test_openai_chat_completions(mock_adapter: Path) -> None:
     """Verify POST /v1/chat/completions adheres to OpenAI specification."""
     backend = MockPAWBackend()
-    fastapi_app = create_app(mock_adapter, backend=backend)
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     client = TestClient(fastapi_app)
 
     payload = {
@@ -122,7 +122,7 @@ def test_openai_chat_completions(mock_adapter: Path) -> None:
 def test_anthropic_messages_endpoint(mock_adapter: Path) -> None:
     """Verify POST /v1/messages adheres to Anthropic Messages specification."""
     backend = MockPAWBackend()
-    fastapi_app = create_app(mock_adapter, backend=backend)
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     client = TestClient(fastapi_app)
 
     payload = {
@@ -160,6 +160,7 @@ def test_schema_enforcement_in_server(mock_adapter: Path) -> None:
         mock_adapter,
         backend=backend,
         response_model=TicketSchema,
+        allow_anonymous=True,
     )
     client = TestClient(fastapi_app)
 
@@ -194,7 +195,7 @@ def test_error_handling_and_validation(mock_adapter: Path) -> None:
         create_app(Path("/non/existent/path.paw"))
 
     backend = MockPAWBackend()
-    fastapi_app = create_app(mock_adapter, backend=backend)
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     client = TestClient(fastapi_app)
 
     # Empty messages in OpenAI format
@@ -209,7 +210,7 @@ def test_error_handling_and_validation(mock_adapter: Path) -> None:
     def failing_backend(*args, **kwargs):
         raise RuntimeError("Secret internal database connection string: postgres://root:pass@db/internal")
 
-    broken_app = create_app(mock_adapter, backend=backend)
+    broken_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     backend.infer = failing_backend  # type: ignore
     broken_client = TestClient(broken_app)
 
@@ -225,7 +226,7 @@ def test_error_handling_and_validation(mock_adapter: Path) -> None:
 def test_stream_rejected_explicitly(mock_adapter: Path) -> None:
     """Verify M-5: stream=True is rejected with clear 400 instead of silently returning non-streamed JSON."""
     backend = MockPAWBackend()
-    fastapi_app = create_app(mock_adapter, backend=backend)
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     client = TestClient(fastapi_app)
 
     payload = {
@@ -292,10 +293,92 @@ def test_api_key_authentication(mock_adapter: Path) -> None:
     assert res_msg.status_code == 200
 
 
+def test_serve_requires_auth_by_default_PAW_SERVE_01(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Verify PAW-SERVE-01: with no --api-key/PAW_API_KEY and no --allow-anonymous,
+    inference is denied by default and an ephemeral bearer token is generated and
+    printed to stderr, usable to authenticate."""
+    monkeypatch.delenv("PAW_API_KEY", raising=False)
+    backend = MockPAWBackend()
+    app_default_deny = create_app(mock_adapter, backend=backend)
+    client = TestClient(app_default_deny)
+
+    captured = capsys.readouterr()
+    assert "Generated ephemeral bearer token" in captured.err
+    token = captured.err.split("bearer token: ")[1].split("\n")[0].strip()
+    assert token
+
+    # No credentials at all: denied.
+    res_no_auth = client.post("/invoke", json={"input": "test"})
+    assert res_no_auth.status_code == 401
+
+    # Wrong credentials: still denied.
+    res_wrong = client.post(
+        "/invoke", json={"input": "test"}, headers={"Authorization": "Bearer not-the-token"}
+    )
+    assert res_wrong.status_code == 401
+
+    # The printed ephemeral token itself authenticates successfully.
+    res_ok = client.post(
+        "/invoke",
+        json={"input": "Urgent payment failure"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res_ok.status_code == 200
+
+
+def test_serve_allow_anonymous_disables_default_deny_PAW_SERVE_01(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Verify --allow-anonymous opts back out of PAW-SERVE-01's default-deny behavior."""
+    monkeypatch.delenv("PAW_API_KEY", raising=False)
+    backend = MockPAWBackend()
+    app_anonymous = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(app_anonymous)
+
+    captured = capsys.readouterr()
+    assert "ephemeral bearer token" not in captured.err
+
+    res = client.post("/invoke", json={"input": "Urgent payment failure"})
+    assert res.status_code == 200
+
+
+def test_serve_cors_default_denies_cross_origin_PAW_SERVE_02(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-SERVE-02: with no PAW_CORS_ORIGINS set, no CORS headers are issued
+    at all, so browsers deny cross-origin access by default."""
+    monkeypatch.delenv("PAW_CORS_ORIGINS", raising=False)
+    backend = MockPAWBackend()
+    app_no_cors = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(app_no_cors)
+
+    res = client.get("/health", headers={"Origin": "https://evil.example"})
+    assert res.status_code == 200
+    assert "access-control-allow-origin" not in {k.lower() for k in res.headers.keys()}
+
+
+def test_serve_cors_allowlist_env_PAW_SERVE_02(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-SERVE-02: PAW_CORS_ORIGINS grants only the listed origin(s)."""
+    monkeypatch.setenv("PAW_CORS_ORIGINS", "https://good.example")
+    backend = MockPAWBackend()
+    app_with_cors = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(app_with_cors)
+
+    res_allowed = client.get("/health", headers={"Origin": "https://good.example"})
+    assert res_allowed.headers.get("access-control-allow-origin") == "https://good.example"
+
+    res_denied = client.get("/health", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in {k.lower() for k in res_denied.headers.keys()}
+
+
 def test_payload_size_limit_middleware(mock_adapter: Path) -> None:
     """Verify M-1 and S-2: Enforce request payload limits, invalid headers, and oversized bodies."""
     backend = MockPAWBackend()
-    fastapi_app = create_app(mock_adapter, backend=backend)
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
     client = TestClient(fastapi_app)
 
     # 1. Simulate 11MB Content-Length header
@@ -324,6 +407,42 @@ def test_payload_size_limit_middleware(mock_adapter: Path) -> None:
     )
     assert res_body.status_code == 413
     assert "Payload Too Large" in res_body.text
+
+
+def test_serve_payload_limit_asgi_streaming_PAW_SERVE_03(mock_adapter: Path) -> None:
+    """Verify PAW-SERVE-03: the ASGI-level rewrite of limit_payload_size correctly
+    rejects a truly streamed oversized body with no Content-Length header (proving the
+    running byte counter works, not just the header pre-check), while a normal-size
+    streamed body still reaches the route handler intact — the exact regression a naive
+    BaseHTTPMiddleware + request.stream() rewrite would fail (Phase 0 Round 1, N-1)."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    def oversized_chunks():
+        chunk = b"a" * (1024 * 1024)  # 1MB per chunk
+        for _ in range(12):  # 12MB total, no Content-Length known upfront
+            yield chunk
+
+    res_over = client.post("/invoke", content=oversized_chunks())
+    assert "content-length" not in {k.lower() for k in res_over.request.headers.keys()}
+    assert res_over.status_code == 413
+    assert "Payload Too Large" in res_over.text
+
+    def normal_chunks():
+        body = json.dumps({"input": "Urgent payment failure"}).encode("utf-8")
+        midpoint = len(body) // 2
+        yield body[:midpoint]
+        yield body[midpoint:]
+
+    res_normal = client.post(
+        "/invoke",
+        content=normal_chunks(),
+        headers={"Content-Type": "application/json"},
+    )
+    assert "content-length" not in {k.lower() for k in res_normal.request.headers.keys()}
+    assert res_normal.status_code == 200
+    assert res_normal.json()["output"]["priority"] == "high"
 
 
 def test_server_state_metrics_calculation() -> None:
@@ -358,6 +477,21 @@ def test_docker_exporter_scaffold(mock_adapter: Path, tmp_path: Path) -> None:
     assert "triage.paw" in dockerfile
 
 
+def test_docker_exporter_carries_paw_api_key_PAW_SERVE_01(mock_adapter: Path, tmp_path: Path) -> None:
+    """Verify the generated container inherits auth-by-default (Phase 1's PAW-SERVE-01):
+    docker-compose.yml forwards PAW_API_KEY, and the README documents supplying it and
+    includes it in its example curl commands rather than the old auth-less examples."""
+    out_dir = tmp_path / "docker_dist"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
+
+    compose = (dest / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "PAW_API_KEY" in compose
+
+    readme = (dest / "README.md").read_text(encoding="utf-8")
+    assert "PAW_API_KEY" in readme
+    assert "Authorization: Bearer $PAW_API_KEY" in readme
+
+
 def test_docker_exporter_sanitization(mock_adapter: Path, tmp_path: Path) -> None:
     """Verify L-7: export_docker_scaffold rejects unsafe adapter filenames."""
     bad_adapter = tmp_path / "bad;rm -rf.paw"
@@ -365,6 +499,35 @@ def test_docker_exporter_sanitization(mock_adapter: Path, tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="unsafe characters"):
         export_docker_scaffold(bad_adapter, output_dir=tmp_path / "docker_bad")
+
+
+def test_docker_exporter_reserved_filename_collision_PAW_DOCKER_01(tmp_path: Path) -> None:
+    """Verify PAW-DOCKER-01: an adapter path colliding with a file
+    export_docker_scaffold generates itself (e.g. the audit's
+    `paw export docker ./Dockerfile --out-dir ./deploy` scenario) is rejected rather
+    than silently overwriting the just-generated file during the copy-adapter step."""
+    out_dir = tmp_path / "deploy"
+    out_dir.mkdir()
+
+    # The audit's literal scenario: an "adapter" named exactly like a generated file.
+    fake_dockerfile_adapter = out_dir / "Dockerfile"
+    fake_dockerfile_adapter.write_text("not a real adapter", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="collides with a file"):
+        export_docker_scaffold(fake_dockerfile_adapter, output_dir=out_dir)
+
+    # Every reserved generated filename is rejected the same way.
+    for reserved in [".dockerignore", "docker-compose.yml", "README.md"]:
+        reserved_adapter = tmp_path / reserved
+        reserved_adapter.write_text("not a real adapter", encoding="utf-8")
+        with pytest.raises(ValueError, match="collides with a file"):
+            export_docker_scaffold(reserved_adapter, output_dir=out_dir / "unused")
+
+    # A non-reserved name still requires the .paw extension.
+    no_extension_adapter = tmp_path / "harmless-name"
+    no_extension_adapter.write_text("not a real adapter", encoding="utf-8")
+    with pytest.raises(ValueError, match="must have a '.paw' extension"):
+        export_docker_scaffold(no_extension_adapter, output_dir=out_dir / "unused2")
 
 
 def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
@@ -427,7 +590,7 @@ def test_serve_adapter_runner(mock_adapter: Path, monkeypatch: pytest.MonkeyPatc
         called_args["port"] = port
 
     monkeypatch.setattr(uvicorn, "run", mock_run)
-    serve_adapter(mock_adapter, port=9000)
+    serve_adapter(mock_adapter, port=9000, allow_anonymous=True)
 
     # Verify default host is 127.0.0.1 for security
     assert called_args["host"] == "127.0.0.1"
@@ -451,7 +614,30 @@ def test_cli_serve_command(mock_adapter: Path, monkeypatch: pytest.MonkeyPatch) 
     assert res.exit_code == 0
     assert called_kwargs.get("host") == "127.0.0.1"
     assert called_kwargs.get("api_key") == "secret123"
+    assert called_kwargs.get("allow_anonymous") is False
 
     # Bad adapter
     res_bad = runner.invoke(app, ["serve", "missing_adapter.paw"])
     assert res_bad.exit_code == 1
+
+
+def test_cli_serve_allow_anonymous_flag_PAW_SERVE_01(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify --allow-anonymous threads from the CLI through to serve_adapter, and that
+    its console output reflects the effective auth mode (PAW-SERVE-01 plumbing)."""
+    from paw_kit.serve import server
+
+    called_kwargs = {}
+
+    def mock_serve_adapter(*args, **kwargs):
+        called_kwargs.update(kwargs)
+
+    monkeypatch.setattr(server, "serve_adapter", mock_serve_adapter)
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["serve", str(mock_adapter), "--allow-anonymous"])
+    assert res.exit_code == 0
+    assert called_kwargs.get("allow_anonymous") is True
+    assert called_kwargs.get("api_key") is None
+    assert "DISABLED" in res.stdout
