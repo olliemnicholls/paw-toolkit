@@ -14,6 +14,18 @@ dependencies = [
     "httpx>=0.27.0",
 ]
 
+[project.optional-dependencies]
+torch = [
+    "torch>=2.2.0",
+    "transformers>=4.40.0",
+    "peft>=0.10.0",
+    "safetensors>=0.4.0",
+    "accelerate>=0.28.0",
+]
+real = [
+    "paw-kit[torch]",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

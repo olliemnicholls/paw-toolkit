@@ -16,7 +16,7 @@ class RealPAWBackend(AbstractPAWBackend):
 
     def __init__(
         self,
-        base_model_name_or_path: str = "programasweights/base-0.6b",
+        base_model_name_or_path: str = "Qwen/Qwen2.5-0.5B-Instruct",
         device: str = "auto",
         runtime_executor: Optional[Callable[[str, str, Optional[str]], str]] = None,
     ) -> None:
@@ -43,11 +43,14 @@ class RealPAWBackend(AbstractPAWBackend):
 
         Raises:
             RuntimeError: If real ML environment (torch/transformers) is not available.
+            NotImplementedError: If direct PyTorch compilation is invoked without a custom runtime executor.
         """
         if not self.is_available():
             raise RuntimeError(
-                "RealPAWBackend requires PyTorch and transformers packages to perform neural fine-tuning. "
-                "Ensure upstream 'programasweights' and 'torch' are installed, or use MockPAWBackend."
+                "RealPAWBackend requires PyTorch and Hugging Face transformers packages.\n"
+                "Install the real backend dependencies:\n\n"
+                "    pip install 'paw-kit[torch]'\n\n"
+                "Or use MockPAWBackend for fast, zero-GPU testing and development."
             )
 
         out_path = Path(output_path)
@@ -57,10 +60,10 @@ class RealPAWBackend(AbstractPAWBackend):
             out_path.write_text(f"[real_compiled:{spec}]", encoding="utf-8")
             return output_path
 
-        # Placeholder for upstream Deng et al. compiler entrypoint
-        # Real training fine-tunes 20MB LoRA adapter weights on 0.6B base
-        out_path.write_text(f"PAW_ADAPTER_BINARY:base={self.base_model_name_or_path}:spec={spec}", encoding="utf-8")
-        return output_path
+        raise NotImplementedError(
+            "Direct PyTorch neural fine-tuning compilation is under active development for paw-kit v0.2.\n"
+            "In v0.1, use MockPAWBackend for zero-GPU testing or supply a custom `runtime_executor` callback."
+        )
 
     def infer(
         self,
@@ -68,19 +71,26 @@ class RealPAWBackend(AbstractPAWBackend):
         input_text: str,
         grammar_constraint: Optional[str] = None,
     ) -> str:
-        """Execute local neural inference on resident 0.6B model with specified adapter.
+        """Execute local neural inference on resident model with specified adapter.
 
         Applies RegexLogitsProcessor if grammar_constraint is provided.
+
+        Raises:
+            RuntimeError: If real ML environment (torch/transformers) is not available.
+            NotImplementedError: If direct PyTorch inference is invoked without a custom runtime executor.
         """
         if not self.is_available():
             raise RuntimeError(
-                "RealPAWBackend requires PyTorch and transformers packages for local neural execution. "
-                "Ensure upstream weights are loaded or use MockPAWBackend."
+                "RealPAWBackend requires PyTorch and Hugging Face transformers packages for local neural execution.\n"
+                "Install the real backend dependencies:\n\n"
+                "    pip install 'paw-kit[torch]'\n\n"
+                "Or use MockPAWBackend for fast, zero-GPU testing and development."
             )
 
         if self._runtime_executor is not None:
             return self._runtime_executor(adapter_path, input_text, grammar_constraint)
 
-        # Standard transformer generation with logit processor constraint
-        # In production, outputs decoded string from resident 0.6B base model
-        return f"[real_inference:{input_text}]"
+        raise NotImplementedError(
+            "Direct PyTorch neural inference is under active development for paw-kit v0.2.\n"
+            "In v0.1, use MockPAWBackend for zero-GPU testing or supply a custom `runtime_executor` callback."
+        )

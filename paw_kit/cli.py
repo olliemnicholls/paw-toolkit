@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 import sys
-from typing import Optional
+from typing import Any, Optional
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -26,6 +26,25 @@ def test_app_main() -> None:
     """paw-test: Test runner and active-learning self-healing suite."""
 
 
+def _resolve_cli_backend(backend_type: str) -> Any:
+    """Resolve backend from CLI flag with graceful degradation and clear guidance."""
+    if backend_type.lower() == "real":
+        real_backend = RealPAWBackend()
+        if not real_backend.is_available():
+            console.print(
+                "[bold yellow]Warning:[/bold yellow] Real GPU/CPU backend requires PyTorch and transformers packages.\n"
+                "  To install: [cyan]pip install 'paw-kit[torch]'[/cyan]\n"
+                "  Falling back to [green]MockPAWBackend[/green] for zero-hardware execution."
+            )
+        else:
+            console.print(
+                "[bold yellow]Note:[/bold yellow] Direct PyTorch neural execution is under active development for v0.2.\n"
+                "  Falling back to [green]MockPAWBackend[/green] for this run."
+            )
+        return MockPAWBackend()
+    return MockPAWBackend()
+
+
 @test_app.command(name="check")
 @app.command(name="check")
 def check(
@@ -41,7 +60,7 @@ def check(
         raise typer.Exit(code=1)
 
     try:
-        config = load_suite(suite_path)
+        config = load_suite(str(suite_path))
     except Exception as exc:
         console.print(f"[bold red]Error parsing suite:[/bold red] {exc}")
         raise typer.Exit(code=1)
@@ -49,8 +68,8 @@ def check(
     if auto_recompile is not None:
         config.active_learning.auto_recompile = auto_recompile
 
-    # Select backend
-    backend = RealPAWBackend() if backend_type.lower() == "real" else MockPAWBackend()
+    # Select backend safely
+    backend = _resolve_cli_backend(backend_type)
 
     console.print(f"[bold cyan]Running paw.test check on:[/bold cyan] {config.task_name} ([dim]{config.adapter_path}[/dim])")
 
@@ -184,10 +203,11 @@ def serve(
         console.print(f"[bold red]Error:[/bold red] Adapter file '{adapter_path}' does not exist.")
         raise typer.Exit(code=1)
 
-    backend = RealPAWBackend() if backend_type.lower() == "real" else MockPAWBackend()
+    backend = _resolve_cli_backend(backend_type)
+    actual_type = "mock" if isinstance(backend, MockPAWBackend) else backend_type.lower()
     console.print(f"[bold green]Launching PAW microservice on http://{host}:{port}[/bold green]")
     console.print(f"  [cyan]Adapter:[/cyan] {adapter_path}")
-    console.print(f"  [cyan]Backend:[/cyan] {backend_type.lower()}")
+    console.print(f"  [cyan]Backend:[/cyan] {actual_type}")
     if api_key:
         console.print("  [yellow]Authentication:[/yellow] Bearer token active")
     console.print("  [dim]Endpoints: /v1/chat/completions, /v1/messages, /invoke, /health, /metrics[/dim]")

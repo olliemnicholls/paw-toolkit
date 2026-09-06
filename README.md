@@ -100,8 +100,8 @@ uv add paw-kit
 ```
 
 ### Hardware Support
-* **Development / CI:** Ships with pure-Python `MockPAWBackend` enabled by default for zero-GPU deterministic testing in milliseconds.
-* **Production GPU:** Optional PyTorch 2.2+ and Hugging Face `transformers` runtime automatically bridges to upstream PAW weights via `RealPAWBackend`.
+* **Zero-Hardware Default (v0.1):** Pure-Python `MockPAWBackend` enabled by default for deterministic, zero-GPU testing in <10ms across Mac, Linux, and Windows.
+* **Production Neural Execution (Coming in v0.2):** PyTorch 2.2+ integration via `RealPAWBackend` (`pip install "paw-kit[torch]"`) targeting `Qwen/Qwen2.5-0.5B-Instruct` is under active development.
 
 ---
 
