@@ -174,9 +174,10 @@ app.add_typer(export_app, name="export")
 @app.command(name="serve")
 def serve(
     adapter_path: Path = typer.Argument(..., help="Path to compiled .paw adapter artifact"),
-    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host interface to bind"),
+    host: str = typer.Option("127.0.0.1", "--host", "-H", help="Host interface to bind"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to listen on"),
     backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Optional secret bearer token for authentication"),
 ) -> None:
     """Launch high-performance OpenAI & Anthropic compatible HTTP microservice."""
     if not adapter_path.exists():
@@ -187,11 +188,13 @@ def serve(
     console.print(f"[bold green]Launching PAW microservice on http://{host}:{port}[/bold green]")
     console.print(f"  [cyan]Adapter:[/cyan] {adapter_path}")
     console.print(f"  [cyan]Backend:[/cyan] {backend_type.lower()}")
+    if api_key:
+        console.print("  [yellow]Authentication:[/yellow] Bearer token active")
     console.print("  [dim]Endpoints: /v1/chat/completions, /v1/messages, /invoke, /health, /metrics[/dim]")
 
     from paw_kit.serve.server import serve_adapter
 
-    serve_adapter(adapter_path=adapter_path, host=host, port=port, backend=backend)
+    serve_adapter(adapter_path=adapter_path, host=host, port=port, backend=backend, api_key=api_key)
 
 
 @export_app.command(name="docker")
@@ -231,11 +234,10 @@ def export_dataset_cmd(
     import sqlite3
 
     try:
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        cursor.execute("SELECT input, output FROM traces ORDER BY timestamp ASC;")
-        rows = cursor.fetchall()
-        conn.close()
+        with sqlite3.connect(str(db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT input, output FROM traces ORDER BY timestamp ASC;")
+            rows = cursor.fetchall()
 
         if not rows:
             console.print(f"[yellow]Warning:[/yellow] No traces found in {db_path}.")

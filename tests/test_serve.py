@@ -31,7 +31,15 @@ def mock_adapter(tmp_path: Path) -> Path:
             {
                 "input": "Urgent payment failure",
                 "output": json.dumps({"priority": "high", "confidence": 0.98}),
-            }
+            },
+            {
+                "input": "You are a customer support classifier.\n\nUrgent payment failure",
+                "output": json.dumps({"priority": "high", "confidence": 0.98}),
+            },
+            {
+                "input": "You are an automated triage agent.\n\nUrgent payment failure",
+                "output": json.dumps({"priority": "high", "confidence": 0.98}),
+            },
         ],
         output_path=str(adapter_file),
     )
@@ -39,7 +47,7 @@ def mock_adapter(tmp_path: Path) -> Path:
 
 
 def test_health_and_metrics_endpoints(mock_adapter: Path) -> None:
-    """Verify /health and /metrics report proper uptime, status, and telemetry."""
+    """Verify /health and /metrics report proper uptime, status, and telemetry without leaking host paths."""
     backend = MockPAWBackend()
     fastapi_app = create_app(mock_adapter, backend=backend)
     client = TestClient(fastapi_app)
@@ -50,7 +58,8 @@ def test_health_and_metrics_endpoints(mock_adapter: Path) -> None:
     data = res.json()
     assert data["status"] == "ok"
     assert data["backend"] == "mock"
-    assert "triage.paw" in data["adapter_path"]
+    # Verify basename is returned to prevent directory disclosure (H-3)
+    assert data["adapter_path"] == "triage.paw"
     assert data["uptime_seconds"] >= 0.0
 
     # Initial metrics
@@ -179,7 +188,7 @@ def test_schema_enforcement_in_server(mock_adapter: Path) -> None:
 
 
 def test_error_handling_and_validation(mock_adapter: Path) -> None:
-    """Verify proper error responses for empty messages, missing files, and runtime faults."""
+    """Verify proper error responses, generic 500 error sanitization, and metric tracking."""
     # Non-existent adapter file
     with pytest.raises(FileNotFoundError):
         create_app(Path("/non/existent/path.paw"))
@@ -196,21 +205,81 @@ def test_error_handling_and_validation(mock_adapter: Path) -> None:
     res_ant = client.post("/v1/messages", json={"messages": []})
     assert res_ant.status_code == 400
 
-    # Runtime backend error
+    # Runtime backend error — verify C-1: generic error message returned, no exception leakage
     def failing_backend(*args, **kwargs):
-        raise RuntimeError("Inference execution fault")
+        raise RuntimeError("Secret internal database connection string: postgres://root:pass@db/internal")
 
     broken_app = create_app(mock_adapter, backend=backend)
-    # Patch infer to simulate internal fault
     backend.infer = failing_backend  # type: ignore
     broken_client = TestClient(broken_app)
 
     res_err = broken_client.post("/invoke", json={"input": "fail"})
     assert res_err.status_code == 500
-    assert "Inference execution fault" in res_err.json()["detail"]
+    assert res_err.json()["detail"] == "Internal server error"
+    assert "postgres" not in res_err.text
 
     m = broken_client.get("/metrics").json()
     assert m["error_count"] >= 1
+
+
+def test_stream_rejected_explicitly(mock_adapter: Path) -> None:
+    """Verify M-5: stream=True is rejected with clear 400 instead of silently returning non-streamed JSON."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend)
+    client = TestClient(fastapi_app)
+
+    payload = {
+        "messages": [{"role": "user", "content": "Urgent payment failure"}],
+        "stream": True,
+    }
+    res = client.post("/v1/chat/completions", json=payload)
+    assert res.status_code == 400
+    assert "Streaming is not yet supported" in res.json()["detail"]
+
+
+def test_api_key_authentication(mock_adapter: Path) -> None:
+    """Verify H-2: Optional API key authentication guards all inference endpoints."""
+    backend = MockPAWBackend()
+    auth_app = create_app(mock_adapter, backend=backend, api_key="secret-api-key-999")
+    client = TestClient(auth_app)
+
+    # 1. Health and metrics remain open for monitoring
+    assert client.get("/health").status_code == 200
+    assert client.get("/metrics").status_code == 200
+
+    # 2. Missing authorization header
+    assert client.post("/invoke", json={"input": "test"}).status_code == 401
+
+    # 3. Invalid token
+    assert client.post(
+        "/invoke",
+        json={"input": "test"},
+        headers={"Authorization": "Bearer wrong-key"},
+    ).status_code == 401
+
+    # 4. Valid token succeeds
+    res = client.post(
+        "/invoke",
+        json={"input": "Urgent payment failure"},
+        headers={"Authorization": "Bearer secret-api-key-999"},
+    )
+    assert res.status_code == 200
+
+
+def test_payload_size_limit_middleware(mock_adapter: Path) -> None:
+    """Verify M-1: Requests exceeding 10MB are rejected with 413 Payload Too Large."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend)
+    client = TestClient(fastapi_app)
+
+    # Simulate 11MB Content-Length header
+    res = client.post(
+        "/invoke",
+        headers={"Content-Length": str(11 * 1024 * 1024)},
+        json={"input": "test"},
+    )
+    assert res.status_code == 413
+    assert "Payload Too Large" in res.text
 
 
 def test_server_state_metrics_calculation() -> None:
@@ -227,7 +296,7 @@ def test_server_state_metrics_calculation() -> None:
 
 
 def test_docker_exporter_scaffold(mock_adapter: Path, tmp_path: Path) -> None:
-    """Verify export_docker_scaffold generates all production deployment files."""
+    """Verify export_docker_scaffold generates all production deployment files with non-root user (M-4)."""
     out_dir = tmp_path / "docker_dist"
     dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
 
@@ -240,8 +309,18 @@ def test_docker_exporter_scaffold(mock_adapter: Path, tmp_path: Path) -> None:
 
     dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
     assert "FROM python:3.12-slim" in dockerfile
+    assert "USER app" in dockerfile
     assert "paw-serve" in dockerfile
     assert "triage.paw" in dockerfile
+
+
+def test_docker_exporter_sanitization(mock_adapter: Path, tmp_path: Path) -> None:
+    """Verify L-7: export_docker_scaffold rejects unsafe adapter filenames."""
+    bad_adapter = tmp_path / "bad;rm -rf.paw"
+    bad_adapter.write_text("dummy", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsafe characters"):
+        export_docker_scaffold(bad_adapter, output_dir=tmp_path / "docker_bad")
 
 
 def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
@@ -282,13 +361,17 @@ def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
     res_dataset = runner.invoke(app, ["export", "dataset", "--db", str(db_file), "--out", str(jsonl_out)])
     assert res_dataset.exit_code == 0
     assert jsonl_out.exists()
+    records = [json.loads(line) for line in jsonl_out.read_text(encoding="utf-8").strip().split("\n")]
+    assert len(records) == 1
+    assert records[0]["messages"][0]["content"] == "test user input"
+
     # 4. paw-kit export dataset non-existent db
     res_bad_db = runner.invoke(app, ["export", "dataset", "--db", str(tmp_path / "no_db.db")])
     assert res_bad_db.exit_code == 1
 
 
 def test_serve_adapter_runner(mock_adapter: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify serve_adapter invokes uvicorn.run with expected arguments."""
+    """Verify serve_adapter invokes uvicorn.run with expected arguments and default host (H-1)."""
     import uvicorn
     from paw_kit.serve.server import serve_adapter
 
@@ -300,8 +383,9 @@ def test_serve_adapter_runner(mock_adapter: Path, monkeypatch: pytest.MonkeyPatc
         called_args["port"] = port
 
     monkeypatch.setattr(uvicorn, "run", mock_run)
-    serve_adapter(mock_adapter, host="127.0.0.1", port=9000)
+    serve_adapter(mock_adapter, port=9000)
 
+    # Verify default host is 127.0.0.1 for security
     assert called_args["host"] == "127.0.0.1"
     assert called_args["port"] == 9000
 
@@ -310,19 +394,19 @@ def test_cli_serve_command(mock_adapter: Path, monkeypatch: pytest.MonkeyPatch) 
     """Verify paw-kit serve CLI launches server and handles non-existent adapters."""
     from paw_kit.serve import server
 
-    called = False
+    called_kwargs = {}
 
     def mock_serve_adapter(*args, **kwargs):
-        nonlocal called
-        called = True
+        called_kwargs.update(kwargs)
 
     monkeypatch.setattr(server, "serve_adapter", mock_serve_adapter)
 
     runner = CliRunner()
-    # Good adapter
-    res = runner.invoke(app, ["serve", str(mock_adapter), "--port", "8888"])
+    # Good adapter with API key
+    res = runner.invoke(app, ["serve", str(mock_adapter), "--port", "8888", "--api-key", "secret123"])
     assert res.exit_code == 0
-    assert called is True
+    assert called_kwargs.get("host") == "127.0.0.1"
+    assert called_kwargs.get("api_key") == "secret123"
 
     # Bad adapter
     res_bad = runner.invoke(app, ["serve", "missing_adapter.paw"])

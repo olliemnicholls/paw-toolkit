@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class ChatMessage(BaseModel):
     """OpenAI message format."""
 
-    role: Literal["system", "user", "assistant", "function"] = "user"
+    role: Literal["system", "user", "assistant", "tool", "function"] = "user"
     content: Union[str, List[Dict[str, Any]]]
 
 

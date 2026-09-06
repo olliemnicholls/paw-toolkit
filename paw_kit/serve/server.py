@@ -6,6 +6,8 @@ and direct RPC (/invoke) endpoints with grammar-constrained decoding and telemet
 
 from contextlib import asynccontextmanager
 import json
+import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -35,6 +37,8 @@ from paw_kit.serve.models import (
     MetricsResponse,
     UsageInfo,
 )
+
+logger = logging.getLogger("paw_kit.serve")
 
 
 class ServerState:
@@ -113,6 +117,7 @@ def create_app(
     backend: Optional[AbstractPAWBackend] = None,
     response_model: Optional[Type[BaseModel]] = None,
     task_name: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> FastAPI:
     """Factory creating configured FastAPI microservice for the given .paw adapter."""
     path_obj = Path(adapter_path)
@@ -121,7 +126,10 @@ def create_app(
 
     selected_backend = backend or MockPAWBackend()
     backend_type = "real" if isinstance(selected_backend, RealPAWBackend) else "mock"
-    state = ServerState(str(path_obj.resolve()), backend_type)
+    # Return basename to avoid exposing host filesystem directory layout
+    state = ServerState(path_obj.name, backend_type)
+    configured_api_key = api_key or os.environ.get("PAW_API_KEY")
+    inference_lock = threading.Lock()
 
     # Initialize execution function (with schema validation if model provided)
     if response_model is not None:
@@ -139,13 +147,33 @@ def create_app(
         version="0.1.0",
     )
 
+    # Enforce safe CORS defaults (no credentials with wildcard origin)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Protect against unbounded request body sizes (10MB limit)
+    @app.middleware("http")
+    async def limit_payload_size(request: Request, call_next: Any) -> Response:
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 10 * 1024 * 1024:
+            return Response(status_code=413, content="Payload Too Large (maximum 10MB)")
+        return await call_next(request)
+
+    def _verify_auth(request: Request) -> None:
+        """Verify bearer token if PAW_API_KEY is configured."""
+        if not configured_api_key:
+            return
+        auth = request.headers.get("authorization")
+        if not auth or not auth.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Unauthorized: Missing or malformed Bearer token")
+        token = auth[7:].strip()
+        if token != configured_api_key:
+            raise HTTPException(status_code=401, detail="Unauthorized: Invalid API key")
 
     @app.get("/health", response_model=HealthResponse)
     def health_check() -> HealthResponse:
@@ -163,10 +191,12 @@ def create_app(
         return MetricsResponse(**state.get_metrics())
 
     @app.post("/invoke", response_model=InvokeResponse)
-    def invoke(req: InvokeRequest) -> InvokeResponse:
+    def invoke(req: InvokeRequest, request: Request) -> InvokeResponse:
+        _verify_auth(request)
         t0 = time.perf_counter()
         try:
-            res = exec_fn(req.input)
+            with inference_lock:
+                res = exec_fn(req.input)
             latency = (time.perf_counter() - t0) * 1000.0
             state.record_request(latency, is_error=False)
 
@@ -189,10 +219,15 @@ def create_app(
         except Exception as exc:
             latency = (time.perf_counter() - t0) * 1000.0
             state.record_request(latency, is_error=True)
-            raise HTTPException(status_code=500, detail=str(exc))
+            logger.exception("Inference failed in /invoke: %s", exc)
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-    def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse:
+    def chat_completions(req: ChatCompletionRequest, request: Request) -> ChatCompletionResponse:
+        _verify_auth(request)
+        if req.stream:
+            raise HTTPException(status_code=400, detail="Streaming is not yet supported")
+
         t0 = time.perf_counter()
         if not req.messages:
             raise HTTPException(status_code=400, detail="messages array cannot be empty")
@@ -204,15 +239,16 @@ def create_app(
             text = _extract_content(msg.content)
             if msg.role == "system":
                 system_content = text
-            elif msg.role == "user":
+            elif msg.role in ("user", "tool"):
                 user_prompts.append(text)
 
         last_user = user_prompts[-1] if user_prompts else ""
-        combined_input = f"{system_content}\n\n{last_user}".strip() if system_content else last_user
-        input_payload = last_user if last_user else combined_input
+        combined_input = f"{system_content}\n\n{last_user}".strip() if system_content and last_user else (last_user or system_content)
+        input_payload = combined_input
 
         try:
-            res = exec_fn(input_payload)
+            with inference_lock:
+                res = exec_fn(input_payload)
             latency = (time.perf_counter() - t0) * 1000.0
             state.record_request(latency, is_error=False)
 
@@ -247,10 +283,12 @@ def create_app(
         except Exception as exc:
             latency = (time.perf_counter() - t0) * 1000.0
             state.record_request(latency, is_error=True)
-            raise HTTPException(status_code=500, detail=str(exc))
+            logger.exception("Inference failed in /v1/chat/completions: %s", exc)
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.post("/v1/messages", response_model=AnthropicMessageResponse)
-    def anthropic_messages(req: AnthropicMessageRequest) -> AnthropicMessageResponse:
+    def anthropic_messages(req: AnthropicMessageRequest, request: Request) -> AnthropicMessageResponse:
+        _verify_auth(request)
         t0 = time.perf_counter()
         if not req.messages:
             raise HTTPException(status_code=400, detail="messages array cannot be empty")
@@ -262,11 +300,12 @@ def create_app(
                 user_texts.append(_extract_content(msg.content))
 
         last_user = user_texts[-1] if user_texts else ""
-        combined_input = f"{system_text}\n\n{last_user}".strip() if system_text else last_user
-        input_payload = last_user if last_user else combined_input
+        combined_input = f"{system_text}\n\n{last_user}".strip() if system_text and last_user else (last_user or system_text)
+        input_payload = combined_input
 
         try:
-            res = exec_fn(input_payload)
+            with inference_lock:
+                res = exec_fn(input_payload)
             latency = (time.perf_counter() - t0) * 1000.0
             state.record_request(latency, is_error=False)
 
@@ -295,17 +334,19 @@ def create_app(
         except Exception as exc:
             latency = (time.perf_counter() - t0) * 1000.0
             state.record_request(latency, is_error=True)
-            raise HTTPException(status_code=500, detail=str(exc))
+            logger.exception("Inference failed in /v1/messages: %s", exc)
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     return app
 
 
 def serve_adapter(
     adapter_path: Union[str, Path],
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 8000,
     backend: Optional[AbstractPAWBackend] = None,
     response_model: Optional[Type[BaseModel]] = None,
+    api_key: Optional[str] = None,
 ) -> None:
     """Start Uvicorn web server hosting the compiled adapter."""
     import uvicorn
@@ -314,5 +355,6 @@ def serve_adapter(
         adapter_path=adapter_path,
         backend=backend,
         response_model=response_model,
+        api_key=api_key,
     )
     uvicorn.run(app, host=host, port=port)

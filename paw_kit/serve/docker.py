@@ -22,8 +22,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Install paw-kit and serving runtime
 RUN uv pip install --system paw-kit fastapi uvicorn httpx
 
+# Create unprivileged application user
+RUN addgroup --system app && adduser --system --ingroup app app
+
 # Copy adapter artifact into container
-COPY {adapter_filename} /app/{adapter_filename}
+COPY --chown=app:app {adapter_filename} /app/{adapter_filename}
+
+USER app
 
 # Expose HTTP service port
 EXPOSE 8000
@@ -131,6 +136,11 @@ def export_docker_scaffold(
     out.mkdir(parents=True, exist_ok=True)
 
     adapter_name = adapter.name
+    import re
+
+    if not re.match(r"^[\w\-.]+$", adapter_name):
+        raise ValueError(f"Adapter filename contains unsafe characters: {adapter_name!r}")
+
     tag_name = adapter.stem.lower().replace("_", "-")
 
     # 1. Write Dockerfile
