@@ -292,3 +292,187 @@ def test_cli_demo_invalid_scenario() -> None:
     assert result.exit_code == 1
     assert "Unknown scenario" in result.output
 
+
+def test_cli_demo_triage_cleans_up_temp_dir_on_exception_PAW_CLI_08(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify PAW-CLI-08: the demo's temp directory is removed even when an exception
+    propagates mid-run -- tempfile.TemporaryDirectory's context manager cleans up on
+    every exit path, unlike the old manual mkdtemp()+rmtree() pair, which only reached
+    rmtree() after every ticket in the loop finished without raising."""
+    import tempfile as tempfile_module
+
+    real_mkdtemp = tempfile_module.mkdtemp
+    captured: dict = {}
+
+    def spy_mkdtemp(*args: object, **kwargs: object) -> str:
+        path = real_mkdtemp(*args, **kwargs)
+        prefix = kwargs.get("prefix") or (args[1] if len(args) > 1 else None)
+        if prefix == "paw_demo_":
+            captured["path"] = path
+        return path
+
+    monkeypatch.setattr(tempfile_module, "mkdtemp", spy_mkdtemp)
+
+    import paw_kit.cli as cli_module
+
+    real_sleep = cli_module.time.sleep
+    call_count = {"n": 0}
+
+    def flaky_sleep(seconds: float) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated mid-demo failure")
+        real_sleep(seconds)
+
+    monkeypatch.setattr(cli_module.time, "sleep", flaky_sleep)
+
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code != 0
+    assert "path" in captured
+    assert not Path(captured["path"]).exists()
+
+
+def test_cli_inspect_rejects_oversized_file_PAW_CLI_06(tmp_path: Path) -> None:
+    """Verify PAW-CLI-06: a file larger than the JSON-parse cap is reported as binary
+    rather than fed to json.load, which would read the whole thing into memory first."""
+    import paw_kit.cli as cli_module
+
+    big_adapter = tmp_path / "huge.paw"
+    # Write real (but oversized) JSON content so a successful parse -- were the cap
+    # not enforced -- would otherwise happen, isolating the size guard as the cause.
+    with open(big_adapter, "w", encoding="utf-8") as f:
+        f.write('{"spec": "x", "padding": "')
+        f.write("a" * (cli_module._MAX_INSPECT_FILE_BYTES + 1))
+        f.write('"}')
+
+    result = runner.invoke(app, ["inspect", str(big_adapter)])
+    assert result.exit_code == 0
+    assert "Binary / Raw Weights" in result.output
+
+
+def test_cli_inspect_rejects_non_regular_file_PAW_CLI_06(tmp_path: Path) -> None:
+    """Verify PAW-CLI-06: a non-regular file (e.g. a named pipe, standing in for the
+    audit's /dev/zero scenario) is never opened for parsing -- json.load on a stream
+    with no natural end-of-file would hang the process indefinitely."""
+    import os
+
+    fifo_path = tmp_path / "not_a_regular_file.paw"
+    os.mkfifo(fifo_path)
+
+    result = runner.invoke(app, ["inspect", str(fifo_path)])
+    assert result.exit_code == 0
+    assert "Binary / Raw Weights" in result.output
+
+
+def test_cli_export_dataset_real_schema_PAW_CLI_04(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify PAW-CLI-04: `paw export dataset` succeeds against a real TraceDB. The
+    query used to name columns ("input", "output") that no TraceDB schema has ever
+    had -- the real columns are input_payload/teacher_output -- so this exact
+    invocation raised sqlite3.OperationalError on every real database before the fix,
+    caught by a bare `except Exception` and reported as a generic export failure."""
+    from paw_kit.jit.db import TraceDB
+
+    monkeypatch.chdir(tmp_path)
+    db_file = Path("real_traces.db")
+    trace_db = TraceDB(str(db_file))
+    trace_db.record_trace(
+        task_id="t1", input_payload="hello", teacher_output="world", latency_ms=1.0
+    )
+
+    out_file = Path("out.jsonl")
+    result = runner.invoke(app, ["export", "dataset", "--db", str(db_file), "--out", str(out_file)])
+    assert result.exit_code == 0
+    assert out_file.exists()
+    record = json.loads(out_file.read_text(encoding="utf-8").strip())
+    assert record["messages"][0]["content"] == "hello"
+    assert record["messages"][1]["content"] == "world"
+
+
+def test_cli_export_dataset_empty_db_exits_zero_PAW_CLI_04(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-CLI-04's second half: an empty real TraceDB now exits 0, not 1.
+    `typer.Exit(code=0)` for "no traces found" used to sit inside the write's
+    try/except -- typer.Exit subclasses RuntimeError, so the bare `except Exception`
+    there swallowed it and re-raised as exit 1, printing both the warning and
+    "Error exporting dataset:" for what should have been a clean no-op."""
+    from paw_kit.jit.db import TraceDB
+
+    monkeypatch.chdir(tmp_path)
+    db_file = Path("empty_traces.db")
+    TraceDB(str(db_file))  # creates the schema; no rows recorded
+
+    result = runner.invoke(app, ["export", "dataset", "--db", str(db_file)])
+    assert result.exit_code == 0
+    assert "No traces found" in result.output
+    assert "Error exporting dataset" not in result.output
+
+
+def test_cli_export_dataset_requires_jsonl_extension_PAW_CLI_03(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-CLI-03: --out must end in .jsonl."""
+    from paw_kit.jit.db import TraceDB
+
+    monkeypatch.chdir(tmp_path)
+    db_file = Path("traces.db")
+    TraceDB(str(db_file)).record_trace(task_id="t", input_payload="i", teacher_output="o", latency_ms=1.0)
+
+    result = runner.invoke(app, ["export", "dataset", "--db", str(db_file), "--out", "dataset.txt"])
+    assert result.exit_code == 1
+    assert "'.jsonl' extension" in result.output
+
+
+def test_cli_export_dataset_confirms_before_overwrite_PAW_CLI_03(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-CLI-03: an existing --out is not silently clobbered -- declining the
+    prompt leaves it untouched, and --force skips the prompt entirely."""
+    from paw_kit.jit.db import TraceDB
+
+    monkeypatch.chdir(tmp_path)
+    db_file = Path("traces.db")
+    TraceDB(str(db_file)).record_trace(task_id="t", input_payload="i", teacher_output="o", latency_ms=1.0)
+
+    out_file = Path("dataset.jsonl")
+    out_file.write_text("pre-existing content\n", encoding="utf-8")
+
+    # Decline: file is untouched.
+    res_decline = runner.invoke(
+        app, ["export", "dataset", "--db", str(db_file), "--out", str(out_file)], input="n\n"
+    )
+    assert res_decline.exit_code == 0
+    assert "Aborted" in res_decline.output
+    assert out_file.read_text(encoding="utf-8") == "pre-existing content\n"
+
+    # --force: overwrites without prompting.
+    res_force = runner.invoke(
+        app, ["export", "dataset", "--db", str(db_file), "--out", str(out_file), "--force"]
+    )
+    assert res_force.exit_code == 0
+    assert out_file.read_text(encoding="utf-8") != "pre-existing content\n"
+
+
+def test_cli_serve_api_key_warns_on_commandline_PAW_CLI_07(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-CLI-07: passing --api-key on the command line prints a warning (the
+    process-table/shell-history exposure the finding is about), while setting
+    PAW_API_KEY in the environment instead does not."""
+    from paw_kit.serve import server
+
+    monkeypatch.setattr(server, "serve_adapter", lambda *a, **k: None)
+    adapter = tmp_path / "a.paw"
+    adapter.write_text("{}", encoding="utf-8")
+
+    res_cli_flag = runner.invoke(app, ["serve", str(adapter), "--api-key", "secret-on-argv"])
+    assert res_cli_flag.exit_code == 0
+    assert "Warning" in res_cli_flag.output
+    assert "ps aux" in res_cli_flag.output
+
+    monkeypatch.setenv("PAW_API_KEY", "secret-from-env")
+    res_env = runner.invoke(app, ["serve", str(adapter)])
+    assert res_env.exit_code == 0
+    assert "Warning" not in res_env.output
+

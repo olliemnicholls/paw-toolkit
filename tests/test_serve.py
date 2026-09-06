@@ -3,7 +3,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
-import sqlite3
 import time
 from typing import Optional
 from fastapi.testclient import TestClient
@@ -13,6 +12,7 @@ from typer.testing import CliRunner
 
 from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.cli import app
+from paw_kit.jit.db import TraceDB
 from paw_kit.serve.docker import export_docker_scaffold
 from paw_kit.serve.server import ServerState, create_app
 
@@ -820,25 +820,18 @@ def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
     res_bad_docker = runner.invoke(app, ["export", "docker", str(tmp_path / "none.paw")])
     assert res_bad_docker.exit_code == 1
 
-    # 3. paw-kit export dataset
+    # 3. paw-kit export dataset -- PAW-CLI-04: built via a real TraceDB/record_trace,
+    # not a hand-built `traces` table shaped like the old (never-real) input/output
+    # schema; see test_cli_export_dataset_real_schema_PAW_CLI_04 for the dedicated
+    # regression coverage this bug needed.
     db_file = tmp_path / "traces.db"
-    conn = sqlite3.connect(str(db_file))
-    conn.execute(
-        """
-        CREATE TABLE traces (
-            id INTEGER PRIMARY KEY,
-            input TEXT,
-            output TEXT,
-            timestamp TEXT
-        );
-        """
+    trace_db = TraceDB(str(db_file))
+    trace_db.record_trace(
+        task_id="demo-task",
+        input_payload="test user input",
+        teacher_output="test output",
+        latency_ms=12.5,
     )
-    conn.execute(
-        "INSERT INTO traces (input, output, timestamp) VALUES (?, ?, ?);",
-        ("test user input", "test output", "2026-09-06T00:00:00Z"),
-    )
-    conn.commit()
-    conn.close()
 
     jsonl_out = tmp_path / "dataset.jsonl"
     res_dataset = runner.invoke(app, ["export", "dataset", "--db", str(db_file), "--out", str(jsonl_out)])
@@ -847,6 +840,8 @@ def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
     records = [json.loads(line) for line in jsonl_out.read_text(encoding="utf-8").strip().split("\n")]
     assert len(records) == 1
     assert records[0]["messages"][0]["content"] == "test user input"
+    assert records[0]["messages"][1]["content"] == "test output"
+    assert (jsonl_out.stat().st_mode & 0o777) == 0o600
 
     # 4. paw-kit export dataset non-existent db
     res_bad_db = runner.invoke(app, ["export", "dataset", "--db", str(tmp_path / "no_db.db")])

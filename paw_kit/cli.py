@@ -1,9 +1,9 @@
 """Typer and Rich command-line interface for paw-toolkit."""
 
 import json
+import os
 from pathlib import Path
 import re
-import shutil
 import sys
 import tempfile
 import time
@@ -21,6 +21,11 @@ from paw_kit.test.runner import TestRunner
 from paw_kit.test.suite import load_suite
 
 console = Console()
+
+# PAW-CLI-06: cap on how much of a candidate adapter file `paw-inspect` will attempt
+# to parse as JSON. See `inspect()` below.
+_MAX_INSPECT_FILE_BYTES = 50 * 1024 * 1024
+
 app = typer.Typer(help="PAW-Kit: Production Runtime & Reliability Toolkit for Program-as-Weights")
 test_app = typer.Typer(help="paw-test: Test runner and active-learning self-healing suite")
 test_app.__test__ = False  # Prevent pytest from treating Typer instance as a test suite
@@ -77,78 +82,76 @@ def _run_triage_demo() -> None:
         "iOS app crashes on startup since latest update.",
     ]
 
-    temp_dir = tempfile.mkdtemp(prefix="paw_demo_")
+    # PAW-CLI-08: a context manager guarantees cleanup on every exit path -- the
+    # previous manual mkdtemp()+rmtree() pair skipped cleanup entirely on an
+    # unhandled exception or Ctrl+C (KeyboardInterrupt) mid-demo, leaking a temp
+    # directory holding trace data on every abnormal exit, not just the happy path.
+    with tempfile.TemporaryDirectory(prefix="paw_demo_") as temp_dir:
+        class TriageMockBackend(MockPAWBackend):
+            def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+                lower = input_text.lower()
+                if "502" in lower or "crash" in lower or "lag" in lower:
+                    res = {"priority": "critical", "department": "technical", "urgency_score": 5}
+                elif "charged" in lower or "refund" in lower:
+                    res = {"priority": "high", "department": "billing", "urgency_score": 4}
+                elif "contract" in lower or "enterprise" in lower:
+                    res = {"priority": "medium", "department": "sales", "urgency_score": 3}
+                else:
+                    res = {"priority": "low", "department": "general", "urgency_score": 1}
+                return json.dumps(res)
 
-    class TriageMockBackend(MockPAWBackend):
-        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
-            lower = input_text.lower()
-            if "502" in lower or "crash" in lower or "lag" in lower:
-                res = {"priority": "critical", "department": "technical", "urgency_score": 5}
-            elif "charged" in lower or "refund" in lower:
-                res = {"priority": "high", "department": "billing", "urgency_score": 4}
-            elif "contract" in lower or "enterprise" in lower:
-                res = {"priority": "medium", "department": "sales", "urgency_score": 3}
-            else:
-                res = {"priority": "low", "department": "general", "urgency_score": 1}
-            return json.dumps(res)
+        backend = TriageMockBackend()
 
-    backend = TriageMockBackend()
-
-    @compile_on_hit(
-        spec="Classify support ticket into priority, department, urgency_score.",
-        threshold=3,
-        response_model=TriageResult,
-        backend=backend,
-        cache_dir=temp_dir,
-        sync_compile=True,
-    )
-    def triage_ticket(ticket_body: str) -> TriageResult:
-        time.sleep(0.05)  # Simulate remote teacher latency
-        lower = ticket_body.lower()
-        if "502" in lower or "crash" in lower or "lag" in lower:
-            return TriageResult(priority="critical", department="technical", urgency_score=5)
-        elif "charged" in lower or "refund" in lower:
-            return TriageResult(priority="high", department="billing", urgency_score=4)
-        elif "contract" in lower or "enterprise" in lower:
-            return TriageResult(priority="medium", department="sales", urgency_score=3)
-        else:
-            return TriageResult(priority="low", department="general", urgency_score=1)
-
-    table = Table(title="Live JIT Ticket Triage Results", show_lines=True)
-    table.add_column("#", style="dim", width=3)
-    table.add_column("Mode", width=18)
-    table.add_column("Latency", justify="right", width=10)
-    table.add_column("Priority", width=10)
-    table.add_column("Department", width=12)
-    table.add_column("Urgency", justify="center", width=8)
-    table.add_column("Ticket Preview", max_width=40)
-
-    for i, ticket in enumerate(tickets, 1):
-        is_local = triage_ticket.is_compiled()
-        mode = "[green]LOCAL 0.6B[/green]" if is_local else "[yellow]REMOTE TEACHER[/yellow]"
-
-        t0 = time.perf_counter()
-        result = triage_ticket(ticket)
-        ms = (time.perf_counter() - t0) * 1000
-
-        table.add_row(
-            str(i), mode, f"{ms:.1f}ms",
-            result.priority, result.department,
-            str(result.urgency_score), ticket[:38] + "…",
+        @compile_on_hit(
+            spec="Classify support ticket into priority, department, urgency_score.",
+            threshold=3,
+            response_model=TriageResult,
+            backend=backend,
+            cache_dir=temp_dir,
+            sync_compile=True,
         )
+        def triage_ticket(ticket_body: str) -> TriageResult:
+            time.sleep(0.05)  # Simulate remote teacher latency
+            lower = ticket_body.lower()
+            if "502" in lower or "crash" in lower or "lag" in lower:
+                return TriageResult(priority="critical", department="technical", urgency_score=5)
+            elif "charged" in lower or "refund" in lower:
+                return TriageResult(priority="high", department="billing", urgency_score=4)
+            elif "contract" in lower or "enterprise" in lower:
+                return TriageResult(priority="medium", department="sales", urgency_score=3)
+            else:
+                return TriageResult(priority="low", department="general", urgency_score=1)
 
-        if i == 3:
-            console.print("\n[bold cyan]>>> Hit threshold (3 calls) reached! Background compilation hot-swapped adapter.[/bold cyan]\n")
+        table = Table(title="Live JIT Ticket Triage Results", show_lines=True)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Mode", width=18)
+        table.add_column("Latency", justify="right", width=10)
+        table.add_column("Priority", width=10)
+        table.add_column("Department", width=12)
+        table.add_column("Urgency", justify="center", width=8)
+        table.add_column("Ticket Preview", max_width=40)
 
-    console.print(table)
-    console.print("\n[bold green]✓[/bold green] Calls 1–3 via remote teacher (logged to SQLite trace DB)")
-    console.print("[bold green]✓[/bold green] Calls 4–6 via local compiled neural function (<1ms, $0 marginal cost)")
-    console.print("[bold green]✓[/bold green] Zero GPU • Zero API keys • Zero configuration\n")
+        for i, ticket in enumerate(tickets, 1):
+            is_local = triage_ticket.is_compiled()
+            mode = "[green]LOCAL 0.6B[/green]" if is_local else "[yellow]REMOTE TEACHER[/yellow]"
 
-    try:
-        shutil.rmtree(temp_dir)
-    except Exception:
-        pass
+            t0 = time.perf_counter()
+            result = triage_ticket(ticket)
+            ms = (time.perf_counter() - t0) * 1000
+
+            table.add_row(
+                str(i), mode, f"{ms:.1f}ms",
+                result.priority, result.department,
+                str(result.urgency_score), ticket[:38] + "…",
+            )
+
+            if i == 3:
+                console.print("\n[bold cyan]>>> Hit threshold (3 calls) reached! Background compilation hot-swapped adapter.[/bold cyan]\n")
+
+        console.print(table)
+        console.print("\n[bold green]✓[/bold green] Calls 1–3 via remote teacher (logged to SQLite trace DB)")
+        console.print("[bold green]✓[/bold green] Calls 4–6 via local compiled neural function (<1ms, $0 marginal cost)")
+        console.print("[bold green]✓[/bold green] Zero GPU • Zero API keys • Zero configuration\n")
 
 
 def _run_pii_demo() -> None:
@@ -197,31 +200,28 @@ def _run_pii_demo() -> None:
                 sanitized = sanitized.replace(m.group(0), "[REDACTED_CARD]")
             return json.dumps({"sanitized_text": sanitized, "entities": entities, "total_redacted": len(entities)})
 
-    temp_dir = tempfile.mkdtemp(prefix="paw_pii_")
-    adapter_path = Path(temp_dir) / "pii.paw"
-    backend = PIIMock()
-    backend.compile(spec="Extract and redact PII", examples=[{"input": "test", "output": "{}"}], output_path=str(adapter_path))
+    # PAW-CLI-08: see the matching comment in _run_triage_demo -- a context manager
+    # guarantees cleanup even if scrub_fn or an assertion inside the loop raises.
+    with tempfile.TemporaryDirectory(prefix="paw_pii_") as temp_dir:
+        adapter_path = Path(temp_dir) / "pii.paw"
+        backend = PIIMock()
+        backend.compile(spec="Extract and redact PII", examples=[{"input": "test", "output": "{}"}], output_path=str(adapter_path))
 
-    scrub_fn = load(adapter_path=str(adapter_path), response_model=PIIScrubResult, backend=backend)
+        scrub_fn = load(adapter_path=str(adapter_path), response_model=PIIScrubResult, backend=backend)
 
-    for i, text in enumerate(samples, 1):
-        t0 = time.perf_counter()
-        result = scrub_fn(text)
-        ms = (time.perf_counter() - t0) * 1000
-        console.print(f"\n[bold]Item #{i}[/bold] [{ms:.2f}ms] — {result.total_redacted} entity(ies) redacted")
-        console.print(f"  [dim]Raw:[/dim]       {text}")
-        console.print(f"  [green]Sanitized:[/green] {result.sanitized_text}")
-        if result.entities:
-            for e in result.entities:
-                console.print(f"  [yellow]  → {e.entity_type}:[/yellow] {e.value}")
+        for i, text in enumerate(samples, 1):
+            t0 = time.perf_counter()
+            result = scrub_fn(text)
+            ms = (time.perf_counter() - t0) * 1000
+            console.print(f"\n[bold]Item #{i}[/bold] [{ms:.2f}ms] — {result.total_redacted} entity(ies) redacted")
+            console.print(f"  [dim]Raw:[/dim]       {text}")
+            console.print(f"  [green]Sanitized:[/green] {result.sanitized_text}")
+            if result.entities:
+                for e in result.entities:
+                    console.print(f"  [yellow]  → {e.entity_type}:[/yellow] {e.value}")
 
-    console.print("\n[bold green]✓[/bold green] 0.0% JSON syntax errors guaranteed by FSM token masking")
-    console.print("[bold green]✓[/bold green] Sub-millisecond local execution without GPU\n")
-
-    try:
-        shutil.rmtree(temp_dir)
-    except Exception:
-        pass
+        console.print("\n[bold green]✓[/bold green] 0.0% JSON syntax errors guaranteed by FSM token masking")
+        console.print("[bold green]✓[/bold green] Sub-millisecond local execution without GPU\n")
 
 
 @app.command(name="demo")
@@ -329,15 +329,22 @@ def inspect(
     stat = adapter_path.stat()
     size_bytes = stat.st_size
 
-    # Attempt to read JSON metadata
+    # PAW-CLI-06: json.load() reads its entire input into memory before it can even
+    # attempt to parse it, so pointing this at a huge file or a stream with no
+    # end-of-file at all (a named pipe, /dev/zero) previously hung the process or
+    # exhausted memory rather than failing fast. is_file() rejects anything that
+    # isn't a regular file outright; the size cap skips the parse attempt (falling
+    # back to the "Binary / Raw Weights" branch below) rather than reading a file
+    # too large to plausibly be adapter metadata.
     metadata = {}
     is_json = False
-    try:
-        with open(adapter_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
-            is_json = True
-    except Exception:
-        pass
+    if adapter_path.is_file() and size_bytes <= _MAX_INSPECT_FILE_BYTES:
+        try:
+            with open(adapter_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+                is_json = True
+        except Exception:
+            pass
 
     table = Table(title=f"PAW Adapter: {adapter_path.name}")
     table.add_column("Property", style="cyan", no_wrap=True)
@@ -412,11 +419,19 @@ app.add_typer(export_app, name="export")
 
 @app.command(name="serve")
 def serve(
+    ctx: typer.Context,
     adapter_path: Path = typer.Argument(..., help="Path to compiled .paw adapter artifact"),
     host: str = typer.Option("127.0.0.1", "--host", "-H", help="Host interface to bind"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to listen on"),
     backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
-    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Optional secret bearer token for authentication"),
+    api_key: Optional[str] = typer.Option(
+        None,
+        "--api-key",
+        "-k",
+        envvar="PAW_API_KEY",
+        help="Optional secret bearer token for authentication. Prefer setting the "
+        "PAW_API_KEY environment variable instead of this flag where possible.",
+    ),
     allow_anonymous: bool = typer.Option(
         False,
         "--allow-anonymous",
@@ -429,6 +444,24 @@ def serve(
     if not adapter_path.exists():
         console.print(f"[bold red]Error:[/bold red] Adapter file '{adapter_path}' does not exist.")
         raise typer.Exit(code=1)
+
+    # PAW-CLI-07: a value passed on the command line lands in argv, which is visible
+    # to any other local user via /proc/<pid>/cmdline or `ps aux`, and often ends up
+    # recorded in shell history too. `envvar="PAW_API_KEY"` above lets the flag be
+    # skipped entirely in favor of the environment; this only warns -- --api-key must
+    # keep working for scripted/CI callers that can't set process environment.
+    # Compared by enum *name*, not identity/equality against click.core.ParameterSource
+    # directly: Typer vendors its own fork of click (typer._click), so ctx here yields
+    # a distinct (if identically-named) ParameterSource enum class from the one a
+    # top-level `import click` would resolve to.
+    api_key_source = ctx.get_parameter_source("api_key")
+    if api_key and api_key_source is not None and api_key_source.name == "COMMANDLINE":
+        console.print(
+            "[bold yellow]Warning:[/bold yellow] --api-key was passed on the command line; "
+            "it is visible to other local users (ps aux, /proc/<pid>/cmdline) and may be "
+            "recorded in shell history. Prefer setting the PAW_API_KEY environment "
+            "variable instead."
+        )
 
     backend = _resolve_cli_backend(backend_type)
     actual_type = "mock" if isinstance(backend, MockPAWBackend) else backend_type.lower()
@@ -483,26 +516,62 @@ def export_docker_cmd(
 def export_dataset_cmd(
     db_path: Path = typer.Option(Path("./.paw/traces.db"), "--db", help="Path to SQLite trace database"),
     out_file: Path = typer.Option(Path("traces.jsonl"), "--out", "-o", help="Path to output JSONL file"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite --out without prompting for confirmation"
+    ),
 ) -> None:
     """Export traced SQLite teacher-student interaction pairs to standard JSONL format."""
     if not db_path.exists():
         console.print(f"[bold red]Error:[/bold red] Trace database '{db_path}' does not exist.")
         raise typer.Exit(code=1)
 
+    # PAW-CLI-03: refuse a destination that doesn't even look like the format we're
+    # about to write, and confirm before silently clobbering an existing file --
+    # neither was checked before.
+    if out_file.suffix != ".jsonl":
+        console.print(f"[bold red]Error:[/bold red] --out must have a '.jsonl' extension: {out_file}")
+        raise typer.Exit(code=1)
+    if out_file.exists() and not force:
+        if not typer.confirm(f"{out_file} already exists. Overwrite?"):
+            console.print("[dim]Aborted -- file was not overwritten.[/dim]")
+            raise typer.Exit(code=0)
+
     import sqlite3
 
+    # PAW-CLI-04: the query previously named columns ("input", "output") that no
+    # TraceDB schema has ever had -- the real `traces` table (jit/db.py) has
+    # input_payload/teacher_output. `cursor.execute` raised sqlite3.OperationalError
+    # against any real trace DB, empty or populated (the column is resolved at
+    # prepare time), always caught by the bare `except Exception` below and reported
+    # as a generic export failure -- `paw export dataset` had never once worked
+    # against production data. Fixed to match the actual schema.
     try:
         with sqlite3.connect(str(db_path)) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT input, output FROM traces ORDER BY timestamp ASC;")
+            cursor.execute("SELECT input_payload, teacher_output FROM traces ORDER BY timestamp ASC;")
             rows = cursor.fetchall()
+    except Exception as exc:
+        console.print(f"[bold red]Error exporting dataset:[/bold red] {exc}")
+        raise typer.Exit(code=1)
 
-        if not rows:
-            console.print(f"[yellow]Warning:[/yellow] No traces found in {db_path}.")
-            raise typer.Exit(code=0)
+    if not rows:
+        console.print(f"[yellow]Warning:[/yellow] No traces found in {db_path}.")
+        # PAW-CLI-04: this Exit used to sit inside the write's try/except below.
+        # typer.Exit subclasses RuntimeError, so the bare `except Exception` there
+        # swallowed it and re-raised as exit 1 -- an empty trace DB printed this
+        # warning *and* "Error exporting dataset:" and still exited 1. Raised here,
+        # outside any try, an empty DB now exits 0 as the message implies.
+        raise typer.Exit(code=0)
 
+    try:
         out_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_file, "w", encoding="utf-8") as f:
+        # PAW-CLI-05: 0600 from the moment of creation via os.open's mode, not a bare
+        # open(..., "w") -- which is subject to the process umask (commonly 0644,
+        # world-readable) and would leave exported trace content (potentially
+        # unredacted prompts/PII, see PAW-JIT-02) briefly world-readable before any
+        # later chmod.
+        fd = os.open(str(out_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             for inp, out in rows:
                 record = {
                     "messages": [
