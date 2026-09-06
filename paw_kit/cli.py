@@ -122,14 +122,19 @@ def _run_triage_demo() -> None:
             else:
                 return TriageResult(priority="low", department="general", urgency_score=1)
 
+        # Fixed column widths are sized to fit an 80-column terminal (the common
+        # default for xterm/gnome-terminal/tmux/CI logs) with a few columns of
+        # margin: content widths sum to 58, +12 for per-column padding, +7 for
+        # borders = 77 <= 80. A "Ticket Preview" column used to sit here too, but
+        # at 80 columns Rich had no room left to render it and silently collapsed
+        # it to zero width, gluing the table's right border into a doubled "┃┃".
         table = Table(title="Live JIT Ticket Triage Results", show_lines=True)
-        table.add_column("#", style="dim", width=3)
-        table.add_column("Mode", width=18)
+        table.add_column("#", style="dim", width=2)
+        table.add_column("Mode", width=16)
         table.add_column("Latency", justify="right", width=10)
         table.add_column("Priority", width=10)
         table.add_column("Department", width=12)
         table.add_column("Urgency", justify="center", width=8)
-        table.add_column("Ticket Preview", max_width=40)
 
         for i, ticket in enumerate(tickets, 1):
             is_local = triage_ticket.is_compiled()
@@ -142,7 +147,7 @@ def _run_triage_demo() -> None:
             table.add_row(
                 str(i), mode, f"{ms:.1f}ms",
                 result.priority, result.department,
-                str(result.urgency_score), ticket[:38] + "…",
+                str(result.urgency_score),
             )
 
             if i == 3:

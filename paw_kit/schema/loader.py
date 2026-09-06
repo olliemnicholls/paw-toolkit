@@ -1,5 +1,6 @@
 """High-level model loader with schema validation and fail-open routing."""
 
+import warnings
 from typing import Any, Callable, Optional, Type, TypeVar, Union
 from pydantic import BaseModel, ValidationError
 
@@ -12,11 +13,27 @@ T = TypeVar("T", bound=BaseModel)
 
 _DEFAULT_BACKEND: Optional[AbstractPAWBackend] = None
 
+_NO_BACKEND_WARNING = (
+    "paw_kit: no backend= was provided, so this is running on the built-in "
+    "MockPAWBackend -- a deterministic rule/example-based stub, not a real model. "
+    "Any adapter 'compiled' against it will keep returning that stub's synthetic "
+    "output forever, silently, including after @compile_on_hit hot-swaps to it. "
+    "Pass backend=RealPAWBackend(...) (v0.2, `pip install 'paw-kit[torch]'`) or "
+    "your own AbstractPAWBackend for real production inference."
+)
+
 
 def get_default_backend() -> AbstractPAWBackend:
-    """Retrieve or initialize the active default backend."""
+    """Retrieve or initialize the active default backend.
+
+    Warns (once, the first time this lazily constructs the singleton) since
+    callers of `paw.load`/`@compile_on_hit` who omit `backend=` land here
+    silently otherwise -- this is the mock backend, not a placeholder that
+    becomes real hardware in production. See `_NO_BACKEND_WARNING`.
+    """
     global _DEFAULT_BACKEND
     if _DEFAULT_BACKEND is None:
+        warnings.warn(_NO_BACKEND_WARNING, UserWarning, stacklevel=3)
         _DEFAULT_BACKEND = MockPAWBackend()
     return _DEFAULT_BACKEND
 

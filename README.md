@@ -69,7 +69,7 @@ backend = MockPAWBackend()  # Zero-hardware deterministic backend
     spec="Classify customer inquiry into priority, department, and urgency score 1-5.",
     threshold=3,
     response_model=SupportTriage,
-    backend=backend,       # In production: omit to use RealPAWBackend (v0.2)
+    backend=backend,       # v0.1: omitting this still uses MockPAWBackend (a warning is printed) — v0.2 adds real hardware auto-detection
     cache_dir="./.paw",
 )
 def triage_ticket(ticket_body: str) -> SupportTriage:
@@ -85,7 +85,7 @@ for i in range(1, 6):
     print(f"Call {i}: [{result.department.upper()}] {result.priority} (Urgency: {result.urgency_score})")
 ```
 
-> **In production**, replace `MockPAWBackend()` with your real LLM call body (Claude, GPT-4o, etc.) and remove the `backend=` argument. `paw-kit` auto-detects GPU hardware and compiles real neural adapters (v0.2).
+> **In production**, replace the body of `triage_ticket` with your real LLM call (Claude, GPT-4o, etc.). In **v0.1**, dropping the `backend=` argument does *not* switch to real hardware — it falls back to the same `MockPAWBackend` (with a `UserWarning` telling you so), since v0.1 ships no neural weights of its own. GPU auto-detection and real compiled adapters via `RealPAWBackend` are the headline feature of **v0.2**; until then, pass an explicit `backend=` (either `MockPAWBackend()` for evaluation, or your own `AbstractPAWBackend`) rather than relying on the default.
 
 ### 2. Schema-Constrained Decoding with `paw.load`
 
