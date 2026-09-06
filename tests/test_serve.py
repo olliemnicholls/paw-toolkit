@@ -756,7 +756,7 @@ def test_docker_exporter_reserved_filename_collision_PAW_DOCKER_01(tmp_path: Pat
         export_docker_scaffold(fake_dockerfile_adapter, output_dir=out_dir)
 
     # Every reserved generated filename is rejected the same way.
-    for reserved in [".dockerignore", "docker-compose.yml", "README.md"]:
+    for reserved in [".dockerignore", "docker-compose.yml", "README.md", "requirements.txt"]:
         reserved_adapter = tmp_path / reserved
         reserved_adapter.write_text("not a real adapter", encoding="utf-8")
         with pytest.raises(ValueError, match="collides with a file"):
@@ -767,6 +767,43 @@ def test_docker_exporter_reserved_filename_collision_PAW_DOCKER_01(tmp_path: Pat
     no_extension_adapter.write_text("not a real adapter", encoding="utf-8")
     with pytest.raises(ValueError, match="must have a '.paw' extension"):
         export_docker_scaffold(no_extension_adapter, output_dir=out_dir / "unused2")
+
+
+def test_docker_exporter_loopback_only_port_binding_PAW_DOCKER_02(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """Verify PAW-DOCKER-02: the generated docker-compose.yml and README no longer
+    default to exposing the service on every host interface — both bind loopback
+    only, requiring a deliberate edit to reach the container from the network."""
+    out_dir = tmp_path / "docker_dist"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
+
+    compose = (dest / "docker-compose.yml").read_text(encoding="utf-8")
+    assert '      - "127.0.0.1:8000:8000"' in compose
+    assert '      - "8000:8000"' not in compose
+
+    readme = (dest / "README.md").read_text(encoding="utf-8")
+    assert "docker run -p 127.0.0.1:8000:8000" in readme
+
+
+def test_docker_exporter_pinned_requirements_txt_PAW_DOCKER_03(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """Verify PAW-DOCKER-03: the exporter generates a requirements.txt with exact,
+    pinned versions, and the Dockerfile installs from it instead of an unpinned
+    inline package list that would resolve a different set on every build."""
+    out_dir = tmp_path / "docker_dist"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
+
+    assert (dest / "requirements.txt").exists()
+    requirements = (dest / "requirements.txt").read_text(encoding="utf-8")
+    for package in ("paw-kit==", "fastapi==", "uvicorn==", "httpx=="):
+        assert package in requirements
+
+    dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY requirements.txt /app/requirements.txt" in dockerfile
+    assert "uv pip install --system -r requirements.txt" in dockerfile
+    assert "uv pip install --system paw-kit fastapi uvicorn httpx" not in dockerfile
 
 
 def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
