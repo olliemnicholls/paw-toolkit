@@ -957,6 +957,13 @@ def _kitchen_sink_field_defs() -> Dict[str, Any]:
         tuple_fixed_field=(Tuple[str, int, bool], ...),
         tuple_variadic_field=(Tuple[int, ...], ...),
         tuple_empty_field=(Tuple[()], ...),
+        # Bare, unsubscripted `typing.Tuple` is its own `_type_to_regex` branch
+        # (grammar.py:279, `elif annotation is Tuple`), distinct from both
+        # `Tuple[()]` above and bare builtin `tuple` below -- all three reach branch
+        # 5 with `args == ()` and are separated only by identity checks
+        # (PAW-SCHEMA-05). Present so the corpus reaches *every* branch, not a
+        # representative subset (added at Phase F).
+        bare_typing_tuple_field=(Tuple, ...),
         set_field=(Set[str], ...),
         frozenset_field=(FrozenSet[int], ...),
         nested_model_field=(_KitchenSinkInner, ...),
@@ -1002,7 +1009,8 @@ def test_pydantic_to_regex_fingerprint_property_equal_key_implies_equal_regex_PA
         '{"union_field": 1, "optional_field": null, "literal_field": "a", '
         '"enum_field": "low", "list_field": [1, 2], '
         '"tuple_fixed_field": ["x", 1, true], "tuple_variadic_field": [1, 2, 3], '
-        '"tuple_empty_field": [], "set_field": ["a"], "frozenset_field": [1], '
+        '"tuple_empty_field": [], "bare_typing_tuple_field": [1, "x"], '
+        '"set_field": ["a"], "frozenset_field": [1], '
         '"nested_model_field": {"label": "x", "score": 1.0}, '
         '"dict_field": {"a": 1}, "bare_list_field": [1, "x"], '
         '"bare_tuple_field": [1, "x"], "bare_set_field": [1, "x"], '

@@ -1,6 +1,7 @@
 """Unit and integration tests for Typer developer CLI commands."""
 
 import json
+import os
 from pathlib import Path
 from typer.testing import CliRunner
 import pytest
@@ -407,6 +408,38 @@ def test_cli_export_dataset_empty_db_exits_zero_PAW_CLI_04(
     assert result.exit_code == 0
     assert "No traces found" in result.output
     assert "Error exporting dataset" not in result.output
+
+
+def test_cli_export_dataset_file_created_0600_PAW_CLI_05(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-CLI-05: the exported JSONL file is created 0600 by `os.open`'s mode
+    argument, not by a bare `open(..., "w")` subject to the process umask (commonly
+    0644, world-readable). Exported content can include unredacted prompts/PII
+    (PAW-JIT-02), so it must never be world-readable, not even briefly.
+
+    Added at Phase F: the 0600 assertion existed only inside
+    `tests/test_serve.py::test_cli_export_commands`, which is not named for this
+    finding, so PAW-CLI-05 was the one finding of the 32 without a dedicated
+    finding-ID-named regression test as Phase T requires.
+    """
+    from paw_kit.jit.db import TraceDB
+
+    monkeypatch.chdir(tmp_path)
+    db_file = Path("perm_traces.db")
+    trace_db = TraceDB(str(db_file))
+    trace_db.record_trace(task_id="t1", input_payload="in", teacher_output="out", latency_ms=1.0)
+
+    # A permissive umask would leave a bare open(..., "w") at 0666; os.open's mode
+    # argument is what actually holds the file at 0600 regardless.
+    old_umask = os.umask(0o000)
+    try:
+        out_file = Path("perm.jsonl")
+        result = runner.invoke(app, ["export", "dataset", "--db", str(db_file), "--out", str(out_file)])
+        assert result.exit_code == 0
+        assert (out_file.stat().st_mode & 0o777) == 0o600
+    finally:
+        os.umask(old_umask)
 
 
 def test_cli_export_dataset_requires_jsonl_extension_PAW_CLI_03(
