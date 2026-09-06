@@ -143,11 +143,15 @@ class InvokeResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Microservice health check status."""
+    """Microservice health check status.
+
+    PAW-SERVE-06: deliberately minimal. `/health` is unauthenticated by design (Track
+    09's generated Dockerfile HEALTHCHECK and docker-compose healthcheck both call it
+    with no credentials), so it must not disclose anything beyond liveness — no
+    filesystem paths, no backend implementation details.
+    """
 
     status: str = "ok"
-    adapter_path: str
-    backend: str
     uptime_seconds: float
     version: str = "0.1.0"
 

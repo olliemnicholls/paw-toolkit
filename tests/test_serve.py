@@ -1,8 +1,10 @@
 """Unit and integration tests for paw_kit.serve: OpenAI and Anthropic HTTP serving layer and Docker exporter."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import sqlite3
+import time
 from typing import Optional
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -57,10 +59,11 @@ def test_health_and_metrics_endpoints(mock_adapter: Path) -> None:
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"
-    assert data["backend"] == "mock"
-    # Verify basename is returned to prevent directory disclosure (H-3)
-    assert data["adapter_path"] == "triage.paw"
     assert data["uptime_seconds"] >= 0.0
+    # PAW-SERVE-06: /health is stripped to status/uptime/version only — no adapter
+    # path or backend implementation detail leaks through the unauthenticated route.
+    assert "backend" not in data
+    assert "adapter_path" not in data
 
     # Initial metrics
     m_res = client.get("/metrics")
@@ -244,9 +247,15 @@ def test_api_key_authentication(mock_adapter: Path) -> None:
     auth_app = create_app(mock_adapter, backend=backend, api_key="secret-api-key-999")
     client = TestClient(auth_app)
 
-    # 1. Health and metrics remain open for monitoring
+    # 1. Health remains open for monitoring (Dockerfile HEALTHCHECK relies on this).
     assert client.get("/health").status_code == 200
-    assert client.get("/metrics").status_code == 200
+    # 2. PAW-SERVE-06: /metrics is not a liveness probe and discloses request-volume
+    # and latency telemetry, so it now follows the same auth policy as inference.
+    assert client.get("/metrics").status_code == 401
+    assert (
+        client.get("/metrics", headers={"Authorization": "Bearer secret-api-key-999"}).status_code
+        == 200
+    )
 
     # 2. Missing authorization header on /invoke
     assert client.post("/invoke", json={"input": "test"}).status_code == 401
@@ -443,6 +452,187 @@ def test_serve_payload_limit_asgi_streaming_PAW_SERVE_03(mock_adapter: Path) -> 
     assert "content-length" not in {k.lower() for k in res_normal.request.headers.keys()}
     assert res_normal.status_code == 200
     assert res_normal.json()["output"]["priority"] == "high"
+
+
+def test_serve_invoke_returns_503_when_inference_busy_PAW_SERVE_04(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-SERVE-04: a caller that can't get the single inference slot within
+    the bounded timeout gets 503 instead of blocking forever, and /health keeps
+    responding throughout since it no longer shares the inference threadpool path."""
+    import paw_kit.serve.server as server_module
+
+    monkeypatch.setattr(server_module, "_INFERENCE_SLOT_TIMEOUT_SECONDS", 0.3)
+
+    class SlowBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+            time.sleep(1.5)
+            return super().infer(adapter_path, input_text, grammar_constraint)
+
+    fastapi_app = create_app(mock_adapter, backend=SlowBackend(), allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        slow_future = pool.submit(client.post, "/invoke", json={"input": "Urgent payment failure"})
+        time.sleep(0.2)  # let the slow request acquire the single semaphore slot first
+
+        busy_future = pool.submit(client.post, "/invoke", json={"input": "Urgent payment failure"})
+
+        # /health is async and never routes through the semaphore, so it stays live.
+        assert client.get("/health").status_code == 200
+
+        assert busy_future.result(timeout=5).status_code == 503
+        assert slow_future.result(timeout=5).status_code == 200
+
+
+def test_extract_content_handles_null_text_value_PAW_SERVE_05() -> None:
+    """Verify PAW-SERVE-05: a content block shaped {"type": "text", "text": None} no
+    longer raises TypeError from " ".join(parts) — .get(key, "")'s default only covers
+    an absent key, not a key present with an explicit None value."""
+    from paw_kit.serve.server import _extract_content
+
+    assert _extract_content([{"type": "text", "text": None}]) == ""
+    assert (
+        _extract_content([{"type": "text", "text": "hi"}, {"type": "text", "text": None}])
+        == "hi "
+    )
+
+
+def test_serve_chat_completions_parse_failure_recorded_as_error_PAW_SERVE_05(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify PAW-SERVE-05: a content-extraction failure is caught by the same
+    telemetry boundary as an inference failure — the request is recorded as an error
+    and returns a handled 500, instead of an unhandled crash that bypasses
+    state.record_request(is_error=True) entirely."""
+    import paw_kit.serve.server as server_module
+
+    def _boom(content: object) -> str:
+        raise TypeError("simulated malformed content")
+
+    monkeypatch.setattr(server_module, "_extract_content", _boom)
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="k")
+    client = TestClient(fastapi_app)
+
+    res = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "test"}]},
+        headers={"Authorization": "Bearer k"},
+    )
+    assert res.status_code == 500
+
+    metrics = client.get("/metrics", headers={"Authorization": "Bearer k"}).json()
+    assert metrics["total_requests"] == 1
+    assert metrics["error_count"] == 1
+
+
+def test_serve_metrics_requires_auth_PAW_SERVE_06(mock_adapter: Path) -> None:
+    """Verify PAW-SERVE-06: /metrics is no longer exempt from auth — it discloses
+    request-volume and latency telemetry, so it follows the same policy as inference."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="k")
+    client = TestClient(fastapi_app)
+
+    assert client.get("/metrics").status_code == 401
+    assert client.get("/metrics", headers={"Authorization": "Bearer k"}).status_code == 200
+
+
+def test_serve_docs_routes_require_auth_PAW_SERVE_06(mock_adapter: Path) -> None:
+    """Verify PAW-SERVE-06: /docs, /redoc and /openapi.json are gated behind the same
+    auth policy as inference, unlike FastAPI's defaults which are open regardless."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="k")
+    client = TestClient(fastapi_app)
+
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 401
+        assert client.get(path, headers={"Authorization": "Bearer k"}).status_code == 200
+
+
+def test_serve_health_response_minimal_PAW_SERVE_06(mock_adapter: Path) -> None:
+    """Verify PAW-SERVE-06: /health discloses only status/uptime/version — never the
+    adapter filename or backend implementation type it used to — and stays open."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    res = client.get("/health")
+    assert res.status_code == 200
+    assert set(res.json().keys()) == {"status", "uptime_seconds", "version"}
+
+
+class _ForbiddenLock:
+    """Stand-in lock whose acquisition always fails the test that installs it."""
+
+    def __enter__(self) -> None:
+        raise AssertionError("get_uptime() must not acquire the state lock")
+
+    def __exit__(self, *exc_info: object) -> None:
+        pass
+
+
+def test_server_state_get_uptime_lock_free_PAW_SERVE_07() -> None:
+    """Verify PAW-SERVE-07: get_uptime() never touches the state lock, so a liveness
+    probe reading it can't be blocked behind get_metrics()'s percentile sort. A real
+    `threading.Lock` object's methods are read-only (C-level), so the lock itself is
+    swapped for a stand-in that fails the test the moment anything acquires it."""
+    state = ServerState("test.paw", "mock")
+    state._lock = _ForbiddenLock()  # type: ignore[assignment]
+    assert state.get_uptime() >= 0.0
+
+
+def test_server_state_get_metrics_sorts_outside_lock_PAW_SERVE_07(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify PAW-SERVE-07: get_metrics() releases the lock before sorting the latency
+    snapshot — the lock protects only the O(n) copy, not the O(n log n) sort."""
+    import paw_kit.serve.server as server_module
+
+    state = ServerState("test.paw", "mock")
+    for lat in [5.0, 1.0, 3.0]:
+        state.record_request(lat)
+
+    lock_states_during_sort = []
+    real_sorted = sorted
+
+    def spy_sorted(iterable: object, *args: object, **kwargs: object) -> list:
+        lock_states_during_sort.append(state._lock.locked())
+        return real_sorted(iterable, *args, **kwargs)
+
+    monkeypatch.setattr(server_module, "sorted", spy_sorted, raising=False)
+    metrics = state.get_metrics()
+
+    assert lock_states_during_sort == [False]
+    assert metrics["p50_latency_ms"] == 3.0
+
+
+def test_estimate_tokens_uses_char_heuristic_not_split_PAW_SERVE_08() -> None:
+    """Verify PAW-SERVE-08: token estimation is len(text)//4, not text.split()*4//3 —
+    a single 4000-char word (no whitespace) must not estimate as one token."""
+    from paw_kit.serve.server import _estimate_tokens
+
+    assert _estimate_tokens("a" * 4000) == 1000
+    assert _estimate_tokens("") == 1
+    assert _estimate_tokens("hi") == 1
+
+
+def test_serve_401_includes_www_authenticate_header_PAW_SERVE_09(mock_adapter: Path) -> None:
+    """Verify PAW-SERVE-09: both 401 paths in _verify_auth carry an RFC 6750
+    WWW-Authenticate challenge."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="secret")
+    client = TestClient(fastapi_app)
+
+    res_missing = client.post("/invoke", json={"input": "test"})
+    assert res_missing.status_code == 401
+    assert res_missing.headers.get("www-authenticate") == "Bearer"
+
+    res_wrong = client.post(
+        "/invoke", json={"input": "test"}, headers={"Authorization": "Bearer wrong"}
+    )
+    assert res_wrong.status_code == 401
+    assert res_wrong.headers.get("www-authenticate") == "Bearer"
 
 
 def test_server_state_metrics_calculation() -> None:
