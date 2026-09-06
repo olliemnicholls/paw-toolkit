@@ -11,7 +11,7 @@
 
 **Translate natural-language specifications and prompt templates into local, deterministic, zero-marginal-cost neural functions.**
 
-[Overview](#overview) • [Benchmarks](#benchmarks) • [Quickstart](#quickstart) • [Architecture](#architecture) • [CLI Tools](#cli-tools) • [Examples](#examples)
+[Overview](#overview) • [Benchmarks](#benchmarks) • [Quickstart](#quickstart) • [HTTP Microservice](#http-microservice--polyglot-sdks) • [Architecture](#architecture) • [CLI Tools](#cli-tools) • [Examples](#examples)
 
 ---
 
@@ -206,13 +206,105 @@ The test runner evaluates adversarial inputs, queries the teacher for ground tru
 
 ---
 
+## HTTP Microservice & Polyglot SDKs
+
+`paw-kit` is not limited to in-process Python. Any compiled `.paw` adapter can be served as an ultra-fast local HTTP microservice supporting standard **OpenAI Chat Completions** and **Anthropic Claude Messages** protocols:
+
+```bash
+# Serve compiled adapter on port 8000
+paw-serve models/triage.paw --port 8000
+# Or:
+paw-kit serve models/triage.paw --port 8000
+```
+
+### TypeScript / JavaScript (OpenAI SDK)
+
+```typescript
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://localhost:8000/v1",
+  apiKey: "none", // Local execution, zero credentials required
+});
+
+const response = await client.chat.completions.create({
+  model: "triage.paw",
+  messages: [{ role: "user", content: "Cannot reset password for account #4910" }],
+});
+
+console.log(JSON.parse(response.choices[0].message.content));
+```
+
+### TypeScript / JavaScript (Anthropic Claude SDK)
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  baseURL: "http://localhost:8000",
+  apiKey: "none",
+});
+
+const message = await client.messages.create({
+  model: "triage.paw",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Need urgent refund for double billing" }],
+});
+
+console.log(message.content[0].text);
+```
+
+### Direct RPC & cURL
+
+```bash
+# Direct JSON RPC invocation
+curl -X POST http://localhost:8000/invoke \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Urgent outage reported in eu-west"}'
+
+# Microservice Health & Telemetry Metrics
+curl http://localhost:8000/health
+curl http://localhost:8000/metrics
+```
+
+### 1-Command Docker Deployment
+
+Generate production container assets with multi-stage `uv` installation and health checks:
+
+```bash
+# Generate Dockerfile, .dockerignore, and docker-compose.yml
+paw-kit export docker models/triage.paw --out-dir ./docker
+
+# Run container
+cd docker && docker compose up --build -d
+```
+
+### Dataset Export for Fine-Tuning
+
+Export SQLite interaction traces collected by `@compile_on_hit` into standard JSONL format for fine-tuning or distillation:
+
+```bash
+paw-kit export dataset --db ./.paw/traces.db --out traces.jsonl
+```
+
+---
+
 ## CLI Tools
 
-`paw-kit` includes developer CLI commands for terminal workflows and CI/CD automation:
+`paw-kit` includes developer CLI commands for terminal workflows, serving, and CI/CD automation:
 
 ```bash
 # Run test suite and active-learning self-healing loop
 paw-test check suite.yaml
+
+# Serve compiled adapter as OpenAI & Anthropic compatible HTTP microservice
+paw-serve models/triage.paw --port 8000
+
+# Generate production Dockerfile & docker-compose assets
+paw-kit export docker models/triage.paw --out-dir ./docker
+
+# Export SQLite traces to standard fine-tuning JSONL
+paw-kit export dataset --db ./.paw/traces.db --out traces.jsonl
 
 # Inspect a compiled .paw adapter artifact (size, spec, backend, metadata)
 paw-inspect models/triage.paw

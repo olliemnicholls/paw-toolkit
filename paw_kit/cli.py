@@ -167,6 +167,97 @@ def clean(
         console.print("[bold green]Cache cleaned successfully.[/bold green]")
 
 
+export_app = typer.Typer(help="Export PAW adapters and traces to external formats")
+app.add_typer(export_app, name="export")
+
+
+@app.command(name="serve")
+def serve(
+    adapter_path: Path = typer.Argument(..., help="Path to compiled .paw adapter artifact"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host interface to bind"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to listen on"),
+    backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
+) -> None:
+    """Launch high-performance OpenAI & Anthropic compatible HTTP microservice."""
+    if not adapter_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Adapter file '{adapter_path}' does not exist.")
+        raise typer.Exit(code=1)
+
+    backend = RealPAWBackend() if backend_type.lower() == "real" else MockPAWBackend()
+    console.print(f"[bold green]Launching PAW microservice on http://{host}:{port}[/bold green]")
+    console.print(f"  [cyan]Adapter:[/cyan] {adapter_path}")
+    console.print(f"  [cyan]Backend:[/cyan] {backend_type.lower()}")
+    console.print("  [dim]Endpoints: /v1/chat/completions, /v1/messages, /invoke, /health, /metrics[/dim]")
+
+    from paw_kit.serve.server import serve_adapter
+
+    serve_adapter(adapter_path=adapter_path, host=host, port=port, backend=backend)
+
+
+@export_app.command(name="docker")
+def export_docker_cmd(
+    adapter_path: Path = typer.Argument(..., help="Path to compiled .paw adapter artifact"),
+    out_dir: Path = typer.Option(Path("./docker"), "--out-dir", "-o", help="Output directory for Docker assets"),
+) -> None:
+    """Generate production-ready Dockerfile and docker-compose deployment assets."""
+    if not adapter_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Adapter file '{adapter_path}' does not exist.")
+        raise typer.Exit(code=1)
+
+    from paw_kit.serve.docker import export_docker_scaffold
+
+    try:
+        dest = export_docker_scaffold(adapter_path=adapter_path, output_dir=out_dir)
+        console.print(f"[bold green]Docker deployment assets successfully generated in:[/bold green] {dest.resolve()}")
+        console.print("  - Dockerfile")
+        console.print("  - .dockerignore")
+        console.print("  - docker-compose.yml")
+        console.print("  - README.md")
+    except Exception as exc:
+        console.print(f"[bold red]Error exporting Docker assets:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@export_app.command(name="dataset")
+def export_dataset_cmd(
+    db_path: Path = typer.Option(Path("./.paw/traces.db"), "--db", help="Path to SQLite trace database"),
+    out_file: Path = typer.Option(Path("traces.jsonl"), "--out", "-o", help="Path to output JSONL file"),
+) -> None:
+    """Export traced SQLite teacher-student interaction pairs to standard JSONL format."""
+    if not db_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Trace database '{db_path}' does not exist.")
+        raise typer.Exit(code=1)
+
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT input, output FROM traces ORDER BY timestamp ASC;")
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            console.print(f"[yellow]Warning:[/yellow] No traces found in {db_path}.")
+            raise typer.Exit(code=0)
+
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_file, "w", encoding="utf-8") as f:
+            for inp, out in rows:
+                record = {
+                    "messages": [
+                        {"role": "user", "content": inp},
+                        {"role": "assistant", "content": out},
+                    ]
+                }
+                f.write(json.dumps(record) + "\n")
+
+        console.print(f"[bold green]Successfully exported {len(rows)} traces to:[/bold green] {out_file.resolve()}")
+    except Exception as exc:
+        console.print(f"[bold red]Error exporting dataset:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
 def inspect_cli() -> None:
     """Direct entrypoint for paw-inspect command."""
     typer.run(inspect)
@@ -175,6 +266,11 @@ def inspect_cli() -> None:
 def clean_cli() -> None:
     """Direct entrypoint for paw-clean command."""
     typer.run(clean)
+
+
+def serve_cli() -> None:
+    """Direct entrypoint for paw-serve command."""
+    typer.run(serve)
 
 
 if __name__ == "__main__":

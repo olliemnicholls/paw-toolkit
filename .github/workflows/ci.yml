@@ -50,3 +50,4 @@ jobs:
           uv run paw-test --help
           uv run paw-inspect --help
           uv run paw-clean --help
+          uv run paw-serve --help

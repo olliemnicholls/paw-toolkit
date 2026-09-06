@@ -9,6 +9,9 @@ dependencies = [
     "typer>=0.12",
     "pyyaml>=6.0",
     "interegular>=0.3.3",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "httpx>=0.27.0",
 ]
 
 [dependency-groups]
@@ -22,6 +25,7 @@ paw-kit = "paw_kit.cli:app"
 paw-test = "paw_kit.cli:test_app"
 paw-inspect = "paw_kit.cli:inspect_cli"
 paw-clean = "paw_kit.cli:clean_cli"
+paw-serve = "paw_kit.cli:serve_cli"
 
 [build-system]
 requires = ["hatchling"]
