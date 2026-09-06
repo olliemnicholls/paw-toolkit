@@ -5,8 +5,41 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, model_validator
 import yaml
 
+from paw_kit.pathsafety import ensure_contained
+
 _NUMERIC_VALUE_RULES = {"max_length", "min_length"}
 _REQUIRED_VALUE_RULES = _NUMERIC_VALUE_RULES | {"exact_match", "not_contains"}
+
+# PAW-TEST-01: yaml.safe_load already avoids instantiating arbitrary Python objects,
+# but standard PyYAML places no limit on anchor/alias expansion -- a "YAML bomb"
+# (a handful of nested aliases, each referencing the previous one several times) grows
+# exponentially in memory during parsing regardless of which Loader class is used.
+_MAX_YAML_ALIASES = 50
+_MAX_YAML_BYTES = 1_000_000  # 1 MB
+
+
+class _BoundedSafeLoader(yaml.SafeLoader):
+    """A SafeLoader that aborts once too many alias-expansion events have occurred.
+
+    Overriding `compose_node` (rather than e.g. `construct_*`) means this counts
+    aliases as they're encountered during composition, before PyYAML has had a chance
+    to actually expand any of them into the exponential in-memory structure a bomb
+    relies on.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._alias_count = 0
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        if self.check_event(yaml.events.AliasEvent):
+            self._alias_count += 1
+            if self._alias_count > _MAX_YAML_ALIASES:
+                raise ValueError(
+                    f"YAML contains excessive alias expansions (> {_MAX_YAML_ALIASES}); "
+                    "refusing to parse a suite that looks like a YAML bomb."
+                )
+        return super().compose_node(parent, index)
 
 
 class AssertionRule(BaseModel):
@@ -88,7 +121,18 @@ def load_suite(path_or_yaml: Union[str, Path]) -> TestSuiteConfig:
     else:
         content = str(path_or_yaml)
 
-    parsed_data = yaml.safe_load(content)
+    # PAW-TEST-01: applied here, after the two entry points above have already
+    # converged on a single `content` string, so the cap covers both the file-path and
+    # the raw-YAML-string branch alike -- a cap placed on only one of them (e.g. via
+    # os.path.getsize before reading the file) is trivially bypassed via the other.
+    content_bytes = len(content.encode("utf-8"))
+    if content_bytes > _MAX_YAML_BYTES:
+        raise ValueError(
+            f"Suite YAML content ({content_bytes} bytes) exceeds the maximum of "
+            f"{_MAX_YAML_BYTES} bytes; refusing to parse it."
+        )
+
+    parsed_data = yaml.load(content, Loader=_BoundedSafeLoader)  # PAW-TEST-01
     if not isinstance(parsed_data, dict):
         raise ValueError("Invalid suite specification: root must be a YAML mapping.")
 
@@ -97,4 +141,14 @@ def load_suite(path_or_yaml: Union[str, Path]) -> TestSuiteConfig:
         if "adversarial_dates" in parsed_data["fuzzing"] and "adversarial_probes" not in parsed_data["fuzzing"]:
             parsed_data["fuzzing"]["adversarial_probes"] = parsed_data["fuzzing"].pop("adversarial_dates")
 
-    return TestSuiteConfig.model_validate(parsed_data)
+    config = TestSuiteConfig.model_validate(parsed_data)
+
+    # PAW-TEST-02: an untrusted suite.yaml's adapter_path eventually drives a write
+    # (run_active_learning_loop -> backend.compile(..., output_path=adapter_path)) if
+    # assertions fail and auto_recompile fires. Validated here -- at the suite loader,
+    # not only in the CLI's own recompile-triggering path (paw_kit.cli's PAW-CLI-02
+    # check) -- so any caller that loads a suite via load_suite() gets the same
+    # guarantee, regardless of how it goes on to use the resulting config.
+    ensure_contained(config.adapter_path, Path.cwd(), label="suite.yaml's adapter_path")
+
+    return config

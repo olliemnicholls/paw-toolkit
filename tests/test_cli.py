@@ -80,8 +80,11 @@ def test_cli_check_passing_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "All assertions passed" in result.output
 
 
-def test_cli_check_no_auto_recompile_failure(tmp_path: Path) -> None:
+def test_cli_check_no_auto_recompile_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify check exits with code 1 when assertions fail and auto_recompile is disabled."""
+    # PAW-TEST-02: load_suite now requires adapter_path to resolve under cwd
+    # unconditionally (not only when auto_recompile could trigger a write).
+    monkeypatch.chdir(tmp_path)
     adapter_path = tmp_path / "model_fail.paw"
     adapter_path.write_text(
         json.dumps({
@@ -126,10 +129,18 @@ def test_cli_check_rejects_adapter_path_outside_cwd_PAW_CLI_02(tmp_path: Path, m
     assert outside_target.read_text(encoding="utf-8") == "pretend this is someone else's file"
 
 
-def test_cli_check_allows_adapter_path_outside_cwd_without_recompile_PAW_CLI_02(
+def test_cli_check_rejects_adapter_path_outside_cwd_even_without_recompile_PAW_TEST_02(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify an out-of-cwd adapter_path is fine when auto_recompile can't trigger a write."""
+    """Verify an out-of-cwd adapter_path is rejected even when auto_recompile is off.
+
+    Superseded by Phase 6 (PAW-TEST-02): Phase 3's PAW-CLI-02 fix only validated
+    containment in cli.py's own recompile-triggering path, so a suite with
+    auto_recompile disabled (no write could occur) was intentionally left unchecked.
+    Phase 6 tightens this at the suite loader itself (suite.py's load_suite), applying
+    unconditionally regardless of auto_recompile -- so this scenario, which used to be
+    allowed, is now rejected too.
+    """
     workdir = tmp_path / "work"
     workdir.mkdir()
     outside_adapter = tmp_path / "outside_model.paw"
@@ -154,8 +165,8 @@ def test_cli_check_allows_adapter_path_outside_cwd_without_recompile_PAW_CLI_02(
     suite_path.write_text(suite_content, encoding="utf-8")
 
     result = runner.invoke(app, ["check", str(suite_path), "--no-auto-recompile"])
-    assert result.exit_code == 0
-    assert "Pass rate: 100.0%" in result.output
+    assert result.exit_code == 1
+    assert "not contained within" in " ".join(result.output.split())
 
 
 def test_cli_inspect_adapter(tmp_path: Path) -> None:

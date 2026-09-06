@@ -266,17 +266,10 @@ def check(
 
     console.print(f"[bold cyan]Running paw.test check on:[/bold cyan] {config.task_name} ([dim]{config.adapter_path}[/dim])")
 
-    if config.active_learning.auto_recompile:
-        # PAW-CLI-02: an untrusted suite.yaml's adapter_path drives a write below
-        # (run_active_learning_loop -> backend.compile(..., output_path=adapter_path))
-        # if assertions fail. Reject before that write is ever attempted rather than
-        # trusting the path -- a crafted adapter_path like "../../.github/workflows/
-        # deploy.yml" would otherwise overwrite an arbitrary file (CWE-22/CWE-73).
-        try:
-            ensure_contained(config.adapter_path, Path.cwd(), label="suite.yaml's adapter_path")
-        except ValueError as exc:
-            console.print(f"[bold red]Error:[/bold red] {exc}")
-            raise typer.Exit(code=1)
+    # PAW-CLI-02: adapter_path containment used to be checked here directly, but
+    # load_suite() (paw_kit.test.suite, PAW-TEST-02) now validates it unconditionally
+    # for every suite -- since `config` above can only have come from load_suite(), a
+    # duplicate check here is unreachable dead code, not defense in depth.
 
     # If active learning auto-recompile is disabled, just run once
     if not config.active_learning.auto_recompile:
