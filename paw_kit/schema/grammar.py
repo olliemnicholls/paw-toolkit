@@ -90,8 +90,17 @@ def _json_string_literal_regex(val: str) -> str:
     (quotes, backslashes, control characters -- all of it, including the surrounding
     quote marks); `re.escape` on top of that makes the backslashes json.dumps
     introduced (and any other regex metacharacters) safe as a literal regex fragment.
+
+    `ensure_ascii=False` is deliberate. json.dumps' default (`ensure_ascii=True`)
+    rewrites every non-ASCII character as a `\\uXXXX` escape, which would make
+    `Literal["café"]` compile to a grammar accepting only `"caf\\u00e9"` and *rejecting*
+    the raw UTF-8 `"café"` a decoder actually emits -- a silent behavioural change to
+    every non-ASCII Literal/Enum that compiles today (Schema Determinism,
+    `decisions.md` #2). Turning it off keeps non-ASCII characters verbatim, exactly as
+    the pre-fix `re.escape(val)` did, while still escaping the only characters
+    PAW-SCHEMA-01 is about: quotes, backslashes and control characters.
     """
-    return re.escape(json.dumps(val))
+    return re.escape(json.dumps(val, ensure_ascii=False))
 
 
 def _sanitize_field_pattern(pattern: str) -> str:

@@ -540,7 +540,67 @@ def test_field_pattern_with_backslash_escaped_quote_is_also_rejected_PAW_SCHEMA_
         pydantic_to_regex(FakeEscapedPatternModel)
 
 
+def test_non_ascii_literal_still_matches_raw_utf8_PAW_SCHEMA_01() -> None:
+    """A non-ASCII Literal/Enum must still match the raw UTF-8 form a decoder emits.
+
+    Schema Determinism guard on the PAW-SCHEMA-01 fix itself: json.dumps' default
+    (`ensure_ascii=True`) would rewrite 'café' as 'caf\\u00e9', so the compiled grammar
+    would accept ONLY the escaped form and silently reject the raw UTF-8 string every
+    existing non-ASCII enum schema produces today. The escaping fix must be scoped to
+    quotes/backslashes/control characters, not to non-ASCII characters.
+    """
+    import re as _re
+
+    class AccentEnum(str, enum.Enum):
+        CAFE = "café"
+
+    class AccentModel(BaseModel):
+        literal_value: Literal["café", "naïve"]
+        enum_value: AccentEnum
+
+    pat = pydantic_to_regex(AccentModel, anchors=True)
+    assert _re.match(pat, '{"literal_value": "café", "enum_value": "café"}') is not None
+    # ...while the PAW-SCHEMA-01 breakout protection is unaffected by that scoping.
+    assert "café" in pat and "\\u00e9" not in pat
+
+
 # --- PAW-SCHEMA-02: separate, named collection-nesting depth budget -----------------
+
+
+def _nested_model_chain(length: int) -> type:
+    """Build a chain of `length` distinct BaseModels, each nesting the next.
+
+    Distinct classes (not a self-reference) so the cycle-detection `seen` guard cannot
+    fire -- this exercises the `_MAX_RECURSION_DEPTH` budget itself.
+    """
+    from pydantic import create_model
+
+    model: Any = create_model("ChainLeaf", value=(str, ...))
+    for i in range(length):
+        model = create_model(f"ChainLevel{i}", child=(model, ...))
+    return model
+
+
+def test_model_nesting_at_the_limit_still_compiles_PAW_SCHEMA_02() -> None:
+    """The deepest BaseModel chain within the model-depth budget still compiles.
+
+    The guard is `depth > _MAX_RECURSION_DEPTH` (strict) and the root model is itself
+    depth 0, so `_MAX_RECURSION_DEPTH + 1` chain levels is the last accepted shape.
+    Asserting the *tight* boundary is the point: the PAW-SCHEMA-02 collection budget
+    must not have silently eaten into this one.
+    """
+    from paw_kit.schema.grammar import _MAX_RECURSION_DEPTH
+
+    pat = pydantic_to_regex(_nested_model_chain(_MAX_RECURSION_DEPTH + 1))
+    assert pat  # compiles without raising
+
+
+def test_model_nesting_past_the_limit_raises_PAW_SCHEMA_02() -> None:
+    """One level past that boundary raises, rather than being silently allowed."""
+    from paw_kit.schema.grammar import _MAX_RECURSION_DEPTH
+
+    with pytest.raises(PAWSchemaError, match="[Rr]ecursive model detected"):
+        pydantic_to_regex(_nested_model_chain(_MAX_RECURSION_DEPTH + 2))
 
 
 def _nested_list_type(depth: int) -> Any:
