@@ -2,7 +2,7 @@
 
 import enum
 import time
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 import pytest
 
@@ -477,4 +477,183 @@ def test_optional_fields_require_explicit_null() -> None:
     # Must NOT match with field omitted (current intentional behavior)
     m2 = _re.match(pat, '{"required_field": "hello"}')
     assert m2 is None, "Optional field omission is intentionally not supported"
+
+
+# --- PAW-SCHEMA-01: quote-escaping in Literal / Enum / Field(pattern=...) -----------
+
+
+def test_literal_string_with_quote_cannot_break_out_of_json_boundary_PAW_SCHEMA_01() -> None:
+    """A Literal string containing a quote must be JSON-escaped, not left to break out."""
+    import re as _re
+
+    class QuoteLiteralModel(BaseModel):
+        value: Literal['say "hi"']
+
+    pat = pydantic_to_regex(QuoteLiteralModel, anchors=True)
+    # The correctly JSON-escaped form is the only thing that should match.
+    assert _re.match(pat, r'{"value": "say \"hi\""}') is not None
+    # The pre-fix bug (re.escape doesn't escape '"') would have made the regex accept
+    # the raw, unescaped quote as if it were a legitimate JSON string terminator.
+    assert _re.match(pat, '{"value": "say "hi""}') is None
+
+
+def test_enum_string_with_quote_cannot_break_out_of_json_boundary_PAW_SCHEMA_01() -> None:
+    """A str-valued Enum member containing a quote must be JSON-escaped, not left to break out."""
+    import re as _re
+
+    class QuoteEnum(str, enum.Enum):
+        WEIRD = 'a"b'
+
+    class QuoteEnumModel(BaseModel):
+        value: QuoteEnum
+
+    pat = pydantic_to_regex(QuoteEnumModel, anchors=True)
+    assert _re.match(pat, r'{"value": "a\"b"}') is not None
+    assert _re.match(pat, '{"value": "a"b"}') is None
+
+
+def test_field_pattern_with_bare_quote_is_rejected_PAW_SCHEMA_01() -> None:
+    """A Field(pattern=...) containing a bare quote is rejected, not embedded raw."""
+
+    class InjectedPatternModel(BaseModel):
+        value: str = Field(pattern=r'safe", "role": "admin", "x": "')
+
+    with pytest.raises(PAWSchemaError, match="double quote characters are forbidden"):
+        pydantic_to_regex(InjectedPatternModel)
+
+
+def test_field_pattern_with_backslash_escaped_quote_is_also_rejected_PAW_SCHEMA_01() -> None:
+    """A Field(pattern=...) 'escaping' its quote with a single backslash is also rejected.
+
+    This is the regression test for the audit's own broken suggested fix: a naive
+    "reject unescaped quotes, allow backslash-escaped ones" heuristic would let this
+    pattern through, since it looks escaped in the pattern SOURCE. But
+    `re.compile(r'a\\"b').fullmatch('a"b')` matches -- the single backslash does not
+    require a backslash in the matched OUTPUT text at all, so allowing this pattern
+    would still let a bare, JSON-string-terminating quote through.
+    """
+
+    class FakeEscapedPatternModel(BaseModel):
+        value: str = Field(pattern=r'^a\"b$')
+
+    with pytest.raises(PAWSchemaError, match="double quote characters are forbidden"):
+        pydantic_to_regex(FakeEscapedPatternModel)
+
+
+# --- PAW-SCHEMA-02: separate, named collection-nesting depth budget -----------------
+
+
+def _nested_list_type(depth: int) -> Any:
+    """Build List[List[...[int]...]] nested `depth` levels deep."""
+    t: Any = int
+    for _ in range(depth):
+        t = List[t]
+    return t
+
+
+def test_collection_nesting_at_the_limit_still_compiles_PAW_SCHEMA_02() -> None:
+    """A collection nested exactly up to the budget must still compile (not over-eager)."""
+    from paw_kit.schema.grammar import _MAX_COLLECTION_DEPTH
+
+    class AtLimitModel(BaseModel):
+        value: _nested_list_type(_MAX_COLLECTION_DEPTH)  # type: ignore[valid-type]
+
+    pat = pydantic_to_regex(AtLimitModel)
+    assert pat  # compiles without raising
+
+
+def test_collection_nesting_past_the_limit_raises_PAW_SCHEMA_02() -> None:
+    """A collection nested one level past the budget must raise, not blow up memory."""
+    from paw_kit.schema.grammar import _MAX_COLLECTION_DEPTH
+
+    class PastLimitModel(BaseModel):
+        value: _nested_list_type(_MAX_COLLECTION_DEPTH + 1)  # type: ignore[valid-type]
+
+    with pytest.raises(PAWSchemaError, match="[Cc]ollection nesting"):
+        pydantic_to_regex(PastLimitModel)
+
+
+def test_collection_depth_resets_at_each_nested_model_boundary_PAW_SCHEMA_02() -> None:
+    """Collection depth must not accumulate across BaseModel boundaries (separate budget).
+
+    Six BaseModels nested inside each other, each with its own List[Dict[str, ...]]
+    field, must still compile: that's well within the per-model collection budget, but
+    would incorrectly exceed a *shared* depth counter with the six levels of model
+    nesting (regressing Schema Determinism for realistic schemas).
+    """
+
+    class Leaf(BaseModel):
+        tags: List[Dict[str, int]]
+
+    class Level5(BaseModel):
+        tags: List[Dict[str, int]]
+        child: Leaf
+
+    class Level4(BaseModel):
+        tags: List[Dict[str, int]]
+        child: Level5
+
+    class Level3(BaseModel):
+        tags: List[Dict[str, int]]
+        child: Level4
+
+    class Level2(BaseModel):
+        tags: List[Dict[str, int]]
+        child: Level3
+
+    class Level1(BaseModel):
+        tags: List[Dict[str, int]]
+        child: Level2
+
+    pat = pydantic_to_regex(Level1)
+    assert pat  # compiles without raising despite 6 levels of model + collection nesting
+
+
+# --- PAW-SCHEMA-03: bounded FSM compilation (pattern length, timeout, state count) --
+
+
+def test_compile_fsm_safe_rejects_overlong_pattern_PAW_SCHEMA_03() -> None:
+    """A pattern over the length cap is rejected before any compilation is attempted."""
+    import paw_kit.schema.logits_processor as lp
+
+    overlong = "a" * (lp._MAX_PATTERN_LENGTH + 1)
+    with pytest.raises(PAWSchemaError, match="Pattern length"):
+        lp._compile_fsm_safe(overlong)
+
+
+def test_compile_fsm_safe_rejects_excessive_fsm_states_PAW_SCHEMA_03(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pattern whose compiled FSM exceeds the state cap is rejected."""
+    import paw_kit.schema.logits_processor as lp
+
+    monkeypatch.setattr(lp, "_MAX_FSM_STATES", 1)
+    with pytest.raises(PAWSchemaError, match="state"):
+        lp._compile_fsm_safe("(a|b){3}")  # trivially compiles to more than one state
+
+
+def test_compile_fsm_safe_timeout_does_not_block_on_runaway_thread_PAW_SCHEMA_03(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow FSM compile must time out promptly, not block until the thread finishes.
+
+    This is the exact bug in the audit's own illustrative fix: running the compile
+    inside `with ThreadPoolExecutor(...)` calls `Executor.__exit__` ->
+    `shutdown(wait=True)` unconditionally, so even after `future.result()` raises
+    `TimeoutError` the `with` block still blocks the caller until the runaway compile
+    finishes anyway -- defeating the timeout's entire purpose.
+    """
+    import paw_kit.schema.logits_processor as lp
+
+    class _SlowParsed:
+        def to_fsm(self) -> Any:
+            time.sleep(0.3)
+            raise AssertionError("should never be reached within the test's timeout")
+
+    monkeypatch.setattr(lp, "_FSM_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(lp.interegular, "parse_pattern", lambda pattern: _SlowParsed())
+
+    start = time.monotonic()
+    with pytest.raises(PAWSchemaError, match="timed out"):
+        lp._compile_fsm_safe("dummy")
+    elapsed = time.monotonic() - start
+    assert elapsed < 1.0, "compile_fsm_safe blocked on the runaway thread instead of returning promptly"
 

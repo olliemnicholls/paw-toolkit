@@ -1,9 +1,70 @@
 """Token-level logit masking for grammar and regex constrained autoregressive decoding."""
 
+import concurrent.futures
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 import interegular
 from interegular.fsm import FSM
+
+from paw_kit.schema.exceptions import PAWSchemaError
+
+# PAW-SCHEMA-03: interegular's NFA-to-DFA (Powerset) construction has worst-case
+# exponential state complexity -- a pathological pattern (e.g. overlapping repeated
+# subexpressions) can pin a CPU core at 100% for many seconds with no way to interrupt
+# it, since Python cannot forcibly cancel a running thread. _MAX_PATTERN_LENGTH is the
+# *primary* defense (it bounds the work before it starts, for free); the timeout below
+# is only a secondary backstop for patterns that are short but still pathological.
+_MAX_PATTERN_LENGTH = 1000
+_FSM_TIMEOUT_SECONDS = 3.0
+_MAX_FSM_STATES = 10000
+
+
+def _compile_fsm_safe(pattern: str) -> FSM:
+    """Compile `pattern` into a DFA, bounded against ReDoS / FSM state explosion.
+
+    Two independent defenses, applied in priority order:
+
+    1. A pattern-length cap, checked before any compilation is attempted. This is the
+       primary defense: it rejects known-pathological input sizes for free rather than
+       trying to detect blowup after the fact.
+    2. A timeout on a background thread, as a secondary backstop. Crucially, the thread
+       is *not* joined on timeout: this deliberately avoids the mistake in the audit's
+       own illustrative fix, which ran the compile inside a `with
+       ThreadPoolExecutor(...)` block -- `Executor.__exit__` calls `shutdown(wait=True)`
+       unconditionally, so even after `future.result()` raises `TimeoutError` the
+       `with` block still blocks the caller until the runaway compile finishes anyway,
+       which defeats the timeout entirely. Calling `executor.shutdown(wait=False)`
+       explicitly instead lets the caller return immediately; the abandoned thread
+       keeps running in the background (Python has no way to cancel it) until it
+       eventually finishes or the process exits.
+    """
+    if len(pattern) > _MAX_PATTERN_LENGTH:
+        raise PAWSchemaError(
+            f"Pattern length ({len(pattern)}) exceeds the maximum of "
+            f"{_MAX_PATTERN_LENGTH} characters; refusing to compile it into a DFA."
+        )
+
+    def _compile() -> FSM:
+        fsm = interegular.parse_pattern(pattern).to_fsm()
+        if len(fsm.states) > _MAX_FSM_STATES:
+            raise PAWSchemaError(
+                f"Compiled FSM exceeds the maximum of {_MAX_FSM_STATES} states "
+                f"({len(fsm.states)} states) -- the pattern is too complex to compile safely."
+            )
+        return fsm
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(_compile)
+        try:
+            return future.result(timeout=_FSM_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError:
+            raise PAWSchemaError(
+                f"FSM compilation timed out after {_FSM_TIMEOUT_SECONDS}s -- the "
+                "pattern is likely pathological (exponential DFA state blowup)."
+            )
+    finally:
+        executor.shutdown(wait=False)
 
 
 class RegexLogitsProcessor:
@@ -32,8 +93,9 @@ class RegexLogitsProcessor:
         self.vocabulary = vocabulary
         self.eos_token_id = eos_token_id
 
-        # Compile regex into deterministic finite state machine (DFA)
-        self.fsm: FSM = interegular.parse_pattern(clean_pattern).to_fsm()
+        # Compile regex into deterministic finite state machine (DFA), bounded against
+        # ReDoS / FSM state explosion (PAW-SCHEMA-03).
+        self.fsm: FSM = _compile_fsm_safe(clean_pattern)
 
         # Cache transition results: (state, token_id) -> next_state (or None if invalid)
         self._transition_cache: Dict[Tuple[int, int], Optional[int]] = {}
