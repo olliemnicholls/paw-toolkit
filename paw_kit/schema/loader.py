@@ -48,7 +48,14 @@ def load(
         A typed callable accepting input string and returning a validated Pydantic model instance.
     """
     active_backend = backend or get_default_backend()
-    grammar_regex = pydantic_to_regex(response_model, anchors=False)
+    try:
+        grammar_regex = pydantic_to_regex(response_model, anchors=False)
+    except PAWSchemaError:
+        raise
+    except Exception as exc:
+        raise PAWSchemaError(
+            f"Failed to compile grammar regex for {response_model.__name__}: {exc}"
+        ) from exc
 
     def _execute(input_text: str) -> T:
         try:

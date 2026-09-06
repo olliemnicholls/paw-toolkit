@@ -274,3 +274,207 @@ def test_paw_load_default_backend_and_return_types() -> None:
     with pytest.raises(PAWSchemaError, match="Both local execution and fallback failed"):
         fn_failing_fb("test")
 
+
+# ─── New Tests for Schema Complexity Enhancements ───
+import datetime as dt
+import uuid
+from decimal import Decimal
+from typing import Dict, FrozenSet, Set, Tuple
+
+
+class FixedTupleModel(BaseModel):
+    coords: Tuple[str, int]
+
+
+class VariadicTupleModel(BaseModel):
+    tags: Tuple[str, ...]
+
+
+def test_tuple_fixed_length_generates_array_regex() -> None:
+    """Verify tuple[str, int] produces a JSON array regex, not JSON_STRING."""
+    pat = pydantic_to_regex(FixedTupleModel, anchors=True)
+    assert r"\[" in pat, "Fixed-length tuple should produce array brackets"
+    assert r"\]" in pat
+    import re as _re
+    m = _re.match(pat, '{"coords": ["hello", 42]}')
+    assert m is not None, "Fixed-length tuple regex should match valid JSON array"
+
+
+def test_tuple_variadic_generates_list_regex() -> None:
+    """Verify tuple[str, ...] produces a repeating JSON array regex."""
+    pat = pydantic_to_regex(VariadicTupleModel, anchors=True)
+    assert r"\[" in pat, "Variadic tuple should produce array brackets"
+    import re as _re
+    m = _re.match(pat, '{"tags": ["a", "b", "c"]}')
+    assert m is not None, "Variadic tuple regex should match multi-element array"
+    m_empty = _re.match(pat, '{"tags": []}')
+    assert m_empty is not None, "Variadic tuple regex should match empty array"
+
+
+class SetModel(BaseModel):
+    unique_tags: Set[str]
+
+
+class FrozenSetModel(BaseModel):
+    immutable_tags: FrozenSet[int]
+
+
+def test_set_generates_array_regex() -> None:
+    """Verify set[str] produces a JSON array regex, not JSON_STRING."""
+    pat = pydantic_to_regex(SetModel, anchors=True)
+    assert r"\[" in pat, "Set should produce array brackets"
+    import re as _re
+    m = _re.match(pat, '{"unique_tags": ["alpha", "beta"]}')
+    assert m is not None
+
+
+def test_frozenset_generates_array_regex() -> None:
+    """Verify frozenset[int] produces a JSON array regex."""
+    pat = pydantic_to_regex(FrozenSetModel, anchors=True)
+    assert r"\[" in pat, "FrozenSet should produce array brackets"
+    import re as _re
+    m = _re.match(pat, '{"immutable_tags": [1, 2, 3]}')
+    assert m is not None
+
+
+class BareListModel(BaseModel):
+    items: list
+
+
+class BareTupleModel(BaseModel):
+    items: tuple
+
+
+class BareSetModel(BaseModel):
+    items: set
+
+
+def test_bare_list_generates_array_regex() -> None:
+    """Verify bare list produces a JSON array regex."""
+    pat = pydantic_to_regex(BareListModel, anchors=True)
+    assert r"\[" in pat, "Bare list should produce array brackets"
+
+
+def test_bare_tuple_generates_array_regex() -> None:
+    """Verify bare tuple produces a JSON array regex."""
+    pat = pydantic_to_regex(BareTupleModel, anchors=True)
+    assert r"\[" in pat, "Bare tuple should produce array brackets"
+
+
+def test_bare_set_generates_array_regex() -> None:
+    """Verify bare set produces a JSON array regex."""
+    pat = pydantic_to_regex(BareSetModel, anchors=True)
+    assert r"\[" in pat, "Bare set should produce array brackets"
+
+
+class SpecializedModel(BaseModel):
+    id: uuid.UUID
+    created: dt.datetime
+    due_date: dt.date
+    amount: Decimal
+
+
+def test_uuid_generates_specific_regex() -> None:
+    """Verify UUID produces a hex-formatted regex, not generic JSON_STRING."""
+    pat = pydantic_to_regex(SpecializedModel, anchors=True)
+    assert "[0-9a-fA-F]" in pat, "UUID should produce hex character class"
+    import re as _re
+    m = _re.match(pat, (
+        '{"id": "550e8400-e29b-41d4-a716-446655440000", '
+        '"created": "2024-01-15T10:30:00Z", '
+        '"due_date": "2024-01-15", '
+        '"amount": "3.14"}'
+    ))
+    assert m is not None
+
+
+def test_date_generates_specific_regex() -> None:
+    """Verify date produces a YYYY-MM-DD regex."""
+    from paw_kit.schema.grammar import _type_to_regex, JSON_DATE
+    result = _type_to_regex(dt.date)
+    assert result == JSON_DATE
+
+
+def test_datetime_generates_specific_regex() -> None:
+    """Verify datetime produces an ISO 8601 regex."""
+    from paw_kit.schema.grammar import _type_to_regex, JSON_DATETIME
+    result = _type_to_regex(dt.datetime)
+    assert result == JSON_DATETIME
+
+
+class PatternModel(BaseModel):
+    zip_code: str = Field(pattern=r"[0-9]{5}")
+    name: str
+
+
+def test_field_pattern_constraint_used_in_regex() -> None:
+    """Verify Field(pattern=...) produces a pattern-specific regex, not generic JSON_STRING."""
+    pat = pydantic_to_regex(PatternModel, anchors=True)
+    assert "[0-9]{5}" in pat, "Field pattern constraint should appear in regex"
+    import re as _re
+    m = _re.match(pat, '{"zip_code": "90210", "name": "test"}')
+    assert m is not None
+
+
+class RecursiveNode(BaseModel):
+    value: str
+    children: Optional[List["RecursiveNode"]] = None
+
+
+def test_recursive_model_raises_paw_schema_error() -> None:
+    """Verify recursive BaseModel raises PAWSchemaError, not RecursionError."""
+    with pytest.raises(PAWSchemaError, match="Recursive model detected"):
+        pydantic_to_regex(RecursiveNode)
+
+
+def test_load_wraps_recursion_error_in_paw_schema_error() -> None:
+    """Verify load() wraps recursive model errors in PAWSchemaError."""
+    with pytest.raises(PAWSchemaError):
+        load(
+            adapter_path="models/test.paw",
+            response_model=RecursiveNode,
+        )
+
+
+def test_load_wraps_unexpected_compilation_error() -> None:
+    """Verify load() wraps arbitrary compilation errors in PAWSchemaError."""
+    import paw_kit.schema.loader as loader_module
+    original = loader_module.pydantic_to_regex
+
+    def _boom(*a, **kw):
+        raise TypeError("Unexpected internal error")
+
+    loader_module.pydantic_to_regex = _boom
+    try:
+        with pytest.raises(PAWSchemaError, match="Failed to compile grammar regex"):
+            load(adapter_path="models/test.paw", response_model=TicketTriage)
+    finally:
+        loader_module.pydantic_to_regex = original
+
+
+def test_pydantic_to_regex_is_cached() -> None:
+    """Verify repeated calls return the same object (cache hit)."""
+    pydantic_to_regex.cache_clear()
+    r1 = pydantic_to_regex(TicketTriage, anchors=True)
+    r2 = pydantic_to_regex(TicketTriage, anchors=True)
+    assert r1 is r2, "Cached results should be the same object"
+    info = pydantic_to_regex.cache_info()
+    assert info.hits >= 1
+
+
+class OptionalFieldsModel(BaseModel):
+    required_field: str
+    optional_field: Optional[str] = None
+
+
+def test_optional_fields_require_explicit_null() -> None:
+    """Verify optional fields must be present with explicit null value."""
+    import re as _re
+    pat = pydantic_to_regex(OptionalFieldsModel, anchors=True)
+    # Must match with explicit null
+    m = _re.match(pat, '{"required_field": "hello", "optional_field": null}')
+    assert m is not None
+    # Must NOT match with field omitted (current intentional behavior)
+    m2 = _re.match(pat, '{"required_field": "hello"}')
+    assert m2 is None, "Optional field omission is intentionally not supported"
+
