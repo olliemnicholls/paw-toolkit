@@ -1,9 +1,9 @@
 """Hardware bridge to upstream Program-as-Weights (PAW) runtime and PyTorch/Transformers."""
 
 import importlib.util
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from paw_kit.atomicio import atomic_write_text
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.schema.logits_processor import RegexLogitsProcessor
 
@@ -53,11 +53,10 @@ class RealPAWBackend(AbstractPAWBackend):
                 "Or use MockPAWBackend for fast, zero-GPU testing and development."
             )
 
-        out_path = Path(output_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
         if self._runtime_executor is not None:
-            out_path.write_text(f"[real_compiled:{spec}]", encoding="utf-8")
+            # PAW-JIT-05: atomic write (temp file + os.replace) instead of a bare
+            # Path.write_text() -- see paw_kit.atomicio's module docstring.
+            atomic_write_text(output_path, f"[real_compiled:{spec}]")
             return output_path
 
         raise NotImplementedError(

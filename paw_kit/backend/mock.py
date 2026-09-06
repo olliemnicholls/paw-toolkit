@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from paw_kit.atomicio import atomic_write_text
 from paw_kit.backend.base import AbstractPAWBackend
 
 
@@ -42,11 +43,10 @@ class MockPAWBackend(AbstractPAWBackend):
         }
         self._adapters[output_path] = adapter_data
 
-        # Ensure directory exists and write simulated artifact to disk
-        out_file = Path(output_path)
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(adapter_data, f, indent=2)
+        # PAW-JIT-05: atomic write (temp file + os.replace) instead of a bare open()
+        # -- see paw_kit.atomicio's module docstring for the TOCTOU window this closes
+        # and why it's load-bearing for the adapter-callable cache's staleness check.
+        atomic_write_text(output_path, json.dumps(adapter_data, indent=2))
 
         return output_path
 

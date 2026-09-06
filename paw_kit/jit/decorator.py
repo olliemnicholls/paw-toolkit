@@ -3,10 +3,12 @@
 from functools import wraps
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import threading
 import time
-from typing import Any, Callable, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Type, TypeVar, Union
 from pydantic import BaseModel
 
 from paw_kit.backend.base import AbstractPAWBackend
@@ -18,6 +20,38 @@ from paw_kit.schema.loader import get_default_backend, load
 T = TypeVar("T")
 
 _GLOBAL_COMPILER = BackgroundCompiler()
+
+# PAW-JIT-05: cache of loaded adapter callables, keyed on
+# task_id -> {(adapter_path, stat-identity, backend): callable}. The outer task_id
+# level exists so the same-process invalidation hook (below) can drop every cached
+# callable for a task in one dict operation whenever TraceDB.set_status writes a new
+# status/adapter_path for it -- the only handle that write site has is a task_id, not
+# a specific (adapter_path, stat-identity, backend) combination.
+#
+# The primary invalidation mechanism is the key itself, not this hook: `stat-identity`
+# is `(st_mtime_ns, st_size, st_ino)` from a single `os.stat(adapter_path)` call, which
+# also serves as the existence check (a deleted adapter raises FileNotFoundError,
+# caught by the fail-open try/except in the wrapper below). `backend` is included
+# because `paw_kit.schema.loader.set_default_backend` can swap the process-wide
+# default backend mid-run (decorator.py re-resolves `backend or get_default_backend()`
+# on every call), which would otherwise be a staleness vector the key doesn't cover.
+_ADAPTER_CALLABLE_CACHE: Dict[str, Dict[Tuple[str, Tuple[int, int, int], Any], Callable[[str], Any]]] = {}
+_ADAPTER_CALLABLE_CACHE_LOCK = threading.Lock()
+
+
+def _invalidate_adapter_cache(task_id: str) -> None:
+    """Same-process backstop invalidation hook, registered against each TraceDB via
+    `register_status_listener` (PAW-JIT-05). Not the primary mechanism -- see the
+    module-level comment on `_ADAPTER_CALLABLE_CACHE` -- but a backstop for a
+    filesystem reporting `st_ino == 0` (some SMB/FUSE mounts) or a third-party
+    `AbstractPAWBackend` that rewrites an adapter file in place rather than through
+    `paw_kit.atomicio.atomic_write_text`'s `os.replace`. `TraceDB.set_status` is an
+    instance method, so this hook only fires in the process that calls it -- exactly
+    why the stat-identity component of the key is the mechanism that has to work
+    across processes, not this one.
+    """
+    with _ADAPTER_CALLABLE_CACHE_LOCK:
+        _ADAPTER_CALLABLE_CACHE.pop(task_id, None)
 
 
 def _serialize_input(args: tuple, kwargs: dict) -> str:
@@ -95,11 +129,21 @@ def compile_on_hit(
     """
     db_path = str(Path(cache_dir) / "traces.db")
     db = TraceDB(db_path=db_path)
+    # PAW-JIT-05: register the same-process invalidation backstop for every TraceDB
+    # this decorator creates -- see _invalidate_adapter_cache's docstring.
+    db.register_status_listener(_invalidate_adapter_cache)
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        # Compute deterministic task ID from function signature and spec
+        # Compute deterministic task ID from function signature and spec.
+        # PAW-JIT-06: the full 64 hex characters, not a 16-char truncation -- a
+        # truncated SHA-256 trades a cryptographically negligible collision
+        # probability for one that is merely small, for no benefit (task_id is never
+        # human-typed or displayed anywhere space-constrained). Note this changes the
+        # generated `.paw` filename derived from task_id below, so upgrading orphans
+        # any pre-existing cache entry keyed on the old 16-char id -- not a pure
+        # one-liner.
         qualname = f"{func.__module__}.{func.__qualname__}"
-        task_id = hashlib.sha256(f"{qualname}:{spec}".encode("utf-8")).hexdigest()[:16]
+        task_id = hashlib.sha256(f"{qualname}:{spec}".encode("utf-8")).hexdigest()
 
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
@@ -108,16 +152,35 @@ def compile_on_hit(
 
             # 1. Check if adapter is compiled and ready
             adapter_path = db.get_adapter_path(task_id)
-            if adapter_path and Path(adapter_path).exists():
+            if adapter_path:
                 try:
+                    # PAW-JIT-05(b): a single os.stat call does double duty -- its
+                    # FileNotFoundError *is* the existence check (subsuming the old
+                    # Path.exists() pre-check, and falling open via the except below
+                    # exactly like a stale-adapter inference failure would), and its
+                    # (mtime, size, inode) triple is the cache key's staleness
+                    # component when a response_model is in play.
+                    stat_result = os.stat(adapter_path)
                     if response_model is not None:
-                        # Load and validate with grammar constraint
-                        adapter_fn = load(
-                            adapter_path=adapter_path,
-                            response_model=response_model,
-                            backend=active_backend,
+                        cache_key = (
+                            adapter_path,
+                            (stat_result.st_mtime_ns, stat_result.st_size, stat_result.st_ino),
+                            active_backend,
                         )
-                        return adapter_fn(input_payload)  # type: ignore[return-value]
+                        with _ADAPTER_CALLABLE_CACHE_LOCK:
+                            cached_fn = _ADAPTER_CALLABLE_CACHE.get(task_id, {}).get(cache_key)
+                        if cached_fn is None:
+                            # PAW-JIT-05: cache the loaded adapter callable instead of
+                            # re-load()-ing (recompiling the grammar regex, rebuilding
+                            # the closure) on every single call.
+                            cached_fn = load(
+                                adapter_path=adapter_path,
+                                response_model=response_model,
+                                backend=active_backend,
+                            )
+                            with _ADAPTER_CALLABLE_CACHE_LOCK:
+                                _ADAPTER_CALLABLE_CACHE.setdefault(task_id, {})[cache_key] = cached_fn
+                        return cached_fn(input_payload)  # type: ignore[return-value]
                     else:
                         output_str = active_backend.infer(adapter_path, input_payload)
                         return output_str  # type: ignore[return-value]
