@@ -238,7 +238,7 @@ def test_stream_rejected_explicitly(mock_adapter: Path) -> None:
 
 
 def test_api_key_authentication(mock_adapter: Path) -> None:
-    """Verify H-2: Optional API key authentication guards all inference endpoints."""
+    """Verify H-2: Optional API key authentication guards all inference endpoints (S-1, S-6)."""
     backend = MockPAWBackend()
     auth_app = create_app(mock_adapter, backend=backend, api_key="secret-api-key-999")
     client = TestClient(auth_app)
@@ -247,39 +247,83 @@ def test_api_key_authentication(mock_adapter: Path) -> None:
     assert client.get("/health").status_code == 200
     assert client.get("/metrics").status_code == 200
 
-    # 2. Missing authorization header
+    # 2. Missing authorization header on /invoke
     assert client.post("/invoke", json={"input": "test"}).status_code == 401
 
-    # 3. Invalid token
+    # 3. Invalid token on /invoke
     assert client.post(
         "/invoke",
         json={"input": "test"},
         headers={"Authorization": "Bearer wrong-key"},
     ).status_code == 401
 
-    # 4. Valid token succeeds
-    res = client.post(
+    # 4. Missing auth on /v1/chat/completions (S-6)
+    assert client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "test"}]},
+    ).status_code == 401
+
+    # 5. Missing auth on /v1/messages (S-6)
+    assert client.post(
+        "/v1/messages",
+        json={"messages": [{"role": "user", "content": "test"}]},
+    ).status_code == 401
+
+    # 6. Valid token succeeds on all endpoints
+    res_inv = client.post(
         "/invoke",
         json={"input": "Urgent payment failure"},
         headers={"Authorization": "Bearer secret-api-key-999"},
     )
-    assert res.status_code == 200
+    assert res_inv.status_code == 200
+
+    res_oai = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "Urgent payment failure"}]},
+        headers={"Authorization": "Bearer secret-api-key-999"},
+    )
+    assert res_oai.status_code == 200
+
+    res_msg = client.post(
+        "/v1/messages",
+        json={"messages": [{"role": "user", "content": "Urgent payment failure"}]},
+        headers={"Authorization": "Bearer secret-api-key-999"},
+    )
+    assert res_msg.status_code == 200
 
 
 def test_payload_size_limit_middleware(mock_adapter: Path) -> None:
-    """Verify M-1: Requests exceeding 10MB are rejected with 413 Payload Too Large."""
+    """Verify M-1 and S-2: Enforce request payload limits, invalid headers, and oversized bodies."""
     backend = MockPAWBackend()
     fastapi_app = create_app(mock_adapter, backend=backend)
     client = TestClient(fastapi_app)
 
-    # Simulate 11MB Content-Length header
-    res = client.post(
+    # 1. Simulate 11MB Content-Length header
+    res_header = client.post(
         "/invoke",
         headers={"Content-Length": str(11 * 1024 * 1024)},
         json={"input": "test"},
     )
-    assert res.status_code == 413
-    assert "Payload Too Large" in res.text
+    assert res_header.status_code == 413
+    assert "Payload Too Large" in res_header.text
+
+    # 2. Malformed non-numeric Content-Length header (S-2)
+    res_malformed = client.post(
+        "/invoke",
+        headers={"Content-Length": "not-a-number"},
+        json={"input": "test"},
+    )
+    assert res_malformed.status_code == 400
+    assert "Invalid Content-Length" in res_malformed.text
+
+    # 3. Oversized body without Content-Length header (chunked simulation)
+    large_payload = b"a" * (11 * 1024 * 1024)
+    res_body = client.post(
+        "/invoke",
+        content=large_payload,
+    )
+    assert res_body.status_code == 413
+    assert "Payload Too Large" in res_body.text
 
 
 def test_server_state_metrics_calculation() -> None:

@@ -4,7 +4,9 @@ Exposes OpenAI-compatible (/v1/chat/completions), Anthropic-compatible (/v1/mess
 and direct RPC (/invoke) endpoints with grammar-constrained decoding and telemetry.
 """
 
+from collections import deque
 from contextlib import asynccontextmanager
+import hmac
 import json
 import logging
 import os
@@ -50,7 +52,7 @@ class ServerState:
         self.start_time = time.time()
         self.total_requests = 0
         self.error_count = 0
-        self.latencies: List[float] = []
+        self.latencies: deque[float] = deque(maxlen=10000)
         self._lock = threading.Lock()
 
     def record_request(self, latency_ms: float, is_error: bool = False) -> None:
@@ -59,8 +61,6 @@ class ServerState:
             if is_error:
                 self.error_count += 1
             self.latencies.append(latency_ms)
-            if len(self.latencies) > 10000:
-                self.latencies = self.latencies[-5000:]
 
     def get_metrics(self) -> Dict[str, Any]:
         with self._lock:
@@ -159,20 +159,29 @@ def create_app(
     # Protect against unbounded request body sizes (10MB limit)
     @app.middleware("http")
     async def limit_payload_size(request: Request, call_next: Any) -> Response:
+        MAX_BODY = 10 * 1024 * 1024  # 10 MB
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > 10 * 1024 * 1024:
+        if content_length:
+            try:
+                if int(content_length) > MAX_BODY:
+                    return Response(status_code=413, content="Payload Too Large (maximum 10MB)")
+            except ValueError:
+                return Response(status_code=400, content="Invalid Content-Length header")
+        # For chunked encoding or missing Content-Length header, read and cap body
+        body = await request.body()
+        if len(body) > MAX_BODY:
             return Response(status_code=413, content="Payload Too Large (maximum 10MB)")
         return await call_next(request)
 
     def _verify_auth(request: Request) -> None:
-        """Verify bearer token if PAW_API_KEY is configured."""
+        """Verify bearer token if PAW_API_KEY is configured using constant-time comparison."""
         if not configured_api_key:
             return
         auth = request.headers.get("authorization")
         if not auth or not auth.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Unauthorized: Missing or malformed Bearer token")
         token = auth[7:].strip()
-        if token != configured_api_key:
+        if not hmac.compare_digest(token, configured_api_key):
             raise HTTPException(status_code=401, detail="Unauthorized: Invalid API key")
 
     @app.get("/health", response_model=HealthResponse)

@@ -11,8 +11,7 @@ FROM python:3.12-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \\
     PYTHONDONTWRITEBYTECODE=1 \\
-    PORT=8000 \\
-    HOST=0.0.0.0
+    PORT=8000
 
 WORKDIR /app
 
