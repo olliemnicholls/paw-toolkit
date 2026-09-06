@@ -15,6 +15,7 @@ import typer
 
 from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.backend.real import RealPAWBackend
+from paw_kit.pathsafety import ensure_contained
 from paw_kit.test.active import run_active_learning_loop
 from paw_kit.test.runner import TestRunner
 from paw_kit.test.suite import load_suite
@@ -265,6 +266,18 @@ def check(
 
     console.print(f"[bold cyan]Running paw.test check on:[/bold cyan] {config.task_name} ([dim]{config.adapter_path}[/dim])")
 
+    if config.active_learning.auto_recompile:
+        # PAW-CLI-02: an untrusted suite.yaml's adapter_path drives a write below
+        # (run_active_learning_loop -> backend.compile(..., output_path=adapter_path))
+        # if assertions fail. Reject before that write is ever attempted rather than
+        # trusting the path -- a crafted adapter_path like "../../.github/workflows/
+        # deploy.yml" would otherwise overwrite an arbitrary file (CWE-22/CWE-73).
+        try:
+            ensure_contained(config.adapter_path, Path.cwd(), label="suite.yaml's adapter_path")
+        except ValueError as exc:
+            console.print(f"[bold red]Error:[/bold red] {exc}")
+            raise typer.Exit(code=1)
+
     # If active learning auto-recompile is disabled, just run once
     if not config.active_learning.auto_recompile:
         runner = TestRunner(backend=backend)
@@ -353,13 +366,25 @@ def inspect(
 def clean(
     cache_dir: Path = typer.Option(Path("./.paw"), "--cache-dir", "-c", help="Directory containing traces and adapters"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview files to delete without removing"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt (for scripted/CI use)"),
 ) -> None:
     """Purge local trace database and compiled adapter cache."""
-    if not cache_dir.exists():
+    # PAW-CLI-01: cache_dir came straight from a CLI flag with no containment check at
+    # all -- `paw-clean -c .` (deletes the caller's own project) or `paw-clean -c
+    # /etc/my_app` (deletes an unrelated directory) would both unlink files with no
+    # relation to a paw-kit cache (CWE-22/CWE-73). Restores Track 05's declared-but-
+    # never-implemented invariant: never delete files outside the designated cache dir.
+    try:
+        resolved_cache = ensure_contained(cache_dir, Path.cwd(), label="--cache-dir")
+    except ValueError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    if not resolved_cache.exists():
         console.print(f"[dim]Cache directory '{cache_dir}' does not exist. Nothing to clean.[/dim]")
         raise typer.Exit(code=0)
 
-    files_to_remove = list(cache_dir.glob("*"))
+    files_to_remove = list(resolved_cache.glob("*"))
     if not files_to_remove:
         console.print(f"[dim]No cached artifacts found in '{cache_dir}'.[/dim]")
         raise typer.Exit(code=0)
@@ -367,15 +392,25 @@ def clean(
     console.print(f"[bold yellow]{'Dry run: would remove' if dry_run else 'Purging'}[/bold yellow] {len(files_to_remove)} files in '{cache_dir}':")
     for file in files_to_remove:
         console.print(f"  - {file.name}")
-        if not dry_run:
-            try:
-                if file.is_file():
-                    file.unlink()
-            except Exception as exc:
-                console.print(f"    [red]Failed to delete {file.name}: {exc}[/red]")
 
-    if not dry_run:
-        console.print("[bold green]Cache cleaned successfully.[/bold green]")
+    if dry_run:
+        raise typer.Exit(code=0)
+
+    # PAW-CLI-01, second half of the audit's remediation: require an explicit
+    # confirmation before unlinking anything, so an accidental/automated invocation
+    # (e.g. a Makefile or CI step) doesn't silently destroy files.
+    if not yes and not typer.confirm(f"Permanently delete these {len(files_to_remove)} file(s)?"):
+        console.print("[dim]Aborted -- no files were deleted.[/dim]")
+        raise typer.Exit(code=0)
+
+    for file in files_to_remove:
+        try:
+            if file.is_file():
+                file.unlink()
+        except Exception as exc:
+            console.print(f"    [red]Failed to delete {file.name}: {exc}[/red]")
+
+    console.print("[bold green]Cache cleaned successfully.[/bold green]")
 
 
 export_app = typer.Typer(help="Export PAW adapters and traces to external formats")
