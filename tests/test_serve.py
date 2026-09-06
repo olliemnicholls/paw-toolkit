@@ -635,6 +635,55 @@ def test_serve_401_includes_www_authenticate_header_PAW_SERVE_09(mock_adapter: P
     assert res_wrong.headers.get("www-authenticate") == "Bearer"
 
 
+def test_serve_rate_limit_returns_429_on_exceedance_PAW_SERVE_10(mock_adapter: Path) -> None:
+    """Verify PAW-SERVE-10: a client exceeding its per-minute token-bucket budget gets
+    429, while /health stays exempt so container healthchecks never trip the limiter."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, allow_anonymous=True, requests_per_minute=3
+    )
+    client = TestClient(fastapi_app)
+
+    for _ in range(3):
+        assert client.post("/invoke", json={"input": "Urgent payment failure"}).status_code == 200
+
+    res_limited = client.post("/invoke", json={"input": "Urgent payment failure"})
+    assert res_limited.status_code == 429
+    assert res_limited.headers.get("retry-after") == "1"
+
+    assert client.get("/health").status_code == 200
+
+
+def test_serve_rate_limit_disabled_when_zero_PAW_SERVE_10(mock_adapter: Path) -> None:
+    """Verify requests_per_minute=0 disables the limiter explicitly rather than
+    falling back to the environment/default."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, allow_anonymous=True, requests_per_minute=0
+    )
+    client = TestClient(fastapi_app)
+
+    for _ in range(10):
+        assert client.post("/invoke", json={"input": "Urgent payment failure"}).status_code == 200
+
+
+def test_serve_rate_limit_bucket_storage_bounded_PAW_SERVE_10() -> None:
+    """Verify the rate limiter's per-client bucket storage evicts the oldest entry
+    past _MAX_RATE_LIMIT_BUCKETS instead of growing unbounded under many distinct
+    client addresses — otherwise the limiter would itself become an unbounded-memory
+    DoS surface, the exact problem class it exists to defend against."""
+    from paw_kit.serve.server import _MAX_RATE_LIMIT_BUCKETS, RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(_noop_app, requests_per_minute=60)
+    for i in range(_MAX_RATE_LIMIT_BUCKETS + 50):
+        middleware._consume(f"10.0.0.{i}")
+
+    assert len(middleware._buckets) == _MAX_RATE_LIMIT_BUCKETS
+
+
 def test_server_state_metrics_calculation() -> None:
     """Verify ServerState percentile calculation across request latencies."""
     state = ServerState("test.paw", "mock")

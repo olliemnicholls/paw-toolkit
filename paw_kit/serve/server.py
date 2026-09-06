@@ -4,7 +4,7 @@ Exposes OpenAI-compatible (/v1/chat/completions), Anthropic-compatible (/v1/mess
 and direct RPC (/invoke) endpoints with grammar-constrained decoding and telemetry.
 """
 
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 import hmac
 import json
@@ -218,6 +218,68 @@ class PayloadSizeLimitMiddleware:
         await self.app(scope, replay_receive, send)
 
 
+_DEFAULT_RATE_LIMIT_PER_MINUTE = 120
+_MAX_RATE_LIMIT_BUCKETS = 10_000
+_RATE_LIMIT_EXEMPT_PATHS = frozenset({"/health"})
+
+
+class RateLimitMiddleware:
+    """Pure ASGI token-bucket rate limiter, keyed per client address.
+
+    PAW-SERVE-10: nothing previously bounded how many requests a single client could
+    fire, on any route including the unauthenticated-by-default-deny inference
+    endpoints, making brute-forcing the ephemeral bearer token (PAW-SERVE-01) or simply
+    exhausting server capacity unthrottled. `/health` is exempt — Track 09's generated
+    Dockerfile `HEALTHCHECK` and docker-compose healthcheck poll it on a fixed interval
+    for the life of the container, and it does no inference work, so counting it against
+    a client's budget would make container orchestration itself trip the limiter.
+
+    Bucket storage is bounded (`_MAX_RATE_LIMIT_BUCKETS`, evicted oldest-first) so an
+    attacker spraying requests from many distinct source addresses cannot turn the
+    limiter's own bookkeeping into an unbounded-memory DoS — the defense this middleware
+    exists to provide would otherwise become a new instance of the exact problem class.
+    """
+
+    def __init__(self, app: Any, requests_per_minute: int) -> None:
+        self.app = app
+        self.capacity = float(requests_per_minute)
+        self.refill_per_second = requests_per_minute / 60.0
+        self._buckets: "OrderedDict[str, tuple[float, float]]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _consume(self, client_key: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            tokens, last_refill = self._buckets.pop(client_key, (self.capacity, now))
+            tokens = min(self.capacity, tokens + (now - last_refill) * self.refill_per_second)
+            allowed = tokens >= 1.0
+            if allowed:
+                tokens -= 1.0
+            self._buckets[client_key] = (tokens, now)
+            self._buckets.move_to_end(client_key)
+            while len(self._buckets) > _MAX_RATE_LIMIT_BUCKETS:
+                self._buckets.popitem(last=False)
+            return allowed
+
+    async def __call__(self, scope: Dict[str, Any], receive: Callable, send: Callable) -> None:
+        if scope["type"] != "http" or scope.get("path") in _RATE_LIMIT_EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        client = scope.get("client")
+        client_key = client[0] if client else "unknown"
+        if not self._consume(client_key):
+            response = Response(
+                status_code=429,
+                content="Rate limit exceeded, try again shortly",
+                headers={"Retry-After": "1"},
+            )
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
+
 _INFERENCE_SLOT_TIMEOUT_SECONDS = 30.0
 
 
@@ -267,6 +329,7 @@ def create_app(
     task_name: Optional[str] = None,
     api_key: Optional[str] = None,
     allow_anonymous: bool = False,
+    requests_per_minute: Optional[int] = None,
 ) -> FastAPI:
     """Factory creating configured FastAPI microservice for the given .paw adapter."""
     path_obj = Path(adapter_path)
@@ -319,10 +382,15 @@ def create_app(
 
     # Middleware ordering (outermost first; add_middleware-registration order below
     # matches this, since Starlette runs the first-registered middleware outermost):
-    #   CORS -> PayloadSizeLimit -> routes.
+    #   CORS -> RateLimit -> PayloadSizeLimit -> routes.
     # CORS decides same-origin/allowlisted-origin handling first, cheaply, before any
-    # other work. PayloadSizeLimitMiddleware stays innermost, closest to the routes it
-    # protects.
+    # other work. RateLimit runs next so an already-throttled client is turned away
+    # before PayloadSizeLimitMiddleware spends any effort buffering its body.
+    # PayloadSizeLimitMiddleware stays innermost, closest to the routes it protects.
+    # Trade-off, noted rather than left implicit: a 429 response is produced above the
+    # CORS layer's own middleware position but below CORSMiddleware in the *outer* wrap,
+    # so it does carry CORS response headers when CORS is configured — a rate-limited
+    # cross-origin browser caller can still read the 429 body.
 
     # PAW-SERVE-02: no wildcard CORS default. Cross-origin access is opt-in only, via a
     # comma-separated PAW_CORS_ORIGINS allowlist; absent that, no CORS middleware is
@@ -337,6 +405,17 @@ def create_app(
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Content-Type", "Authorization"],
         )
+
+    # PAW-SERVE-10: bound the request rate per client. `requests_per_minute=0` disables
+    # the limiter explicitly (e.g. for trusted internal benchmarking); anything else,
+    # including the parameter left unset, falls back to PAW_RATE_LIMIT_PER_MINUTE and
+    # then the built-in default.
+    if requests_per_minute is None:
+        requests_per_minute = int(
+            os.environ.get("PAW_RATE_LIMIT_PER_MINUTE", _DEFAULT_RATE_LIMIT_PER_MINUTE)
+        )
+    if requests_per_minute > 0:
+        app.add_middleware(RateLimitMiddleware, requests_per_minute=requests_per_minute)
 
     # PAW-SERVE-03: enforce the 10MB body limit via pure ASGI middleware (see
     # PayloadSizeLimitMiddleware docstring for why BaseHTTPMiddleware cannot do this
@@ -551,6 +630,7 @@ def serve_adapter(
     response_model: Optional[Type[BaseModel]] = None,
     api_key: Optional[str] = None,
     allow_anonymous: bool = False,
+    requests_per_minute: Optional[int] = None,
 ) -> None:
     """Start Uvicorn web server hosting the compiled adapter."""
     import uvicorn
@@ -561,5 +641,6 @@ def serve_adapter(
         response_model=response_model,
         api_key=api_key,
         allow_anonymous=allow_anonymous,
+        requests_per_minute=requests_per_minute,
     )
     uvicorn.run(app, host=host, port=port)
