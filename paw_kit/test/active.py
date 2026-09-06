@@ -134,8 +134,12 @@ def run_active_learning_loop(
             )
 
         failing = report.get_failing_inputs()
+        # PAW-TEST-07: cap how many failing cases get queried against the teacher
+        # this iteration -- slices the already-safe framed-and-validated query loop
+        # (PAW-TEST-05), rather than bypassing or duplicating it.
+        max_queries = config.active_learning.max_queries_per_iteration
         newly_repaired = 0
-        for inp, _out, _reasons in failing:
+        for inp, _out, _reasons in failing[:max_queries]:
             # PAW-TEST-05: framed query + gold-label validation against the suite's
             # own assertions -- see _query_teacher_safely's docstring for why both
             # halves are required. A rejected label is simply not added to the

@@ -3,6 +3,15 @@
 from typing import List, Optional
 from paw_kit.test.suite import FuzzingConfig
 
+# PAW-TEST-06: Track 09's _MAX_YAML_BYTES (suite.py) already bounds any single seed
+# to <=1MB, but `seed * 200` still multiplies that to ~200MB *per seed*, with nothing
+# bounding how many seeds there are -- both halves need a cap. `_MAX_PAYLOAD_EXTREME_LENGTH`
+# bounds the *repeat count* directly (not the string after building it), so an
+# oversized string is never actually constructed in the first place.
+# `_MAX_FUZZED_CASES` bounds the total number of cases `generate()` returns overall.
+_MAX_PAYLOAD_EXTREME_LENGTH = 50_000
+_MAX_FUZZED_CASES = 500
+
 UNICODE_MUTATIONS = [
     "\u200B",  # Zero-width space
     "\u200C",  # Zero-width non-joiner
@@ -68,7 +77,12 @@ class AdversarialFuzzer:
         if config.payload_extremes:
             fuzzed.append("A" * 5000)
             for seed in seeds:
-                fuzzed.append(seed * 200)
+                # PAW-TEST-06: cap the repeat count itself so `seed * repeat_count`
+                # never exceeds _MAX_PAYLOAD_EXTREME_LENGTH -- a long seed (up to
+                # suite.py's 1MB YAML cap) multiplied by a fixed 200x previously had
+                # no ceiling at all.
+                repeat_count = max(1, min(200, _MAX_PAYLOAD_EXTREME_LENGTH // max(1, len(seed))))
+                fuzzed.append(seed * repeat_count)
 
         # Deduplicate while preserving order
         seen = set()
@@ -78,4 +92,8 @@ class AdversarialFuzzer:
                 seen.add(item)
                 unique_fuzzed.append(item)
 
-        return unique_fuzzed
+        # PAW-TEST-06: cap the total case count regardless of source -- an
+        # attacker-controlled adversarial_probes list (or a large seed count feeding
+        # whitespace_flood/inject_unicode's per-seed multiplication) could otherwise
+        # multiply the number of cases TestRunner.run() has to execute without limit.
+        return unique_fuzzed[:_MAX_FUZZED_CASES]

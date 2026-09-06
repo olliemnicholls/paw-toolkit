@@ -1,6 +1,7 @@
 """Unit and integration tests for paw.test: suite parser, adversarial fuzzer, and active learning loop."""
 
 from pathlib import Path
+import time
 from typing import Dict, List
 import pytest
 
@@ -423,3 +424,191 @@ def test_active_learning_missing_teacher_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="requires a valid teacher_provider"):
         run_active_learning_loop(config=config, backend=backend, teacher_provider=None)
+
+
+# --- PAW-TEST-03: bounded regex_match (length caps primary, timeout backstop) -----
+
+
+def test_regex_match_rejects_overlong_pattern_PAW_TEST_03() -> None:
+    """A pattern over the length cap fails just this assertion, without attempting a match."""
+    import paw_kit.test.runner as runner_module
+
+    overlong_pattern = "a" * (runner_module._MAX_REGEX_MATCH_PATTERN_LENGTH + 1)
+    passed, reason = evaluate_assertion("output", AssertionRule(rule="regex_match", pattern=overlong_pattern))
+    assert passed is False
+    assert "exceeds the maximum" in reason
+
+
+def test_regex_match_rejects_overlong_output_PAW_TEST_03() -> None:
+    """Output over the length cap fails just this assertion, without attempting a match."""
+    import paw_kit.test.runner as runner_module
+
+    overlong_output = "a" * (runner_module._MAX_REGEX_MATCH_OUTPUT_LENGTH + 1)
+    passed, reason = evaluate_assertion(overlong_output, AssertionRule(rule="regex_match", pattern=r"a+"))
+    assert passed is False
+    assert "exceeds the maximum" in reason
+
+
+def test_regex_search_safe_timeout_does_not_block_on_runaway_thread_PAW_TEST_03(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow regex match must time out promptly, not block until the thread finishes --
+    mirrors _compile_fsm_safe's own timeout test (PAW-SCHEMA-03): the exact bug in the
+    audit's own illustrative fix is running the match inside `with
+    ThreadPoolExecutor(...)`, whose `__exit__` calls `shutdown(wait=True)`
+    unconditionally, defeating the timeout."""
+    import paw_kit.test.runner as runner_module
+
+    def slow_search(pattern: str, output: str) -> None:
+        time.sleep(0.3)
+        raise AssertionError("should never be reached within the test's timeout")
+
+    monkeypatch.setattr(runner_module, "_REGEX_MATCH_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(runner_module.re, "search", slow_search)
+
+    start = time.monotonic()
+    matched, reason = runner_module._regex_search_safe("dummy", "dummy")
+    elapsed = time.monotonic() - start
+
+    assert matched is False
+    assert reason is not None and "timed out" in reason
+    assert elapsed < 1.0, "regex_search_safe blocked on the runaway thread instead of returning promptly"
+
+
+# --- PAW-TEST-04: malformed pattern / non-integer value fail just one assertion ----
+
+
+def test_evaluate_assertion_regex_match_invalid_pattern_fails_gracefully_PAW_TEST_04() -> None:
+    """A malformed regex pattern (re.error) fails just this assertion, not the whole run."""
+    passed, reason = evaluate_assertion("output", AssertionRule(rule="regex_match", pattern="[unclosed"))
+    assert passed is False
+    assert "invalid" in reason.lower()
+
+
+def test_evaluate_assertion_max_length_non_integer_value_fails_gracefully_PAW_TEST_04() -> None:
+    """A non-integer max_length value (reachable via model_construct(), which bypasses
+    AssertionRule's normal validator) fails just this assertion instead of raising."""
+    rule = AssertionRule.model_construct(rule="max_length", value="not-a-number")
+    passed, reason = evaluate_assertion("hello", rule)
+    assert passed is False
+    assert "must be an integer" in reason
+
+
+def test_evaluate_assertion_min_length_non_integer_value_fails_gracefully_PAW_TEST_04() -> None:
+    """Same as above for min_length, including a None value."""
+    rule = AssertionRule.model_construct(rule="min_length", value=None)
+    passed, reason = evaluate_assertion("hello", rule)
+    assert passed is False
+    assert "must be an integer" in reason
+
+
+# --- PAW-TEST-06: bounded fuzzer payload length and total case count --------------
+
+
+def test_fuzzer_payload_extremes_caps_repeat_length_PAW_TEST_06() -> None:
+    """A long seed's payload_extremes-generated string is capped, not multiplied by a
+    fixed 200x with no ceiling."""
+    from paw_kit.test.fuzzer import _MAX_PAYLOAD_EXTREME_LENGTH
+
+    long_seed = "x" * 1000  # 1000 * 200 = 200,000 chars if uncapped
+    config = FuzzingConfig(payload_extremes=True)
+    fuzzed = AdversarialFuzzer.generate(config, base_inputs=[long_seed])
+
+    seed_derived = [f for f in fuzzed if f.startswith("x") and len(f) > 5000]
+    assert seed_derived, "expected a payload-extreme case derived from the long seed"
+    assert all(len(f) <= _MAX_PAYLOAD_EXTREME_LENGTH for f in seed_derived)
+
+
+def test_fuzzer_caps_total_case_count_PAW_TEST_06() -> None:
+    """The total number of generated cases is capped regardless of source -- an
+    attacker-controlled adversarial_probes list can't multiply it without limit."""
+    from paw_kit.test.fuzzer import _MAX_FUZZED_CASES
+
+    many_probes = [f"probe_{i}" for i in range(_MAX_FUZZED_CASES + 200)]
+    config = FuzzingConfig(adversarial_probes=many_probes)
+    fuzzed = AdversarialFuzzer.generate(config)
+    assert len(fuzzed) <= _MAX_FUZZED_CASES
+
+
+# --- PAW-TEST-07: bounded max_iterations and per-iteration teacher query cap -------
+
+
+def test_active_learning_config_rejects_excessive_max_iterations_PAW_TEST_07() -> None:
+    """max_iterations past the cap is rejected at suite-load/construction time."""
+    from paw_kit.test.suite import _MAX_ACTIVE_LEARNING_ITERATIONS
+
+    with pytest.raises(ValueError, match="max_iterations"):
+        ActiveLearningConfig(max_iterations=_MAX_ACTIVE_LEARNING_ITERATIONS + 1)
+
+
+def test_active_learning_config_rejects_non_positive_max_queries_PAW_TEST_07() -> None:
+    """max_queries_per_iteration must be at least 1."""
+    with pytest.raises(ValueError, match="max_queries_per_iteration"):
+        ActiveLearningConfig(max_queries_per_iteration=0)
+
+
+def test_active_learning_loop_caps_queries_per_iteration_PAW_TEST_07(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify max_queries_per_iteration actually slices the failing-inputs loop: with
+    more failing cases than the cap in a single iteration, only the capped number of
+    teacher queries fire."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "capped.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Spec", examples=[], output_path=adapter_path)
+
+    standard_cases = [StandardTestCase(input=f"case_{i}") for i in range(10)]
+    config = TestSuiteConfig(
+        task_name="cap_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=standard_cases,
+        assertions=[AssertionRule(rule="exact_match", value="TARGET")],
+        fuzzing=FuzzingConfig(),
+    )
+    config.active_learning.max_iterations = 2  # must exceed 1 to reach the repair phase
+    config.active_learning.max_queries_per_iteration = 3
+
+    query_count = {"n": 0}
+
+    def counting_teacher(inp: str) -> str:
+        query_count["n"] += 1
+        return "TARGET"
+
+    run_active_learning_loop(config=config, backend=backend, teacher_provider=counting_teacher)
+    assert query_count["n"] == 3
+
+
+# --- PAW-TEST-08: generic execution-error placeholder, detail moved to a field ----
+
+
+def test_test_runner_execution_error_uses_placeholder_not_raw_exception_PAW_TEST_08(tmp_path: Path) -> None:
+    """A backend.infer() failure surfaces as a generic placeholder in `output`, with
+    the exception text moved to the separate execution_error field instead."""
+    adapter_path = str(tmp_path / "boom.paw")
+
+    class ExplodingBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint=None) -> str:
+            raise RuntimeError("simulated backend failure with sensitive detail /etc/secret")
+
+    backend = ExplodingBackend()
+    backend.compile(spec="Spec", examples=[], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="boom_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="x")],
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+    )
+    runner = TestRunner(backend=backend)
+    report = runner.run(config)
+
+    assert len(report.results) == 1
+    result = report.results[0]
+    assert result.output == "[EXECUTION_ERROR]"
+    assert "sensitive detail" not in result.output
+    assert result.execution_error is not None
+    assert "sensitive detail" in result.execution_error

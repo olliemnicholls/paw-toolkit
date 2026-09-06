@@ -74,12 +74,39 @@ class FuzzingConfig(BaseModel):
     adversarial_probes: List[str] = Field(default_factory=list)
 
 
+# PAW-TEST-07: each active-learning iteration can trigger a full recompile and a
+# round of teacher queries (often a paid API), so an unbounded max_iterations is a
+# denial-of-service / denial-of-wallet risk, not just a slow suite.
+_MAX_ACTIVE_LEARNING_ITERATIONS = 20
+_DEFAULT_MAX_QUERIES_PER_ITERATION = 50
+
+
 class ActiveLearningConfig(BaseModel):
     """Configuration for the teacher query and auto-recompilation loop."""
 
     auto_recompile: bool = True
     teacher_model: str = "claude-3-5-sonnet-20241022"
     max_iterations: int = 3
+    # PAW-TEST-07: caps how many of an iteration's failing cases get queried against
+    # the teacher -- Track 09's PAW-TEST-05 fix already made each individual query
+    # injection-safe and label-validated; this bounds how *many* queries a single
+    # iteration can rack up, independent of how many cases happen to be failing.
+    max_queries_per_iteration: int = _DEFAULT_MAX_QUERIES_PER_ITERATION
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> "ActiveLearningConfig":
+        """Fail fast at suite-load time, matching AssertionRule's own convention."""
+        if self.max_iterations < 1:
+            raise ValueError("active_learning.max_iterations must be at least 1")
+        if self.max_iterations > _MAX_ACTIVE_LEARNING_ITERATIONS:
+            raise ValueError(
+                f"active_learning.max_iterations ({self.max_iterations}) exceeds the "
+                f"maximum of {_MAX_ACTIVE_LEARNING_ITERATIONS} -- each iteration can "
+                "trigger a full recompile plus a round of teacher queries (PAW-TEST-07)."
+            )
+        if self.max_queries_per_iteration < 1:
+            raise ValueError("active_learning.max_queries_per_iteration must be at least 1")
+        return self
 
 
 class StandardTestCase(BaseModel):

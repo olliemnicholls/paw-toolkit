@@ -1,5 +1,6 @@
 """Test execution engine and assertion evaluator for PAW test suites."""
 
+import concurrent.futures
 from pathlib import Path
 import re
 import time
@@ -11,6 +12,50 @@ from paw_kit.schema.loader import get_default_backend
 from paw_kit.test.fuzzer import AdversarialFuzzer
 from paw_kit.test.suite import AssertionRule, TestSuiteConfig
 
+# PAW-TEST-03: bounds mirroring logits_processor._compile_fsm_safe's two-tier shape
+# (Track 09) -- a cheap length pre-check as the *primary* defense, since a bare
+# wall-clock timeout cannot actually interrupt a running re.search (Python has no way
+# to cancel a thread). Here that matters more than in the FSM case: this runs once
+# per (test case x assertion), so relying on the timeout alone would let abandoned
+# runaway threads accumulate across an entire suite run instead of just one.
+_MAX_REGEX_MATCH_PATTERN_LENGTH = 1000
+_MAX_REGEX_MATCH_OUTPUT_LENGTH = 10_000
+_REGEX_MATCH_TIMEOUT_SECONDS = 2.0
+
+
+def _regex_search_safe(pattern: str, output: str) -> Tuple[bool, Optional[str]]:
+    """Bounded `regex_match` evaluation (PAW-TEST-03).
+
+    Returns `(matched, timeout_reason)`; `timeout_reason` is `None` on an ordinary
+    match/no-match, or a description of why the match was refused/couldn't complete.
+    `re.error` (a malformed pattern) is deliberately *not* caught here -- see
+    `evaluate_assertion`, which catches it at the one call site that needs to convert
+    it into a failed assertion (PAW-TEST-04) rather than an uncaught crash.
+    """
+    if len(pattern) > _MAX_REGEX_MATCH_PATTERN_LENGTH:
+        return False, f"regex_match pattern exceeds the maximum of {_MAX_REGEX_MATCH_PATTERN_LENGTH} characters"
+    if len(output) > _MAX_REGEX_MATCH_OUTPUT_LENGTH:
+        return False, f"output exceeds the maximum of {_MAX_REGEX_MATCH_OUTPUT_LENGTH} characters for regex_match"
+
+    def _search() -> bool:
+        return bool(re.search(pattern, output))
+
+    # Secondary backstop, not joined on timeout -- see _compile_fsm_safe's docstring
+    # for why `with ThreadPoolExecutor(...)` (which calls `shutdown(wait=True)`
+    # unconditionally on exit) would defeat the timeout entirely.
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(_search)
+        try:
+            return future.result(timeout=_REGEX_MATCH_TIMEOUT_SECONDS), None
+        except concurrent.futures.TimeoutError:
+            return (
+                False,
+                f"regex_match timed out after {_REGEX_MATCH_TIMEOUT_SECONDS}s -- pattern is likely pathological",
+            )
+    finally:
+        executor.shutdown(wait=False)
+
 
 class TestCaseResult(BaseModel):
     """Result of evaluating assertions on a single input case."""
@@ -20,6 +65,13 @@ class TestCaseResult(BaseModel):
     passed: bool
     failed_rules: List[str] = Field(default_factory=list)
     latency_ms: float = 0.0
+    # PAW-TEST-08: the raw exception text from a failed backend.infer() call used to
+    # be embedded directly in `output` (e.g. "[EXCEPTION: <str(exc)>]"), which could
+    # surface internal detail (paths, stack fragments) wherever a report's `output`
+    # field gets displayed or logged. `output` now holds a generic placeholder for
+    # that case; the actual detail, if any diagnostic value is needed, lives here
+    # instead, in a field callers can choose to surface or not.
+    execution_error: Optional[str] = None
 
 
 class TestRunReport(BaseModel):
@@ -64,16 +116,35 @@ def evaluate_assertion(output: str, rule: AssertionRule) -> Tuple[bool, str]:
     if name == "regex_match":
         if not rule.pattern:
             return False, "regex_match requires a 'pattern' field"
-        matched = bool(re.search(rule.pattern, output))
+        # PAW-TEST-04: a malformed pattern (re.error) fails just this one assertion
+        # instead of crashing the entire suite run. AssertionRule doesn't validate
+        # `pattern` is a compilable regex at suite-load time (unlike `value`, see
+        # AssertionRule._validate_value), so this is reachable via a normal suite.yaml.
+        try:
+            matched, timeout_reason = _regex_search_safe(rule.pattern, output)
+        except re.error as exc:
+            return False, f"regex_match pattern {rule.pattern!r} is invalid: {exc}"
+        if timeout_reason is not None:
+            return False, timeout_reason
         return matched, f"Output '{output}' does not match pattern '{rule.pattern}'"
 
     if name == "max_length":
-        max_len = int(rule.value)
+        # PAW-TEST-04: AssertionRule._validate_value already enforces this for any
+        # suite that came through load_suite(), but a TestSuiteConfig/AssertionRule
+        # constructed directly (or via Pydantic's validation-skipping
+        # model_construct()) can still reach here with a non-integer `value`.
+        try:
+            max_len = int(rule.value)
+        except (TypeError, ValueError):
+            return False, f"max_length assertion value must be an integer, got {rule.value!r}"
         passed = len(output) <= max_len
         return passed, f"Output length {len(output)} exceeds max_length {max_len}"
 
     if name == "min_length":
-        min_len = int(rule.value)
+        try:
+            min_len = int(rule.value)
+        except (TypeError, ValueError):
+            return False, f"min_length assertion value must be an integer, got {rule.value!r}"
         passed = len(output) >= min_len
         return passed, f"Output length {len(output)} is below min_length {min_len}"
 
@@ -117,10 +188,14 @@ class TestRunner:
 
         for inp in inputs_to_test:
             t0 = time.perf_counter()
+            execution_error: Optional[str] = None
             try:
                 out = self.backend.infer(config.adapter_path, inp)
             except Exception as exc:
-                out = f"[EXCEPTION: {exc}]"
+                # PAW-TEST-08: a generic placeholder in `output`, not the raw
+                # exception text -- see TestCaseResult.execution_error's docstring.
+                out = "[EXECUTION_ERROR]"
+                execution_error = str(exc)
             latency = (time.perf_counter() - t0) * 1000
 
             # Evaluate assertions
@@ -143,6 +218,7 @@ class TestRunner:
                     passed=case_passed,
                     failed_rules=failed_rules,
                     latency_ms=latency,
+                    execution_error=execution_error,
                 )
             )
 
