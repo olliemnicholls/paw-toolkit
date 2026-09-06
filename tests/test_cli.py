@@ -147,3 +147,27 @@ def test_cli_clean(tmp_path: Path) -> None:
     assert res_real.exit_code == 0
     assert "Cache cleaned successfully" in res_real.output
     assert not f1.exists()
+
+
+def test_cli_demo_triage() -> None:
+    """Verify paw-kit demo runs the triage demo cleanly with code 0."""
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code == 0
+    assert "Ticket Triage" in result.output
+    assert "LOCAL 0.6B" in result.output
+
+
+def test_cli_demo_pii() -> None:
+    """Verify paw-kit demo --scenario pii runs the PII scrubber demo with code 0."""
+    result = runner.invoke(app, ["demo", "--scenario", "pii"])
+    assert result.exit_code == 0
+    assert "PII Scrubber" in result.output
+    assert "REDACTED" in result.output
+
+
+def test_cli_demo_invalid_scenario() -> None:
+    """Verify paw-kit demo with invalid scenario exits with code 1."""
+    result = runner.invoke(app, ["demo", "--scenario", "invalid_scenario"])
+    assert result.exit_code == 1
+    assert "Unknown scenario" in result.output
+

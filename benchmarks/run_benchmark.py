@@ -11,6 +11,7 @@ import math
 import os
 import random
 import sys
+import tempfile
 import time
 from typing import List, Tuple
 from pydantic import BaseModel, Field, ValidationError
@@ -109,7 +110,7 @@ def benchmark_local_paw(n_calls: int = 100) -> dict:
     """Benchmark local PAW function with schema enforcement."""
     # Setup mock backend simulating 0.6B local neural model
     backend = MockPAWBackend()
-    adapter_path = "/tmp/bench_adapter.paw"
+    adapter_path = os.path.join(tempfile.gettempdir(), "bench_adapter.paw")
     canned_response = json.dumps({
         "id": "TX-0001",
         "category": "subscription",

@@ -17,8 +17,17 @@ Type "echo '⚡ PAW-Kit: Never pay for the same prompt template twice.'"
 Enter
 Sleep 1.5s
 
-# 1. JIT Tracing and Hot-Swapping Demo
-Type "# Step 1: Automatic SQLite tracing and JIT hot-swapping (<1ms local execution)"
+# 1. Instant Zero-Hardware Demo
+Type "# Step 1: Instant zero-hardware demo (zero GPU, zero API keys)"
+Enter
+Sleep 1s
+
+Type "uv run paw-kit demo"
+Enter
+Sleep 5s
+
+# 2. JIT Tracing and Hot-Swapping Demo
+Type "# Step 2: Automatic SQLite tracing and JIT hot-swapping (<1ms local execution)"
 Enter
 Sleep 1s
 
@@ -26,8 +35,8 @@ Type "uv run python examples/triage_ticket/run.py"
 Enter
 Sleep 6s
 
-# 2. Test-Driven Neural Hardening with paw-test
-Type "# Step 2: Test-driven neural hardening with adversarial fuzzing & auto-repair"
+# 3. Test-Driven Neural Hardening with paw-test
+Type "# Step 3: Test-driven neural hardening with adversarial fuzzing & auto-repair"
 Enter
 Sleep 1s
 
@@ -35,8 +44,8 @@ Type "uv run paw-test check examples/date_normalizer/suite.yaml"
 Enter
 Sleep 4s
 
-# 3. Inspect Compiled Adapter
-Type "# Step 3: Inspect compiled .paw neural adapter artifact"
+# 4. Inspect Compiled Adapter
+Type "# Step 4: Inspect compiled .paw neural adapter artifact"
 Enter
 Sleep 1s
 
