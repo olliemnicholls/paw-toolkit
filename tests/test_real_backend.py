@@ -65,3 +65,30 @@ def test_real_backend_custom_runtime_executor(tmp_path: Path) -> None:
 
     result = backend.infer(adapter_path=adapter_path, input_text="ping", grammar_constraint="pattern")
     assert result == "custom_executor:ping:constraint=True"
+
+
+def test_real_backend_accepts_valid_hf_repo_id_PAW_BACKEND_02() -> None:
+    """Verify a well-formed 'owner/repo-name' Hugging Face repo ID is accepted."""
+    backend = RealPAWBackend(base_model_name_or_path="Qwen/Qwen2.5-0.5B-Instruct")
+    assert backend.base_model_name_or_path == "Qwen/Qwen2.5-0.5B-Instruct"
+
+    backend2 = RealPAWBackend(base_model_name_or_path="gpt2")
+    assert backend2.base_model_name_or_path == "gpt2"
+
+
+def test_real_backend_accepts_existing_local_directory_PAW_BACKEND_02(tmp_path: Path) -> None:
+    """Verify an existing local directory is accepted even if it doesn't look like a
+    repo ID (e.g. an absolute path to a locally fine-tuned checkpoint)."""
+    local_model_dir = tmp_path / "my local checkpoint!!"
+    local_model_dir.mkdir()
+
+    backend = RealPAWBackend(base_model_name_or_path=str(local_model_dir))
+    assert backend.base_model_name_or_path == str(local_model_dir)
+
+
+def test_real_backend_rejects_invalid_base_model_name_PAW_BACKEND_02(tmp_path: Path) -> None:
+    """Verify a value that is neither an existing local directory nor a well-formed
+    HF repo ID is rejected at construction, not silently stored and never validated."""
+    for bad_value in ("../../etc/passwd", "; rm -rf /", str(tmp_path / "does_not_exist")):
+        with pytest.raises(ValueError, match="base_model_name_or_path"):
+            RealPAWBackend(base_model_name_or_path=bad_value)
