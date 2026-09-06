@@ -68,8 +68,8 @@ def _run_triage_demo() -> None:
     console.print(Panel.fit(
         "[bold cyan]⚡ PAW-Kit Demo: Support Ticket Triage[/bold cyan]\n\n"
         "Watch [bold]@compile_on_hit[/bold] trace remote teacher calls, trigger background\n"
-        "compilation, and hot-swap to local 0.6B neural execution — all running\n"
-        "locally with [green]zero GPU and zero external API keys[/green].",
+        "compilation, and hot-swap to a simulated local adapter (MockPAWBackend,\n"
+        "no model) — all running locally with [green]zero GPU and zero external API keys[/green].",
         border_style="cyan",
     ))
 
@@ -138,7 +138,7 @@ def _run_triage_demo() -> None:
 
         for i, ticket in enumerate(tickets, 1):
             is_local = triage_ticket.is_compiled()
-            mode = "[green]LOCAL 0.6B[/green]" if is_local else "[yellow]REMOTE TEACHER[/yellow]"
+            mode = "[green]LOCAL (mock)[/green]" if is_local else "[yellow]REMOTE TEACHER[/yellow]"
 
             t0 = time.perf_counter()
             result = triage_ticket(ticket)
@@ -155,7 +155,7 @@ def _run_triage_demo() -> None:
 
         console.print(table)
         console.print("\n[bold green]✓[/bold green] Calls 1–3 via remote teacher (logged to SQLite trace DB)")
-        console.print("[bold green]✓[/bold green] Calls 4–6 via local compiled neural function (<1ms, $0 marginal cost)")
+        console.print("[bold green]✓[/bold green] Calls 4–6 via simulated local adapter (MockPAWBackend, no model) — <1ms, no inference cost")
         console.print("[bold green]✓[/bold green] Zero GPU • Zero API keys • Zero configuration\n")
 
 
@@ -175,8 +175,9 @@ def _run_pii_demo() -> None:
 
     console.print(Panel.fit(
         "[bold cyan]⚡ PAW-Kit Demo: High-Throughput PII Scrubber[/bold cyan]\n\n"
-        "Watch [bold]paw.load[/bold] bind a compiled neural adapter to a strict Pydantic\n"
-        "schema with guaranteed 0.0% JSON syntax errors via FSM token masking.",
+        "Watch [bold]paw.load[/bold] bind an adapter to a strict Pydantic schema, validate\n"
+        "every output, and fall back on failure. The adapter here is MockPAWBackend (no model,\n"
+        "no token-level grammar masking); this shows the control flow, not model quality.",
         border_style="cyan",
     ))
 
@@ -225,8 +226,8 @@ def _run_pii_demo() -> None:
                 for e in result.entities:
                     console.print(f"  [yellow]  → {e.entity_type}:[/yellow] {e.value}")
 
-        console.print("\n[bold green]✓[/bold green] 0.0% JSON syntax errors guaranteed by FSM token masking")
-        console.print("[bold green]✓[/bold green] Sub-millisecond local execution without GPU\n")
+        console.print("\n[bold green]✓[/bold green] Every output validated against the Pydantic schema, fail-open on mismatch")
+        console.print("[bold green]✓[/bold green] Simulated adapter (MockPAWBackend, no model) — timings are not a benchmark\n")
 
 
 @app.command(name="demo")

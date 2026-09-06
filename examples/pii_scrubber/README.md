@@ -1,14 +1,15 @@
-# Example 2: High-Throughput PII Scrubber (`paw.schema`)
+# Example 2: PII Scrubber (`paw.schema`)
 
-This example demonstrates how `paw-kit` uses Pydantic schema compilation and grammar-constrained decoding to deliver high-throughput, structured neural inference with **0.0% JSON syntax errors**.
+This example shows the `paw.load` control flow: bind an adapter to a nested Pydantic model
+(`PIIScrubResult` with `List[PIIEntity]`), validate every output against it, and fall back to
+a deterministic callable when validation fails.
 
-## What It Does
-
-1. **Schema Enforcement**: Defines a nested Pydantic model (`PIIScrubResult` with `List[PIIEntity]`).
-2. **Grammar Compilation**: Uses `paw.schema` to convert the Pydantic type annotations into an exact finite-state machine (FSM) regex pattern.
-3. **Constrained Autoregressive Decoding**: Constrains neural generation at the token level, mathematically preventing invalid JSON syntax, missing braces, or corrupted keys.
-4. **Air-Gapped Privacy**: Executes entirely on local hardware, ensuring customer PII (credit cards, SSNs, emails) never leaves your private infrastructure.
-5. **Fail-Open Fallback**: If local execution throws or violates constraints, execution falls back immediately to the specified fallback callable.
+**What it does not show:** a model. The adapter is a `MockPAWBackend` subclass that runs the
+same rule-based logic as the fallback. It ignores the grammar constraint, so nothing here
+exercises token-level constrained decoding. The regex grammar is compiled from the schema
+(you can see it via `pydantic_to_regex`), but no current backend applies it during decoding;
+see the "What is real and what is mocked" table in the top-level README. Timings printed by
+the script are the cost of a Python dictionary lookup, not a benchmark.
 
 ## Running the Example
 

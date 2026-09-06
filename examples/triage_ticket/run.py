@@ -62,7 +62,7 @@ def simulated_remote_llm(ticket_body: str) -> TriageResult:
 
 
 class DemoBackend(MockPAWBackend):
-    """Simulates local 0.6B base model + adapter execution (<1ms, $0 cost)."""
+    """Simulated local adapter (MockPAWBackend, no model) — dictionary lookup, <1ms, no inference cost."""
 
     def infer(self, adapter_path: str, input_text: str, grammar_constraint: str | None = None) -> str:
         lower = input_text.lower()
@@ -119,7 +119,7 @@ def main():
         duration_ms = (time.perf_counter() - t0) * 1000
 
         is_local = triage_ticket.is_compiled()
-        mode_str = "[LOCAL PAW 0.6B]" if is_local else "[REMOTE TEACHER]"
+        mode_str = "[LOCAL (mock)]" if is_local else "[REMOTE TEACHER]"
 
         print(f"Call {i:02d} | {mode_str:16} | {duration_ms:6.1f}ms")
         print(f"  Input:    {ticket[:60]}...")

@@ -18,9 +18,11 @@ _HF_REPO_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*(?:/[A-Za-z0-9][A-
 
 
 class RealPAWBackend(AbstractPAWBackend):
-    """Runtime bridge to upstream Deng et al. PAW compiler and PyTorch neural interpreter.
+    """Placeholder for an in-process PyTorch/PEFT backend. Not implemented.
 
-    Connects to local GPU/CPU transformers runtime and 0.6B resident base weights.
+    `compile()` and `infer()` raise NotImplementedError unless a `runtime_executor`
+    callback is supplied. For a working real backend use
+    `paw_kit.backend.programasweights.ProgramAsWeightsBackend`.
     """
 
     def __init__(
@@ -86,7 +88,9 @@ class RealPAWBackend(AbstractPAWBackend):
 
         raise NotImplementedError(
             "Direct PyTorch neural fine-tuning compilation is under active development for paw-kit v0.2.\n"
-            "In v0.1, use MockPAWBackend for zero-GPU testing or supply a custom `runtime_executor` callback."
+            "For real inference today use paw_kit.backend.programasweights.ProgramAsWeightsBackend "
+            "(official upstream SDK); for zero-GPU testing use MockPAWBackend; or supply a custom "
+            "`runtime_executor` callback."
         )
 
     def infer(
@@ -116,5 +120,7 @@ class RealPAWBackend(AbstractPAWBackend):
 
         raise NotImplementedError(
             "Direct PyTorch neural inference is under active development for paw-kit v0.2.\n"
-            "In v0.1, use MockPAWBackend for zero-GPU testing or supply a custom `runtime_executor` callback."
+            "For real inference today use paw_kit.backend.programasweights.ProgramAsWeightsBackend "
+            "(official upstream SDK); for zero-GPU testing use MockPAWBackend; or supply a custom "
+            "`runtime_executor` callback."
         )

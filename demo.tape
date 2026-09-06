@@ -13,7 +13,7 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 40ms
 
 # Intro
-Type "echo '⚡ PAW-Kit: Never pay for the same prompt template twice.'"
+Type "echo '⚡ paw-kit: reliability harness for Program-as-Weights functions (mock-backend walkthrough)'"
 Enter
 Sleep 1.5s
 
@@ -54,6 +54,6 @@ Enter
 Sleep 4s
 
 # Outro
-Type "echo '🚀 100% cost reduction. 60x lower latency. 0.0% syntax errors.'"
+Type "echo '🚀 Simulated local adapter demo — MockPAWBackend, no real model, no measured benchmark.'"
 Enter
 Sleep 2s

@@ -1,10 +1,13 @@
 """High-Throughput PII Scrubber Example using paw.schema & paw.load.
 
 Demonstrates:
-1. Local schema enforcement: compiling a Pydantic model into grammar-constrained decoding.
-2. 0.0% JSON syntax errors: guaranteed compliant JSON outputs matching PIIScrubResult.
-3. Sub-millisecond latency: air-gapped local processing for sensitive compliance workloads.
-4. Fail-open fallback: transparent recovery if an exception or malformed output occurs.
+1. Schema binding: paw.load compiles a Pydantic model to a regex grammar and validates every output.
+2. Fail-open fallback: transparent recovery if an exception or malformed output occurs.
+3. Streaming loop shape for a local processing pipeline.
+
+The adapter here is a MockPAWBackend subclass (a rule-based stub, no model). It does NOT
+perform token-level grammar masking; the "0.0% syntax error" property of paw.schema's FSM
+logits processor only applies when a backend actually uses it, and none does yet.
 """
 
 import json
@@ -80,10 +83,10 @@ def fallback_scrubber(raw_text: str) -> PIIScrubResult:
 
 
 class PIIMockBackend(MockPAWBackend):
-    """Simulates local PAW 0.6B neural adapter execution with grammar enforcement."""
+    """Simulated local adapter (MockPAWBackend, no model, no grammar enforcement — see fallback_scrubber below)."""
 
     def infer(self, adapter_path: str, input_text: str, grammar_constraint: str | None = None) -> str:
-        # Executes fallback logic locally with 0.0% syntax error guarantee
+        # Rule-based stub standing in for a model; grammar_constraint is ignored here.
         res = fallback_scrubber(input_text)
         return res.model_dump_json()
 
@@ -134,7 +137,7 @@ def main():
         fallback_provider=fallback_scrubber,
     )
 
-    # 3. Process stream with zero-marginal-cost local inference
+    # 3. Process stream through the (mock) local adapter
     print("\n[3/3] Processing high-throughput text stream locally:")
     print("-" * 75)
 
@@ -154,7 +157,7 @@ def main():
 
     avg_ms = total_time / len(SAMPLE_STREAM)
     print(f"\n[SUCCESS] Stream processed. Average local latency: {avg_ms:.2f}ms.")
-    print("Guaranteed 0.0% JSON syntax errors via FSM token masking.\n")
+    print("Every output validated against PIIScrubResult (mock adapter, no model; timing is not a benchmark).\n")
 
 
 if __name__ == "__main__":

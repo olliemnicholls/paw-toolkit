@@ -15,7 +15,12 @@ This example demonstrates how `paw-kit` solves the core challenge of deploying s
    - Flags assertion failures.
    - Automatically queries the frontier teacher model for gold labels on failing inputs.
    - Recompiles the adapter with the augmented dataset.
-   - Repeats until 100% of assertions pass.
+   - Repeats until every assertion passes or `max_iterations` is reached.
+
+**Note:** in this example both the "teacher" and the adapter are deterministic Python stubs
+(`MockPAWBackend`), so the loop always converges. That demonstrates the loop's mechanics, not
+that active learning improves a real compiled function. Measuring the latter is the point of
+`scripts/measure_real_backend.py` in the repo root.
 
 ## Running the Example
 

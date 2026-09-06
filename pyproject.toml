@@ -1,7 +1,7 @@
 [project]
 name = "paw-kit"
 version = "0.1.0"
-description = "Production Runtime & Reliability Toolkit for Program-as-Weights (PAW)"
+description = "Reliability and migration harness for Program-as-Weights (PAW) neural functions (early alpha)"
 readme = "README.md"
 requires-python = ">=3.11"
 # PAW-DEPS-01: every runtime/optional/dev dependency below was previously floor-only

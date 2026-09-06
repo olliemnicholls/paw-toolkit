@@ -276,7 +276,7 @@ def test_cli_demo_triage() -> None:
     result = runner.invoke(app, ["demo"])
     assert result.exit_code == 0
     assert "Ticket Triage" in result.output
-    assert "LOCAL 0.6B" in result.output
+    assert "LOCAL (mock)" in result.output
 
 
 def test_cli_demo_pii() -> None:

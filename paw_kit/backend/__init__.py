@@ -2,6 +2,7 @@
 
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.mock import MockPAWBackend
+from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.backend.real import RealPAWBackend
 
-__all__ = ["AbstractPAWBackend", "MockPAWBackend", "RealPAWBackend"]
+__all__ = ["AbstractPAWBackend", "MockPAWBackend", "ProgramAsWeightsBackend", "RealPAWBackend"]
