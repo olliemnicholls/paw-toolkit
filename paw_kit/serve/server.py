@@ -11,6 +11,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import secrets
+import sys
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Type, Union
@@ -19,6 +21,7 @@ import uuid
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.datastructures import Headers
 
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.mock import MockPAWBackend
@@ -112,12 +115,87 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text.split()) * 4 // 3)
 
 
+class PayloadSizeLimitMiddleware:
+    """Pure ASGI middleware enforcing a maximum request body size.
+
+    Deliberately *not* a `BaseHTTPMiddleware` subclass: Starlette's
+    `BaseHTTPMiddleware.call_next` ignores a rebuilt `Request`'s receive closure, so
+    calling `request.stream()` inside one and rebinding the body afterwards sends an
+    empty body downstream (`_CachedRequest` only replays a body cached via
+    `request.body()`). Wrapping `receive` directly at the ASGI layer avoids that class
+    of bug, but a wrapper that merely counts bytes and *raises* once over the limit does
+    not work either: FastAPI's own body-parsing (`Request.json()`/dependency resolution)
+    catches any exception raised while reading the body and turns it into a generic 400
+    ("There was an error parsing the body") before it ever reaches this middleware.
+
+    So this buffers the body itself, bounded, before ever handing control to the
+    downstream app: it reads `http.request` messages one at a time, aborting with its
+    own 413 as soon as the running total exceeds the limit — so at most one chunk past
+    the limit is ever held in memory, never the full oversized body — and only once a
+    complete body within the limit has been collected does it replay those exact
+    messages, in order, to the downstream app via a synthetic `receive`. The downstream
+    app therefore sees a completely normal ASGI request; `request.body()`/`.json()`
+    behave exactly as if no middleware were present.
+    """
+
+    def __init__(self, app: Any, max_body_bytes: int) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: Dict[str, Any], receive: Callable, send: Callable) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        content_length = headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_body_bytes:
+                    response = Response(status_code=413, content="Payload Too Large (maximum 10MB)")
+                    await response(scope, receive, send)
+                    return
+            except ValueError:
+                response = Response(status_code=400, content="Invalid Content-Length header")
+                await response(scope, receive, send)
+                return
+
+        # Defense in depth: bound the body ourselves too, in case Content-Length was
+        # absent (chunked transfer) or understated.
+        buffered_messages: List[Dict[str, Any]] = []
+        total_bytes = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                buffered_messages.append(message)
+                break
+            buffered_messages.append(message)
+            total_bytes += len(message.get("body", b"") or b"")
+            if total_bytes > self.max_body_bytes:
+                response = Response(status_code=413, content="Payload Too Large (maximum 10MB)")
+                await response(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        buffered_iter = iter(buffered_messages)
+
+        async def replay_receive() -> Dict[str, Any]:
+            try:
+                return next(buffered_iter)
+            except StopIteration:
+                return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
 def create_app(
     adapter_path: Union[str, Path],
     backend: Optional[AbstractPAWBackend] = None,
     response_model: Optional[Type[BaseModel]] = None,
     task_name: Optional[str] = None,
     api_key: Optional[str] = None,
+    allow_anonymous: bool = False,
 ) -> FastAPI:
     """Factory creating configured FastAPI microservice for the given .paw adapter."""
     path_obj = Path(adapter_path)
@@ -129,6 +207,19 @@ def create_app(
     # Return basename to avoid exposing host filesystem directory layout
     state = ServerState(path_obj.name, backend_type)
     configured_api_key = api_key or os.environ.get("PAW_API_KEY")
+    if not configured_api_key and not allow_anonymous:
+        # PAW-SERVE-01: default-deny. Without this, every inference endpoint is
+        # unauthenticated by default (CWE-306). Generate a per-process ephemeral token
+        # rather than silently running open; --allow-anonymous is the explicit opt-out.
+        configured_api_key = secrets.token_urlsafe(32)
+        print(
+            f"[paw-serve] SECURITY NOTICE: no API key configured. Generated ephemeral "
+            f"bearer token: {configured_api_key}\n"
+            f"[paw-serve] Pass this as 'Authorization: Bearer <token>', or set PAW_API_KEY "
+            f"/ --api-key for a stable key, or pass --allow-anonymous to disable auth.",
+            file=sys.stderr,
+        )
+        logger.warning("No API key configured. Generated an ephemeral bearer token (see stderr).")
     inference_lock = threading.Lock()
 
     # Initialize execution function (with schema validation if model provided)
@@ -147,31 +238,24 @@ def create_app(
         version="0.1.0",
     )
 
-    # Enforce safe CORS defaults (no credentials with wildcard origin)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # PAW-SERVE-02: no wildcard CORS default. Cross-origin access is opt-in only, via a
+    # comma-separated PAW_CORS_ORIGINS allowlist; absent that, no CORS middleware is
+    # installed at all, so browsers deny cross-origin requests outright.
+    cors_env = os.environ.get("PAW_CORS_ORIGINS", "")
+    allowed_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip()]
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", "Authorization"],
+        )
 
-    # Protect against unbounded request body sizes (10MB limit)
-    @app.middleware("http")
-    async def limit_payload_size(request: Request, call_next: Any) -> Response:
-        MAX_BODY = 10 * 1024 * 1024  # 10 MB
-        content_length = request.headers.get("content-length")
-        if content_length:
-            try:
-                if int(content_length) > MAX_BODY:
-                    return Response(status_code=413, content="Payload Too Large (maximum 10MB)")
-            except ValueError:
-                return Response(status_code=400, content="Invalid Content-Length header")
-        # For chunked encoding or missing Content-Length header, read and cap body
-        body = await request.body()
-        if len(body) > MAX_BODY:
-            return Response(status_code=413, content="Payload Too Large (maximum 10MB)")
-        return await call_next(request)
+    # PAW-SERVE-03: enforce the 10MB body limit via pure ASGI middleware (see
+    # PayloadSizeLimitMiddleware docstring for why BaseHTTPMiddleware cannot do this
+    # safely without emptying the request body for every downstream handler).
+    app.add_middleware(PayloadSizeLimitMiddleware, max_body_bytes=10 * 1024 * 1024)
 
     def _verify_auth(request: Request) -> None:
         """Verify bearer token if PAW_API_KEY is configured using constant-time comparison."""
@@ -356,6 +440,7 @@ def serve_adapter(
     backend: Optional[AbstractPAWBackend] = None,
     response_model: Optional[Type[BaseModel]] = None,
     api_key: Optional[str] = None,
+    allow_anonymous: bool = False,
 ) -> None:
     """Start Uvicorn web server hosting the compiled adapter."""
     import uvicorn
@@ -365,5 +450,6 @@ def serve_adapter(
         backend=backend,
         response_model=response_model,
         api_key=api_key,
+        allow_anonymous=allow_anonymous,
     )
     uvicorn.run(app, host=host, port=port)

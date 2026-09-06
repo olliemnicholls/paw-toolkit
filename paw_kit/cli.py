@@ -389,6 +389,13 @@ def serve(
     port: int = typer.Option(8000, "--port", "-p", help="Port to listen on"),
     backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
     api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Optional secret bearer token for authentication"),
+    allow_anonymous: bool = typer.Option(
+        False,
+        "--allow-anonymous",
+        help="Disable authentication entirely (PAW-SERVE-01). Without this flag, an "
+        "ephemeral bearer token is generated and printed to stderr if no --api-key "
+        "or PAW_API_KEY is configured.",
+    ),
 ) -> None:
     """Launch high-performance OpenAI & Anthropic compatible HTTP microservice."""
     if not adapter_path.exists():
@@ -402,11 +409,22 @@ def serve(
     console.print(f"  [cyan]Backend:[/cyan] {actual_type}")
     if api_key:
         console.print("  [yellow]Authentication:[/yellow] Bearer token active")
+    elif allow_anonymous:
+        console.print("  [bold red]Authentication:[/bold red] DISABLED (--allow-anonymous)")
+    else:
+        console.print("  [yellow]Authentication:[/yellow] ephemeral token (see stderr on startup)")
     console.print("  [dim]Endpoints: /v1/chat/completions, /v1/messages, /invoke, /health, /metrics[/dim]")
 
     from paw_kit.serve.server import serve_adapter
 
-    serve_adapter(adapter_path=adapter_path, host=host, port=port, backend=backend, api_key=api_key)
+    serve_adapter(
+        adapter_path=adapter_path,
+        host=host,
+        port=port,
+        backend=backend,
+        api_key=api_key,
+        allow_anonymous=allow_anonymous,
+    )
 
 
 @export_app.command(name="docker")
