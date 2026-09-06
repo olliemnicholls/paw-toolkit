@@ -1,5 +1,6 @@
 """Token-level logit masking for grammar and regex constrained autoregressive decoding."""
 
+from collections import OrderedDict
 import concurrent.futures
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -17,6 +18,18 @@ from paw_kit.schema.exceptions import PAWSchemaError
 _MAX_PATTERN_LENGTH = 1000
 _FSM_TIMEOUT_SECONDS = 3.0
 _MAX_FSM_STATES = 10000
+
+# PAW-SCHEMA-04: bounds on RegexLogitsProcessor's two per-instance caches, so a very
+# long autoregressive generation (many distinct (state, token_id) pairs and/or many
+# distinct states visited) cannot grow either dict without limit. `_MAX_FSM_STATES`
+# already bounds distinct FSM states to 10,000; `_MAX_ALLOWED_TOKENS_CACHE_ENTRIES`
+# comfortably covers realistic generations without holding an entry for literally
+# every state a pathologically long run could visit. `_MAX_TRANSITION_CACHE_ENTRIES`
+# is sized per (state, token) pair, so it needs more headroom.
+_MAX_TRANSITION_CACHE_ENTRIES = 100_000
+_MAX_ALLOWED_TOKENS_CACHE_ENTRIES = 5_000
+
+_UNSET = object()  # cache-miss sentinel; a legitimate cached value can be None.
 
 
 def _compile_fsm_safe(pattern: str) -> FSM:
@@ -97,10 +110,27 @@ class RegexLogitsProcessor:
         # ReDoS / FSM state explosion (PAW-SCHEMA-03).
         self.fsm: FSM = _compile_fsm_safe(clean_pattern)
 
-        # Cache transition results: (state, token_id) -> next_state (or None if invalid)
-        self._transition_cache: Dict[Tuple[int, int], Optional[int]] = {}
-        # Cache allowed token sets per state: state -> set of token_ids
-        self._allowed_tokens_cache: Dict[int, Set[int]] = {}
+        # PAW-SCHEMA-04: bucket the vocabulary by first character once, up front, so
+        # get_allowed_tokens can skip whole buckets whose first character has no legal
+        # transition from the current state instead of walking every token in the
+        # vocabulary through the FSM for every new state it encounters. This is a
+        # partial mitigation, not an asymptotic fix -- a state where "anything else"
+        # is a legal transition (interegular's catch-all alphabet bucket) still admits
+        # most first characters -- but for the common case of a highly restrictive
+        # state (e.g. mid-way through matching a fixed JSON field-name literal), only
+        # a small fraction of first-character buckets pass the check below.
+        self._tokens_by_first_char: Dict[str, List[int]] = {}
+        for tid, token_str in vocabulary.items():
+            if token_str:
+                self._tokens_by_first_char.setdefault(token_str[0], []).append(tid)
+
+        # PAW-SCHEMA-04: bounded (LRU-evicted) instead of plain dicts -- an unbounded
+        # cache keyed on every (state, token_id) pair or every state ever visited can
+        # grow without limit over a very long generation. Cache transition results:
+        # (state, token_id) -> next_state (or None if invalid).
+        self._transition_cache: "OrderedDict[Tuple[int, int], Optional[int]]" = OrderedDict()
+        # Cache allowed token sets per state: state -> set of token_ids.
+        self._allowed_tokens_cache: "OrderedDict[int, Set[int]]" = OrderedDict()
 
     @property
     def initial_state(self) -> int:
@@ -130,8 +160,10 @@ class RegexLogitsProcessor:
             The new state integer if valid, or None if emitting this token is illegal.
         """
         cache_key = (state, token_id)
-        if cache_key in self._transition_cache:
-            return self._transition_cache[cache_key]
+        cached = self._transition_cache.get(cache_key, _UNSET)
+        if cached is not _UNSET:
+            self._transition_cache.move_to_end(cache_key)
+            return cached  # type: ignore[return-value]
 
         if self.eos_token_id is not None and token_id == self.eos_token_id:
             # EOS is only valid if we are already in an accepting state
@@ -144,27 +176,46 @@ class RegexLogitsProcessor:
                 next_state = self._walk_string(state, token_str)
 
         self._transition_cache[cache_key] = next_state
+        self._transition_cache.move_to_end(cache_key)
+        if len(self._transition_cache) > _MAX_TRANSITION_CACHE_ENTRIES:
+            self._transition_cache.popitem(last=False)
         return next_state
 
     def get_allowed_tokens(self, state: int) -> Set[int]:
         """Compute and return the set of all valid token IDs from state."""
-        if state in self._allowed_tokens_cache:
-            return self._allowed_tokens_cache[state]
+        cached = self._allowed_tokens_cache.get(state, _UNSET)
+        if cached is not _UNSET:
+            self._allowed_tokens_cache.move_to_end(state)
+            return cached  # type: ignore[return-value]
 
         allowed: Set[int] = set()
-        for token_id in self.vocabulary:
-            if self.get_next_state(state, token_id) is not None:
-                allowed.add(token_id)
+        # PAW-SCHEMA-04: walk only the tokens whose first character is actually a
+        # legal transition out of `state`, rather than every token in the vocabulary
+        # -- see the bucket built in __init__.
+        state_transitions = self.fsm.map.get(state, {})
+        for first_char, candidate_ids in self._tokens_by_first_char.items():
+            symbol = self.fsm.alphabet[first_char]
+            if symbol is None or state_transitions.get(symbol) is None:
+                continue
+            for token_id in candidate_ids:
+                if token_id == self.eos_token_id:
+                    continue  # EOS is special-cased below regardless of its bucket
+                if self.get_next_state(state, token_id) is not None:
+                    allowed.add(token_id)
 
-        # Check EOS token if separate from vocabulary keys
-        if (
-            self.eos_token_id is not None
-            and self.eos_token_id not in self.vocabulary
-            and self.is_final_state(state)
-        ):
+        # EOS's legality never depends on walking its literal token string through
+        # the FSM at all (get_next_state special-cases it on is_final_state alone),
+        # so it must be checked independently of the character-bucket pruning above
+        # -- a real-world EOS token's string form (e.g. "<eos>") typically doesn't
+        # correspond to any in-pattern FSM transition, so the bucket loop would never
+        # reach it otherwise, whether or not it also happens to appear in vocabulary.
+        if self.eos_token_id is not None and self.get_next_state(state, self.eos_token_id) is not None:
             allowed.add(self.eos_token_id)
 
         self._allowed_tokens_cache[state] = allowed
+        self._allowed_tokens_cache.move_to_end(state)
+        if len(self._allowed_tokens_cache) > _MAX_ALLOWED_TOKENS_CACHE_ENTRIES:
+            self._allowed_tokens_cache.popitem(last=False)
         return allowed
 
     def filter_logits(

@@ -1,9 +1,12 @@
 """Unit and integration tests for paw.schema: grammar conversion, logits masking, and loader."""
 
+import datetime as dt
+from decimal import Decimal
 import enum
 import time
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, FrozenSet, List, Literal, Optional, Set, Tuple, Union
+import uuid
+from pydantic import BaseModel, Field, create_model
 import pytest
 
 from paw_kit import (
@@ -717,3 +720,297 @@ def test_compile_fsm_safe_timeout_does_not_block_on_runaway_thread_PAW_SCHEMA_03
     elapsed = time.monotonic() - start
     assert elapsed < 1.0, "compile_fsm_safe blocked on the runaway thread instead of returning promptly"
 
+
+
+# --- PAW-SCHEMA-04: bounded per-processor caches, avoid full-vocab scan per state ---
+
+
+def test_logits_processor_transition_cache_bounded_PAW_SCHEMA_04(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify _transition_cache evicts oldest entries past its size cap rather than
+    growing without limit over a long generation."""
+    import paw_kit.schema.logits_processor as lp
+
+    monkeypatch.setattr(lp, "_MAX_TRANSITION_CACHE_ENTRIES", 3)
+    vocab = {i: chr(97 + i) for i in range(10)}  # 'a'..'j', single-char tokens
+    processor = RegexLogitsProcessor(regex_pattern=r"[a-j]{5}", vocabulary=vocab)
+
+    state = processor.initial_state
+    for token_id in range(10):
+        processor.get_next_state(state, token_id)
+
+    assert len(processor._transition_cache) <= 3
+
+
+def test_logits_processor_allowed_tokens_cache_bounded_PAW_SCHEMA_04(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify _allowed_tokens_cache evicts oldest entries past its size cap."""
+    import paw_kit.schema.logits_processor as lp
+
+    monkeypatch.setattr(lp, "_MAX_ALLOWED_TOKENS_CACHE_ENTRIES", 2)
+    vocab = {i: chr(97 + i) for i in range(5)}
+    processor = RegexLogitsProcessor(regex_pattern=r"[a-e]{5}", vocabulary=vocab)
+
+    state = processor.initial_state
+    visited_states = {state}
+    for token_id in range(5):
+        next_state = processor.get_next_state(state, token_id)
+        if next_state is not None:
+            visited_states.add(next_state)
+            processor.get_allowed_tokens(next_state)
+
+    assert len(processor._allowed_tokens_cache) <= 2
+
+
+def test_logits_processor_skips_full_vocab_scan_for_restrictive_state_PAW_SCHEMA_04() -> None:
+    """Verify get_allowed_tokens does not call get_next_state for every vocabulary
+    token when only a small fraction of first characters are legal from the current
+    state -- the whole point of the first-character bucketing PAW-SCHEMA-04 adds."""
+    pattern = r'\{"k":\s*true\}'  # a fixed literal: only one character is ever legal
+    # A large vocabulary of single distinct-first-character tokens, only one of which
+    # (the one starting with the pattern's first literal character) can ever be legal.
+    vocab = {i: chr(33 + i) + "xyz" for i in range(200)}
+    vocab[0] = "{" + "xyz"  # ensure the one legal first character is present
+    processor = RegexLogitsProcessor(regex_pattern=pattern, vocabulary=vocab)
+
+    call_count = 0
+    real_get_next_state = processor.get_next_state
+
+    def spy(state: int, token_id: int):
+        nonlocal call_count
+        call_count += 1
+        return real_get_next_state(state, token_id)
+
+    processor.get_next_state = spy  # type: ignore[method-assign]
+    processor.get_allowed_tokens(processor.initial_state)
+
+    # Only tokens whose first character is a legal transition are ever walked --
+    # nowhere near the full 200-entry vocabulary.
+    assert call_count < len(vocab)
+
+
+# --- PAW-SCHEMA-05: Tuple[()] compiles strict; bare typing.Tuple stays permissive --
+
+
+def test_tuple_empty_annotation_compiles_to_strict_empty_array_PAW_SCHEMA_05() -> None:
+    """Verify both Tuple[()] and tuple[()] compile to a strict empty-array regex."""
+    import re as _re
+
+    class TypingEmptyTupleModel(BaseModel):
+        value: Tuple[()]
+
+    class BuiltinEmptyTupleModel(BaseModel):
+        value: tuple[()]
+
+    for model in (TypingEmptyTupleModel, BuiltinEmptyTupleModel):
+        pat = pydantic_to_regex(model, anchors=True)
+        assert _re.match(pat, '{"value": []}') is not None
+        assert _re.match(pat, '{"value": [1]}') is None
+        assert _re.match(pat, '{"value": [1, 2, 3]}') is None
+
+
+def test_tuple_empty_annotation_old_permissive_behavior_no_longer_validates_PAW_SCHEMA_05() -> None:
+    """Verify the old grammar/Pydantic mismatch is actually closed: a value the
+    compiled regex used to accept for Tuple[()] must now be rejected by *both* the
+    regex and Pydantic's own validation, restoring the "compiled grammar admits only
+    validatable output" invariant rather than merely tightening the regex further."""
+    import re as _re
+
+    class EmptyTupleModel(BaseModel):
+        value: Tuple[()]
+
+    pat = pydantic_to_regex(EmptyTupleModel, anchors=True)
+    non_empty_payload = '{"value": [1, 2, 3]}'
+    assert _re.match(pat, non_empty_payload) is None
+    with pytest.raises(Exception):
+        EmptyTupleModel.model_validate({"value": [1, 2, 3]})
+
+
+def test_bare_typing_tuple_stays_permissive_PAW_SCHEMA_05() -> None:
+    """Verify bare, unsubscripted typing.Tuple ("an array of anything") is unaffected
+    by the Tuple[()] fix -- it is indistinguishable from Tuple[()] via
+    get_origin/get_args alone, so this must be an identity check, not incidental."""
+    import re as _re
+
+    class BareTupleModel(BaseModel):
+        value: Tuple
+
+    pat = pydantic_to_regex(BareTupleModel, anchors=True)
+    assert _re.match(pat, '{"value": []}') is not None
+    assert _re.match(pat, '{"value": [1, 2, 3]}') is not None
+
+
+# --- PAW-SCHEMA-06: bounded digit runs in JSON_INTEGER and JSON_FLOAT's integer part
+
+
+def test_json_integer_caps_digit_count_PAW_SCHEMA_06() -> None:
+    """Verify an int field's compiled regex rejects a digit run past the cap."""
+    import re as _re
+    from paw_kit.schema.grammar import _MAX_NUMBER_DIGITS
+
+    class IntModel(BaseModel):
+        value: int
+
+    pat = pydantic_to_regex(IntModel, anchors=True)
+    at_limit = "9" * _MAX_NUMBER_DIGITS
+    over_limit = "9" * (_MAX_NUMBER_DIGITS + 1)
+    assert _re.match(pat, f'{{"value": {at_limit}}}') is not None
+    assert _re.match(pat, f'{{"value": {over_limit}}}') is None
+
+
+def test_json_float_integer_part_caps_digit_count_PAW_SCHEMA_06() -> None:
+    """Verify a float field's regex rejects an over-cap digit run in the integer part
+    -- JSON_FLOAT full-matches a bare, decimal-point-free integer too, so capping only
+    JSON_INTEGER would leave the identical DoS reachable through every float field."""
+    import re as _re
+    from paw_kit.schema.grammar import _MAX_NUMBER_DIGITS
+
+    class FloatModel(BaseModel):
+        value: float
+
+    pat = pydantic_to_regex(FloatModel, anchors=True)
+    over_limit = "9" * (_MAX_NUMBER_DIGITS + 1)
+    assert _re.match(pat, f'{{"value": {over_limit}}}') is None
+    assert _re.match(pat, f'{{"value": {over_limit}.5}}') is None
+    # A legitimate large-but-in-budget float with a fractional part still compiles.
+    at_limit = "9" * _MAX_NUMBER_DIGITS
+    assert _re.match(pat, f'{{"value": {at_limit}.5}}') is not None
+
+
+# --- PAW-SCHEMA-07: content-fingerprint cache keying, not model-identity keying ----
+
+
+def test_pydantic_to_regex_identical_dynamic_models_share_cache_entry_PAW_SCHEMA_07() -> None:
+    """Verify two independently-created, structurally-identical dynamic models (the
+    exact `pydantic.create_model` population this finding is about) hit the cache --
+    the old identity-keyed lru_cache gave this population a guaranteed 0% hit rate."""
+    pydantic_to_regex.cache_clear()
+    model_a = create_model("SameShape", x=(str, ...), y=(int, ...))
+    model_b = create_model("SameShape", x=(str, ...), y=(int, ...))
+
+    regex_a = pydantic_to_regex(model_a)
+    info_after_a = pydantic_to_regex.cache_info()
+    regex_b = pydantic_to_regex(model_b)
+    info_after_b = pydantic_to_regex.cache_info()
+
+    assert regex_a == regex_b
+    assert info_after_b.hits == info_after_a.hits + 1
+    assert info_after_b.misses == info_after_a.misses
+
+
+def test_pydantic_to_regex_reordered_optional_fields_do_not_collide_PAW_SCHEMA_07() -> None:
+    """Verify two same-titled dynamic models whose *optional* fields are declared in a
+    different order do NOT share a cache entry -- _pydantic_to_regex_impl emits
+    fields in model_fields (declaration) order, so a fingerprint that ignored order
+    (e.g. the audit's own json.dumps(..., sort_keys=True) suggestion) would silently
+    serve one model's regex to the other (Phase 0 Round 1/2)."""
+    pydantic_to_regex.cache_clear()
+    model_a = create_model("Reordered", a=(Optional[str], None), b=(Optional[int], None))
+    model_b = create_model("Reordered", b=(Optional[int], None), a=(Optional[str], None))
+
+    regex_a = pydantic_to_regex(model_a)
+    regex_b = pydantic_to_regex(model_b)
+
+    assert regex_a != regex_b
+
+
+def test_pydantic_to_regex_same_named_differently_shaped_nested_models_do_not_collide_PAW_SCHEMA_07() -> None:
+    """Verify two outer models over same-named, differently-shaped dynamic inner
+    models do NOT share a cache entry -- str(annotation) (a rejected alternative
+    fingerprint) collides here, since two dynamically created classes both named
+    "Inner" stringify identically regardless of their actual field shape."""
+    inner_a = create_model("Inner", a=(str, ...))
+    inner_b = create_model("Inner", b=(int, ...))
+    outer_a = create_model("Outer", nested=(inner_a, ...))
+    outer_b = create_model("Outer", nested=(inner_b, ...))
+
+    regex_a = pydantic_to_regex(outer_a)
+    regex_b = pydantic_to_regex(outer_b)
+
+    assert regex_a != regex_b
+
+
+def test_pydantic_to_regex_fingerprint_raises_paw_schema_error_not_recursion_error_PAW_SCHEMA_07() -> None:
+    """Verify the fingerprint builder itself raises PAWSchemaError (not
+    RecursionError) on a recursive model -- it runs *before* _pydantic_to_regex_impl,
+    so it is the first code to see one (Phase 0 Round 3, N-16)."""
+    from paw_kit.schema.grammar import _fingerprint_model_fields
+
+    with pytest.raises(PAWSchemaError, match="Recursive model detected"):
+        _fingerprint_model_fields(RecursiveNode, seen=frozenset(), depth=0)
+
+
+class _KitchenSinkInner(BaseModel):
+    label: str
+    score: float
+
+
+def _kitchen_sink_field_defs() -> Dict[str, Any]:
+    """Field definitions exercising every _type_to_regex branch, for the
+    PAW-SCHEMA-07 property test below: Union/Optional, Literal, Enum, List, fixed and
+    variadic Tuple, Set/FrozenSet, nested BaseModel, Dict, bare list/tuple/set/dict,
+    each specialized and primitive type, Field(pattern=...), and Any."""
+    return dict(
+        union_field=(Union[str, int], ...),
+        optional_field=(Optional[str], None),
+        literal_field=(Literal["a", "b", 1, True, None], ...),
+        enum_field=(PriorityEnum, ...),
+        list_field=(List[int], ...),
+        tuple_fixed_field=(Tuple[str, int, bool], ...),
+        tuple_variadic_field=(Tuple[int, ...], ...),
+        tuple_empty_field=(Tuple[()], ...),
+        set_field=(Set[str], ...),
+        frozenset_field=(FrozenSet[int], ...),
+        nested_model_field=(_KitchenSinkInner, ...),
+        dict_field=(Dict[str, int], ...),
+        bare_list_field=(list, ...),
+        bare_tuple_field=(tuple, ...),
+        bare_set_field=(set, ...),
+        bare_dict_field=(dict, ...),
+        uuid_field=(uuid.UUID, ...),
+        datetime_field=(dt.datetime, ...),
+        date_field=(dt.date, ...),
+        decimal_field=(Decimal, ...),
+        str_field=(str, ...),
+        int_field=(int, ...),
+        float_field=(float, ...),
+        bool_field=(bool, ...),
+        any_field=(Any, ...),
+        pattern_field=(str, Field(pattern=r"^[a-z]+$")),
+    )
+
+
+def test_pydantic_to_regex_fingerprint_property_equal_key_implies_equal_regex_PAW_SCHEMA_07() -> None:
+    """Property test (Phase 0 Round 3): for a corpus covering every _type_to_regex
+    branch, key(a) == key(b) must imply pydantic_to_regex(a) == pydantic_to_regex(b).
+    The converse is deliberately not asserted -- a finer key only costs a hit."""
+    from paw_kit.schema.grammar import _fingerprint_model_fields
+
+    model_a = create_model("KitchenSinkA", **_kitchen_sink_field_defs())
+    model_b = create_model("KitchenSinkB", **_kitchen_sink_field_defs())
+
+    key_a = _fingerprint_model_fields(model_a, seen=frozenset(), depth=0)
+    key_b = _fingerprint_model_fields(model_b, seen=frozenset(), depth=0)
+    assert key_a == key_b
+
+    assert pydantic_to_regex(model_a) == pydantic_to_regex(model_b)
+
+    # And the regex must actually compile and be usable (exercises every branch for
+    # real, not just at the fingerprint level).
+    import re as _re
+
+    pat = pydantic_to_regex(model_a, anchors=True)
+    payload = (
+        '{"union_field": 1, "optional_field": null, "literal_field": "a", '
+        '"enum_field": "low", "list_field": [1, 2], '
+        '"tuple_fixed_field": ["x", 1, true], "tuple_variadic_field": [1, 2, 3], '
+        '"tuple_empty_field": [], "set_field": ["a"], "frozenset_field": [1], '
+        '"nested_model_field": {"label": "x", "score": 1.0}, '
+        '"dict_field": {"a": 1}, "bare_list_field": [1, "x"], '
+        '"bare_tuple_field": [1, "x"], "bare_set_field": [1, "x"], '
+        '"bare_dict_field": {"a": 1}, '
+        '"uuid_field": "12345678-1234-1234-1234-123456789abc", '
+        '"datetime_field": "2026-01-01T00:00:00", "date_field": "2026-01-01", '
+        '"decimal_field": "1.5", "str_field": "x", "int_field": 1, '
+        '"float_field": 1.5, "bool_field": true, "any_field": "x", '
+        '"pattern_field": "abc"}'
+    )
+    assert _re.match(pat, payload) is not None

@@ -1,10 +1,11 @@
 """Pydantic schema to regular expression compiler for constrained JSON decoding."""
 
+from collections import namedtuple, OrderedDict
 import datetime as dt
 import enum
-from functools import lru_cache
 import json
 import re
+import threading
 import types
 from typing import (
     Any,
@@ -28,10 +29,22 @@ from pydantic.fields import FieldInfo
 from paw_kit.schema.exceptions import PAWSchemaError
 
 # Atomic regex fragments for JSON primitives
+
+# PAW-SCHEMA-06: caps the digit run of a JSON number's integer part (in both
+# JSON_INTEGER and JSON_FLOAT -- a bare integer with no decimal point or exponent
+# full-matches JSON_FLOAT too). Python's int<->str conversion refuses more than
+# `sys.get_int_max_str_digits()` digits (4300 by default) and raises ValueError, so an
+# uncapped `[0-9]*` run lets a decoder emit a single absurdly-long digit string that
+# crashes `int()`/`json.loads` on the consuming side -- reachable through every `int`
+# field and, since JSON_FLOAT's integer part is just as unbounded, every `float` field
+# and every `Any`-typed field too. 100 digits is far beyond any realistic integer
+# while staying nowhere near the 4300-digit failure point.
+_MAX_NUMBER_DIGITS = 100
+
 JSON_WHITESPACE = r"[ \t\n\r]*"
 JSON_STRING = r'"([^"\\\x00-\x1f\x7f-\x9f]|\\.)*"'
-JSON_INTEGER = r"(-?(0|[1-9][0-9]*))"
-JSON_FLOAT = r"(-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?)"
+JSON_INTEGER = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}}))"
+JSON_FLOAT = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(\.[0-9]+)?([eE][+-]?[0-9]+)?)"
 JSON_BOOLEAN = r"(true|false)"
 JSON_NULL = r"null"
 
@@ -134,6 +147,22 @@ def _sanitize_field_pattern(pattern: str) -> str:
             "output. Remove the quote from the pattern."
         )
     return clean
+
+
+def _check_model_recursion(annotation: Type[BaseModel], seen: frozenset, depth: int) -> None:
+    """Shared cycle/depth guard for nested BaseModel resolution.
+
+    Used by both the regex compiler (`_type_to_regex`) and the cache-key fingerprint
+    builder (`_fingerprint_annotation`, PAW-SCHEMA-07) so the two can never drift
+    apart on this specific check (Phase 0 Round 3, N-16 flagged exactly this class of
+    drift risk for the parallel dispatch the fingerprint builder necessarily is).
+    """
+    if annotation in seen or depth > _MAX_RECURSION_DEPTH:
+        raise PAWSchemaError(
+            f"Recursive model detected: {annotation.__name__} at depth {depth}. "
+            f"Grammar-constrained decoding cannot express infinite recursion. "
+            f"Consider flattening the schema or limiting nesting depth."
+        )
 
 
 def _check_collection_depth(collection_depth: int) -> None:
@@ -247,10 +276,25 @@ def _type_to_regex(
             ]
             inner = f"{JSON_WHITESPACE},{JSON_WHITESPACE}".join(elem_regexes)
             return rf"\[{JSON_WHITESPACE}{inner}{JSON_WHITESPACE}\]"
-        else:
-            # Bare tuple[()] -> empty array
+        elif annotation is Tuple:
+            # PAW-SCHEMA-05: bare, unsubscripted `typing.Tuple` legitimately means
+            # "an array of anything" -- `Tuple[()]`, `tuple[()]` and bare `typing.Tuple`
+            # are otherwise indistinguishable via get_origin/get_args (all three give
+            # origin=tuple, args=()), so this identity check is the only way to keep
+            # this case permissive while making the two empty-tuple spellings below
+            # strict.
             any_regex = _type_to_regex(Any, seen=seen, depth=depth, collection_depth=collection_depth + 1)
             return _json_collection_regex(r"\[", r"\]", any_regex)
+        else:
+            # PAW-SCHEMA-05: `Tuple[()]` / `tuple[()]` mean "must be an empty array" --
+            # the previous code routed both through the same permissive any_regex
+            # collection regex as the bare-Tuple case above, so the compiled grammar
+            # accepted arbitrary non-empty arrays for an annotation whose only valid
+            # value is `[]` (verified: the old regex matched `{"x": [1,2,3]}` while
+            # `M.model_validate({"x": [1]})` raises ValidationError -- a direct breach
+            # of the "syntax compliance guaranteed mathematically" invariant, not
+            # merely an over-permissive constraint).
+            return rf"\[{JSON_WHITESPACE}\]"
 
     # 6. Handle Set / set[T] / FrozenSet / frozenset[T]
     if origin in (set, Set, frozenset, FrozenSet):
@@ -261,12 +305,7 @@ def _type_to_regex(
 
     # 7. Handle Nested Pydantic BaseModel (with cycle detection)
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        if annotation in seen or depth > _MAX_RECURSION_DEPTH:
-            raise PAWSchemaError(
-                f"Recursive model detected: {annotation.__name__} at depth {depth}. "
-                f"Grammar-constrained decoding cannot express infinite recursion. "
-                f"Consider flattening the schema or limiting nesting depth."
-            )
+        _check_model_recursion(annotation, seen, depth)
         # collection_depth is deliberately not threaded through here: the nested
         # model's own fields (via _pydantic_to_regex_impl -> _type_to_regex) start a
         # fresh collection-nesting context, tracked only against depth+1 above.
@@ -327,6 +366,168 @@ def _type_to_regex(
     return JSON_STRING
 
 
+def _fingerprint_annotation(
+    annotation: Any,
+    *,
+    seen: Optional[frozenset] = None,
+    depth: int = 0,
+    collection_depth: int = 0,
+) -> Any:
+    """Recursively compute a hashable cache-key fragment for `annotation` (PAW-SCHEMA-07).
+
+    This is a *parallel* dispatch to `_type_to_regex` -- it returns a hashable key
+    rather than a regex string, so it cannot simply call or reuse that function's
+    branches directly (Phase 0 Round 3, N-16). Its branches are numbered to match
+    `_type_to_regex`'s 1:1, to make the two easy to keep in sync by inspection, and it
+    shares that function's `_check_model_recursion`/`_check_collection_depth` guards
+    outright rather than re-implementing them, so those two specific checks cannot
+    drift even though the surrounding dispatch necessarily is duplicated.
+
+    It must raise the exact same `PAWSchemaError` `_type_to_regex` would for a
+    recursive or over-deep model, since `pydantic_to_regex` calls this *before*
+    attempting to compile a regex at all -- this is the first code to see such a model.
+
+    The correctness property this function exists to provide (verified by
+    construction against `_pydantic_to_regex_impl`'s actual input set, Phase 0 Round
+    4): for any two annotations `a`, `b`, `_fingerprint_annotation(a) ==
+    _fingerprint_annotation(b)` implies `_type_to_regex(a) == _type_to_regex(b)`. The
+    converse need not hold -- a fingerprint finer than the regex it keys only costs a
+    cache hit, never correctness.
+    """
+    if seen is None:
+        seen = frozenset()
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    # 1. Union / Optional
+    if origin in (Union, types.UnionType):
+        return (
+            "union",
+            tuple(
+                _fingerprint_annotation(a, seen=seen, depth=depth, collection_depth=collection_depth)
+                for a in args
+            ),
+        )
+
+    # 2. Literal -- args are already hashable primitive values (str/int/float/bool/None).
+    if origin is Literal:
+        return ("literal", args)
+
+    # 3. Enum -- member *values* only, matching _type_to_regex's branch (which reads
+    # only item.value, never the class itself), so two differently-named Enum classes
+    # with the same ordered member values correctly share a fingerprint: they are
+    # guaranteed to compile to the same regex.
+    if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
+        return ("enum", tuple(item.value for item in annotation))
+
+    # 4. List / list[T]
+    if origin in (list, List):
+        _check_collection_depth(collection_depth)
+        item_type = args[0] if args else Any
+        return (
+            "list",
+            _fingerprint_annotation(item_type, seen=seen, depth=depth, collection_depth=collection_depth + 1),
+        )
+
+    # 5. Tuple / tuple[A, B] / tuple[T, ...] / Tuple[()] / bare typing.Tuple
+    if origin in (tuple, Tuple):
+        _check_collection_depth(collection_depth)
+        if len(args) == 2 and args[1] is Ellipsis:
+            return (
+                "tuple_variadic",
+                _fingerprint_annotation(args[0], seen=seen, depth=depth, collection_depth=collection_depth + 1),
+            )
+        elif args:
+            return (
+                "tuple_fixed",
+                tuple(
+                    _fingerprint_annotation(a, seen=seen, depth=depth, collection_depth=collection_depth + 1)
+                    for a in args
+                ),
+            )
+        elif annotation is Tuple:
+            # PAW-SCHEMA-05: mirrors _type_to_regex's identity check distinguishing
+            # bare typing.Tuple (permissive) from Tuple[()]/tuple[()] (strict empty).
+            return ("tuple_bare_any",)
+        else:
+            return ("tuple_empty",)
+
+    # 6. Set / FrozenSet
+    if origin in (set, Set, frozenset, FrozenSet):
+        _check_collection_depth(collection_depth)
+        item_type = args[0] if args else Any
+        return (
+            "set",
+            _fingerprint_annotation(item_type, seen=seen, depth=depth, collection_depth=collection_depth + 1),
+        )
+
+    # 7. Nested Pydantic BaseModel
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        _check_model_recursion(annotation, seen, depth)
+        return ("model", _fingerprint_model_fields(annotation, seen=seen | {annotation}, depth=depth + 1))
+
+    # 8. Dict / dict[K, V]
+    if origin is dict or annotation is dict:
+        _check_collection_depth(collection_depth)
+        value_type = args[1] if len(args) > 1 else Any
+        return (
+            "dict",
+            _fingerprint_annotation(value_type, seen=seen, depth=depth, collection_depth=collection_depth + 1),
+        )
+
+    # 9. Bare collection identity checks. Deliberately opaque, distinct tags rather
+    # than delegating to branch 4/5/6's fingerprint of Any (e.g. `("list",
+    # fingerprint(Any))`) -- bare `list` and `List[Any]` do compile to identical
+    # regex, so sharing a fingerprint would be *more* correct, not less, but it is
+    # not required for correctness (the invariant is one-directional) and a distinct
+    # tag is simpler to keep visibly in sync with _type_to_regex's own branch 9.
+    if annotation is list:
+        _check_collection_depth(collection_depth)
+        return ("bare_list",)
+    if annotation is tuple:
+        _check_collection_depth(collection_depth)
+        return ("bare_tuple",)
+    if annotation is set or annotation is frozenset:
+        _check_collection_depth(collection_depth)
+        return ("bare_set",)
+
+    # 10 & 11 (+ fallback). Specialized types, primitive types, and the JSON_STRING
+    # fallback are all leaves whose regex output depends on nothing but which branch
+    # they are (never on any further recursion), so the annotation object itself --
+    # stable and hashable for every type reaching this point -- is a safe, precise key.
+    return ("leaf", annotation)
+
+
+def _fingerprint_model_fields(
+    model: Type[BaseModel], *, seen: frozenset, depth: int
+) -> Tuple[Tuple[str, Any, Optional[str]], ...]:
+    """Ordered per-field cache-key tuple over `model.model_fields` (PAW-SCHEMA-07).
+
+    Captures exactly what `_pydantic_to_regex_impl` reads to build its regex for each
+    field -- name (in declaration order, since `model_fields` is itself
+    order-preserving and `_pydantic_to_regex_impl` iterates it directly), a recursive
+    annotation fingerprint, and any raw `Field(pattern=...)` constraint (verified at
+    Phase 0 Round 4 to be `_pydantic_to_regex_impl`'s *entire* input set: field name,
+    `_extract_pattern_from_field(field_info)`, and `field_info.annotation` -- never
+    `is_required()` or a field's default).
+
+    Built from *extracted values*, never from `FieldInfo` objects directly:
+    `FieldInfo` inherits `object`'s identity `__hash__`/`__eq__`, so hashing
+    `tuple(model.model_fields.items())` verbatim would still give two structurally
+    identical dynamically-created models different keys -- reproducing the exact
+    0%-cache-hit-rate bug this finding exists to fix (Phase 0 Round 2, N-12).
+    """
+    return tuple(
+        (
+            field_name,
+            _fingerprint_annotation(field_info.annotation, seen=seen, depth=depth),
+            _extract_pattern_from_field(field_info),
+        )
+        for field_name, field_info in model.model_fields.items()
+    )
+
+
 def _pydantic_to_regex_impl(
     model: Type[BaseModel],
     *,
@@ -368,12 +569,40 @@ def _pydantic_to_regex_impl(
     return f"^{pattern}$" if anchors else pattern
 
 
-@lru_cache(maxsize=128)
+_REGEX_CACHE_MAXSIZE = 128
+_RegexCacheInfo = namedtuple("CacheInfo", ["hits", "misses", "maxsize", "currsize"])
+
+# PAW-SCHEMA-07: keyed on a content fingerprint (see _fingerprint_model_fields), not
+# on `model` itself. The previous `@lru_cache(maxsize=128)` on this function keyed on
+# the class object's identity, so every dynamically-created model (e.g. one built via
+# `pydantic.create_model` per-request) was a guaranteed cache miss no matter how many
+# structurally identical models had already been compiled and cached -- a 0% hit rate
+# for exactly the population this cache exists to help, plus unbounded retention of
+# every distinct class object ever passed in (each one worth a full cache slot for its
+# own lifetime, since maxsize=128 evicts by recency, not by how many *equivalent*
+# entries already exist).
+#
+# A manual OrderedDict-based LRU replaces functools.lru_cache here because lru_cache
+# has no way to key on anything other than its own call arguments -- the fingerprint
+# has to be computed from `model` first, then used as the lookup key instead of
+# `model` itself. Locking mirrors (not exactly reproduces) functools.lru_cache's own
+# concurrency behavior: the lock is held only across the dict lookup/insert, not
+# across regex compilation, so two threads racing on an identical uncached model may
+# both compute once and each return their own (content-equal, possibly
+# non-identical-object) result -- the same trade-off CPython's own lru_cache makes.
+_regex_cache: "OrderedDict[Any, str]" = OrderedDict()
+_regex_cache_lock = threading.Lock()
+_regex_cache_hits = 0
+_regex_cache_misses = 0
+
+
 def pydantic_to_regex(model: Type[BaseModel], anchors: bool = False) -> str:
     """Compile a Pydantic BaseModel class into a strict regex matching compliant JSON.
 
-    Results are cached (LRU, maxsize=128) to avoid redundant regex compilation
-    and downstream FSM construction costs.
+    Results are cached (LRU, maxsize=128) by content fingerprint -- not by the model
+    class object's identity -- to avoid redundant regex compilation and downstream FSM
+    construction costs, including for structurally-identical models created
+    dynamically via `pydantic.create_model` (PAW-SCHEMA-07).
 
     Args:
         model: A Pydantic BaseModel subclass.
@@ -385,6 +614,46 @@ def pydantic_to_regex(model: Type[BaseModel], anchors: bool = False) -> str:
 
     Raises:
         PAWSchemaError: If the model contains recursive references that cannot be
-                        expressed as a finite regex.
+                        expressed as a finite regex, or exceeds the maximum
+                        BaseModel/collection nesting depth.
     """
-    return _pydantic_to_regex_impl(model, anchors=anchors, _seen=frozenset(), _depth=0)
+    global _regex_cache_hits, _regex_cache_misses
+
+    cache_key = (anchors, _fingerprint_model_fields(model, seen=frozenset(), depth=0))
+
+    with _regex_cache_lock:
+        cached = _regex_cache.get(cache_key)
+        if cached is not None:
+            _regex_cache_hits += 1
+            _regex_cache.move_to_end(cache_key)
+            return cached
+        _regex_cache_misses += 1
+
+    result = _pydantic_to_regex_impl(model, anchors=anchors, _seen=frozenset(), _depth=0)
+
+    with _regex_cache_lock:
+        # Don't clobber an entry another thread already inserted for this exact key
+        # while the lock was released above (see the module-level comment).
+        if cache_key not in _regex_cache:
+            _regex_cache[cache_key] = result
+            while len(_regex_cache) > _REGEX_CACHE_MAXSIZE:
+                _regex_cache.popitem(last=False)
+        _regex_cache.move_to_end(cache_key)
+    return result
+
+
+def _pydantic_to_regex_cache_info() -> _RegexCacheInfo:
+    with _regex_cache_lock:
+        return _RegexCacheInfo(_regex_cache_hits, _regex_cache_misses, _REGEX_CACHE_MAXSIZE, len(_regex_cache))
+
+
+def _pydantic_to_regex_cache_clear() -> None:
+    global _regex_cache_hits, _regex_cache_misses
+    with _regex_cache_lock:
+        _regex_cache.clear()
+        _regex_cache_hits = 0
+        _regex_cache_misses = 0
+
+
+pydantic_to_regex.cache_info = _pydantic_to_regex_cache_info
+pydantic_to_regex.cache_clear = _pydantic_to_regex_cache_clear
