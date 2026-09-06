@@ -40,5 +40,12 @@ paw-clean = "paw_kit.cli:clean_cli"
 paw-serve = "paw_kit.cli:serve_cli"
 
 [build-system]
-requires = ["hatchling"]
+# PAW-DEPS-02: previously completely unpinned. A PEP 517/518 build frontend creates an
+# isolated build environment and fetches the latest hatchling release from PyPI on
+# every build; hatchling isn't recorded in uv.lock either, so nothing else bounds
+# which version actually runs. A verified, narrow range closes the "malicious/
+# compromised release under the hatchling name executes arbitrary build hooks with
+# the build runner's full privileges" vector without pinning to a single exact
+# version (which would block routine patch upgrades).
+requires = ["hatchling>=1.25.0,<2.0.0"]
 build-backend = "hatchling.build"
