@@ -22,6 +22,14 @@ class TraceDB:
             )
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # PAW-JIT-01: traces.db holds raw, unredacted prompt/response text by default
+        # (see decorator.py's `redact_trace`, PAW-JIT-02, for why redaction is not the
+        # primary mitigation here) -- restrict the cache directory to owner-only access
+        # rather than leaving it at the process umask's default (often world-readable).
+        # mkdir(..., exist_ok=True) doesn't retroactively tighten an already-existing
+        # directory's mode, and mkdir's own `mode` argument is subject to umask, so
+        # chmod explicitly.
+        self._chmod_best_effort(self.db_path.parent, 0o700)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(
             str(self.db_path),
@@ -29,7 +37,27 @@ class TraceDB:
             timeout=30.0,
         )
         self._conn.row_factory = sqlite3.Row
+        # Narrow the window the file spends at the (looser) default permissions
+        # sqlite3.connect() just created it with, before any trace data is written.
+        self._chmod_best_effort(self.db_path, 0o600)
         self._init_db()
+        # WAL mode (enabled in _init_db) creates -wal/-shm sidecar files that also
+        # contain trace data; they don't necessarily inherit the main file's mode.
+        self._chmod_best_effort(self.db_path.with_name(self.db_path.name + "-wal"), 0o600)
+        self._chmod_best_effort(self.db_path.with_name(self.db_path.name + "-shm"), 0o600)
+
+    @staticmethod
+    def _chmod_best_effort(path: Path, mode: int) -> None:
+        """Restrict `path`'s permissions, tolerating platforms/paths that don't support it.
+
+        Best-effort: a missing sidecar file (e.g. -wal/-shm not yet created) or a
+        filesystem without POSIX permission bits (e.g. Windows, some network mounts)
+        must not prevent the database from opening.
+        """
+        try:
+            path.chmod(mode)
+        except OSError:
+            pass
 
     def _init_db(self) -> None:
         """Create tables and enable WAL mode for high concurrency."""
@@ -42,11 +70,18 @@ class TraceDB:
                     call_count INTEGER DEFAULT 0,
                     adapter_path TEXT,
                     status TEXT DEFAULT 'tracing',
+                    compile_attempts INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
                 """
             )
+            # PAW-JIT-03: migrate a pre-existing tasks table created before
+            # compile_attempts existed (CREATE TABLE IF NOT EXISTS above is a no-op
+            # against an already-existing table, it doesn't add new columns).
+            existing_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(tasks);")}
+            if "compile_attempts" not in existing_cols:
+                self._conn.execute("ALTER TABLE tasks ADD COLUMN compile_attempts INTEGER DEFAULT 0;")
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS traces (
@@ -151,6 +186,35 @@ class TraceDB:
                     """,
                     (status, now, task_id),
                 )
+
+    def get_compile_attempts(self, task_id: str) -> int:
+        """Retrieve the number of compilation attempts made so far for task_id (PAW-JIT-03)."""
+        with self._lock:
+            return self._get_compile_attempts_locked(task_id)
+
+    def _get_compile_attempts_locked(self, task_id: str) -> int:
+        """Read compile_attempts for task_id. Caller must already hold self._lock."""
+        cur = self._conn.execute(
+            "SELECT compile_attempts FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
+        return row["compile_attempts"] if row else 0
+
+    def increment_compile_attempts(self, task_id: str) -> int:
+        """Atomically increment and return the compilation attempt counter for task_id.
+
+        PAW-JIT-03: this is what lets BackgroundCompiler cap retries at a fixed number
+        instead of either deadlocking in "failed" forever (the pre-fix bug) or retrying
+        unconditionally on every subsequent call once the task's (never-decreasing)
+        call_count has crossed the compilation threshold (the audit's own suggested
+        fix, which turns into an unbounded retry loop).
+        """
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE tasks SET compile_attempts = compile_attempts + 1 WHERE task_id = ?;",
+                (task_id,),
+            )
+            return self._get_compile_attempts_locked(task_id)
 
     def get_adapter_path(self, task_id: str) -> Optional[str]:
         """Retrieve path to compiled adapter if task is ready."""

@@ -4,6 +4,7 @@ from functools import wraps
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Callable, Optional, Type, TypeVar, Union
 from pydantic import BaseModel
@@ -31,6 +32,30 @@ def _serialize_input(args: tuple, kwargs: dict) -> str:
         return str(args) + str(kwargs)
 
 
+# PAW-JIT-02: regex-based best-effort scrubbing of obviously-sensitive substrings
+# (bearer tokens, password/secret/api_key/token key-value pairs) before a trace is
+# persisted to traces.db. This is *not* the primary mitigation for "raw prompt text
+# sits in a world-readable SQLite file" -- that's PAW-JIT-01's restrictive file
+# permissions. It exists as an explicit, opt-in trade: `traces.db` rows are the
+# training corpus for compilation (see compiler.py -- input_payload/teacher_output are
+# read straight out of it and passed to backend.compile() as `examples`), not an audit
+# log, so redacting them necessarily degrades what the compiled adapter can learn.
+# Defaulting this off keeps that quality intact for deployments that don't need it;
+# `redact_trace=True` opts in for deployments that would rather trade quality for it.
+_REDACTION_RULES = [
+    (re.compile(r"(?i)(bearer\s+)[a-zA-Z0-9_\-.]{10,}"), r"\1[REDACTED]"),
+    (re.compile(r'(?i)(password|secret|api_key|token)(["\']?\s*[:=]\s*["\']?)[^"\',;\s]+'), r"\1\2[REDACTED]"),
+]
+
+
+def redact_sensitive_text(text: str) -> str:
+    """Best-effort scrub of bearer tokens and password/secret/api_key/token values."""
+    redacted = text
+    for pattern, replacement in _REDACTION_RULES:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
 def compile_on_hit(
     spec: str,
     threshold: int = 50,
@@ -38,6 +63,7 @@ def compile_on_hit(
     cache_dir: str = "./.paw",
     backend: Optional[AbstractPAWBackend] = None,
     sync_compile: bool = False,
+    redact_trace: bool = False,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator converting production LLM API calls into local neural functions.
 
@@ -53,6 +79,16 @@ def compile_on_hit(
         cache_dir: Storage directory for SQLite traces and compiled .paw weights.
         backend: PAW backend implementation. Uses default mock backend if None.
         sync_compile: If True, executes compilation synchronously (useful for testing).
+        redact_trace: PAW-JIT-02. If True, best-effort scrub bearer tokens and
+            password/secret/api_key/token values out of a call's input/output before
+            persisting it to traces.db. Defaults to False: input_payload/teacher_output
+            are compiler.py's training corpus for the compiled adapter (read straight
+            out of traces.db and passed to backend.compile() as `examples`), not an
+            audit log, so redacting them by default would silently degrade every
+            task's compiled output the moment it crosses the compile threshold.
+            PAW-JIT-01's restrictive file permissions on traces.db are the primary
+            mitigation for unredacted trace data at rest; this is an explicit,
+            quality-for-confidentiality trade-off for deployments that want it.
 
     Returns:
         Decorated callable function with JIT execution and fail-open routing.
@@ -103,10 +139,16 @@ def compile_on_hit(
                 teacher_output_str = str(teacher_result)
 
             # 3. Record trace and increment counter
+            # PAW-JIT-02: redaction (opt-in, see redact_trace docstring above) is
+            # applied only to what gets persisted -- input_payload/teacher_result
+            # above are untouched, so the function's actual return value to the
+            # caller is never redacted.
+            traced_input = redact_sensitive_text(input_payload) if redact_trace else input_payload
+            traced_output = redact_sensitive_text(teacher_output_str) if redact_trace else teacher_output_str
             call_count = db.record_trace(
                 task_id=task_id,
-                input_payload=input_payload,
-                teacher_output=teacher_output_str,
+                input_payload=traced_input,
+                teacher_output=traced_output,
                 latency_ms=latency_ms,
             )
 

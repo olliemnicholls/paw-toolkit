@@ -1,7 +1,9 @@
 """Unit and integration tests for paw.jit: SQLite tracing, @compile_on_hit, and hot-swapping."""
 
 from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
+import stat
 import time
 from typing import List
 from pydantic import BaseModel
@@ -13,6 +15,7 @@ from paw_kit import (
     compile_on_hit,
 )
 from paw_kit.jit.compiler import BackgroundCompiler
+from paw_kit.jit.decorator import redact_sensitive_text
 
 
 class SentimentOutput(BaseModel):
@@ -225,4 +228,112 @@ def test_background_compiler_duplicate_prevention(tmp_path: Path) -> None:
 
     t1.join(timeout=2.0)
     assert db.get_status(task_id) == "ready"
+    db.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits don't apply on Windows")
+def test_trace_db_restricts_directory_and_file_permissions_PAW_JIT_01(tmp_path: Path) -> None:
+    """Verify the .paw cache directory and traces.db are created owner-only (0700/0600)."""
+    cache_dir = tmp_path / "paw_perms_cache"
+    db_file = cache_dir / "traces.db"
+    db = TraceDB(db_path=str(db_file))
+
+    dir_mode = stat.S_IMODE(os.stat(cache_dir).st_mode)
+    file_mode = stat.S_IMODE(os.stat(db_file).st_mode)
+    assert dir_mode == 0o700, f"expected cache dir mode 0700, got {oct(dir_mode)}"
+    assert file_mode == 0o600, f"expected traces.db mode 0600, got {oct(file_mode)}"
+    db.close()
+
+
+def test_redact_sensitive_text_scrubs_bearer_tokens_and_secrets_PAW_JIT_02() -> None:
+    """Verify the redaction helper scrubs bearer tokens and password/secret/api_key/token values."""
+    text = 'Authorization: Bearer sk-abcdefghijklmnop, password="hunter2", api_key=sk-live-99999'
+    redacted = redact_sensitive_text(text)
+    assert "sk-abcdefghijklmnop" not in redacted
+    assert "hunter2" not in redacted
+    assert "sk-live-99999" not in redacted
+    assert "[REDACTED]" in redacted
+    # Non-sensitive text is left alone.
+    assert redact_sensitive_text("just a normal sentence") == "just a normal sentence"
+
+
+def test_compile_on_hit_redact_trace_defaults_false_preserves_raw_trace_PAW_JIT_02(tmp_path: Path) -> None:
+    """Verify redact_trace defaults to False: traces.db keeps the raw, unredacted text."""
+    cache_dir = str(tmp_path / "paw_cache_no_redact")
+    backend = MockPAWBackend()
+
+    @compile_on_hit(
+        spec="Echo the secret",
+        threshold=1,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+    )
+    def handle(text: str) -> str:
+        return f"teacher:{text}"
+
+    handle("Authorization: Bearer sk-abcdefghijklmnop")
+    traces = handle.db.get_traces(handle.task_id)  # type: ignore[attr-defined]
+    assert any("sk-abcdefghijklmnop" in t["input_payload"] for t in traces)
+
+
+def test_compile_on_hit_redact_trace_true_scrubs_persisted_trace_only_PAW_JIT_02(tmp_path: Path) -> None:
+    """Verify redact_trace=True scrubs what's persisted, without altering the actual return value."""
+    cache_dir = str(tmp_path / "paw_cache_redact")
+    backend = MockPAWBackend()
+
+    @compile_on_hit(
+        spec="Echo the secret",
+        threshold=1,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        redact_trace=True,
+    )
+    def handle(text: str) -> str:
+        return f"teacher:{text}"
+
+    result = handle("Authorization: Bearer sk-abcdefghijklmnop")
+    # The actual function return value is untouched by redaction.
+    assert "sk-abcdefghijklmnop" in result
+
+    traces = handle.db.get_traces(handle.task_id)  # type: ignore[attr-defined]
+    assert not any("sk-abcdefghijklmnop" in t["input_payload"] for t in traces)
+    assert any("[REDACTED]" in t["input_payload"] for t in traces)
+
+
+def test_background_compiler_bounded_retry_then_terminal_failed_PAW_JIT_03(tmp_path: Path) -> None:
+    """Verify a persistently-failing compile retries a bounded number of times, then goes terminal.
+
+    Regression for the audit's own suggested fix (unconditionally reset status to
+    "tracing" on failure), which -- since call_count never decreases -- turns into an
+    unbounded retry loop instead of a bounded one.
+    """
+    db_file = str(tmp_path / "retry_db.db")
+    db = TraceDB(db_path=db_file)
+    task_id = "always_fails"
+    db.record_trace(task_id, "inp", "out", 1.0)
+
+    class AlwaysFailingBackend(MockPAWBackend):
+        def compile(self, *args: object, **kwargs: object) -> str:
+            raise RuntimeError("simulated compilation failure")
+
+    compiler = BackgroundCompiler()
+    backend = AlwaysFailingBackend()
+    out_path = str(tmp_path / "out.paw")
+
+    for attempt in range(1, BackgroundCompiler._MAX_COMPILE_ATTEMPTS + 1):
+        compiler.trigger_compilation(task_id, "spec", db, backend, out_path, sync=True)
+        assert db.get_compile_attempts(task_id) == attempt
+        if attempt < BackgroundCompiler._MAX_COMPILE_ATTEMPTS:
+            assert db.get_status(task_id) == "tracing", "must remain retryable before the cap"
+        else:
+            assert db.get_status(task_id) == "failed", "must go terminal once the cap is reached"
+
+    # Past exhaustion, even a fresh async trigger must be refused -- not retried forever.
+    attempts_before = db.get_compile_attempts(task_id)
+    t = compiler.trigger_compilation(task_id, "spec", db, backend, out_path, sync=False)
+    assert t is None
+    assert db.get_compile_attempts(task_id) == attempts_before
+    assert db.get_status(task_id) == "failed"
     db.close()

@@ -11,6 +11,13 @@ from paw_kit.jit.db import TraceDB
 class BackgroundCompiler:
     """Dispatches and tracks asynchronous compilation jobs for @compile_on_hit."""
 
+    # PAW-JIT-03: cap on retryable compilation attempts. Without this, a failure
+    # either deadlocks the task in "failed" forever (never retried), or -- if failure
+    # naively reset status back to "tracing" -- retries unconditionally on every
+    # subsequent call once call_count (which never decreases) has crossed the
+    # compilation threshold, i.e. an unbounded retry loop.
+    _MAX_COMPILE_ATTEMPTS = 3
+
     def __init__(self) -> None:
         self._active_threads: Dict[str, threading.Thread] = {}
         self._lock = threading.RLock()
@@ -45,7 +52,7 @@ class BackgroundCompiler:
         """
         with self._lock:
             status = db.get_status(task_id)
-            if status in ("compiling", "ready") and not sync:
+            if status in ("compiling", "ready", "failed") and not sync:
                 return None
             db.set_status(task_id, "compiling")
 
@@ -63,7 +70,13 @@ class BackgroundCompiler:
                 )
                 db.set_status(task_id, "ready", adapter_path=compiled_path)
             except Exception:
-                db.set_status(task_id, "failed")
+                # PAW-JIT-03: bounded retry, not an unconditional reset to "tracing"
+                # (see _MAX_COMPILE_ATTEMPTS docstring) and not a permanent deadlock.
+                attempts = db.increment_compile_attempts(task_id)
+                if attempts < self._MAX_COMPILE_ATTEMPTS:
+                    db.set_status(task_id, "tracing")
+                else:
+                    db.set_status(task_id, "failed")
             finally:
                 with self._lock:
                     self._active_threads.pop(task_id, None)
