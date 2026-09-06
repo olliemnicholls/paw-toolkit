@@ -2,8 +2,11 @@
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import yaml
+
+_NUMERIC_VALUE_RULES = {"max_length", "min_length"}
+_REQUIRED_VALUE_RULES = _NUMERIC_VALUE_RULES | {"exact_match", "not_contains"}
 
 
 class AssertionRule(BaseModel):
@@ -12,6 +15,20 @@ class AssertionRule(BaseModel):
     rule: str
     pattern: Optional[str] = None
     value: Optional[Any] = None
+
+    @model_validator(mode="after")
+    def _validate_value(self) -> "AssertionRule":
+        """Fail fast at suite-load time instead of crashing (or silently mismatching) mid test-run."""
+        if self.rule in _REQUIRED_VALUE_RULES and self.value is None:
+            raise ValueError(f"'{self.rule}' assertion requires a 'value' field")
+        if self.rule in _NUMERIC_VALUE_RULES:
+            try:
+                int(self.value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"'{self.rule}' assertion value must be an integer, got {self.value!r}"
+                ) from exc
+        return self
 
 
 class FuzzingConfig(BaseModel):

@@ -53,9 +53,9 @@ class RegexLogitsProcessor:
         """Walk text through FSM character by character. Returns final state or None."""
         curr = state
         for char in text:
-            if char not in self.fsm.alphabet:
-                return None
             symbol = self.fsm.alphabet[char]
+            if symbol is None:
+                return None
             curr = self.fsm.map[curr].get(symbol)
             if curr is None or not self.fsm.islive(curr):
                 return None

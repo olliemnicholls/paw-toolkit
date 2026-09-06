@@ -7,11 +7,19 @@ import sqlite3
 import threading
 from typing import Any, Dict, List, Optional
 
+# INSERT ... ON CONFLICT ... DO UPDATE (used by record_trace) requires SQLite >= 3.24.
+_MIN_SQLITE_VERSION = (3, 24, 0)
+
 
 class TraceDB:
     """Embedded SQLite database tracking production API calls and compilation triggers."""
 
     def __init__(self, db_path: str = "./.paw/traces.db") -> None:
+        if sqlite3.sqlite_version_info < _MIN_SQLITE_VERSION:
+            raise RuntimeError(
+                f"paw.jit requires SQLite >= {'.'.join(map(str, _MIN_SQLITE_VERSION))} "
+                f"for upsert support (found {sqlite3.sqlite_version})."
+            )
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -71,19 +79,18 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._conn:
             # 1. Upsert task record and increment call_count
-            cur = self._conn.execute(
+            # Avoid RETURNING (requires SQLite >= 3.35): follow up with a plain SELECT instead.
+            self._conn.execute(
                 """
                 INSERT INTO tasks (task_id, call_count, status, created_at, updated_at)
                 VALUES (?, 1, 'tracing', ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     call_count = call_count + 1,
-                    updated_at = excluded.updated_at
-                RETURNING call_count;
+                    updated_at = excluded.updated_at;
                 """,
                 (task_id, now, now),
             )
-            row = cur.fetchone()
-            new_count = row[0] if row else 1
+            new_count = self._get_call_count_locked(task_id)
 
             # 2. Insert trace record
             self._conn.execute(
@@ -95,14 +102,18 @@ class TraceDB:
             )
             return new_count
 
+    def _get_call_count_locked(self, task_id: str) -> int:
+        """Read call_count for task_id. Caller must already hold self._lock."""
+        cur = self._conn.execute(
+            "SELECT call_count FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
+        return row["call_count"] if row else 0
+
     def get_call_count(self, task_id: str) -> int:
         """Retrieve total calls recorded for task."""
         with self._lock:
-            cur = self._conn.execute(
-                "SELECT call_count FROM tasks WHERE task_id = ?;", (task_id,)
-            )
-            row = cur.fetchone()
-            return row["call_count"] if row else 0
+            return self._get_call_count_locked(task_id)
 
     def get_status(self, task_id: str) -> str:
         """Retrieve task lifecycle status (tracing | compiling | ready | failed)."""

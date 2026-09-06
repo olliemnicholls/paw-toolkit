@@ -31,7 +31,9 @@ def test_app_main() -> None:
 def check(
     suite_path: Path = typer.Argument(..., help="Path to declarative suite.yaml specification"),
     backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
-    auto_recompile: bool = typer.Option(True, "--auto-recompile/--no-auto-recompile", help="Enable active learning"),
+    auto_recompile: Optional[bool] = typer.Option(
+        None, "--auto-recompile/--no-auto-recompile", help="Enable active learning (overrides suite.yaml if set)"
+    ),
 ) -> None:
     """Run test suite assertions and active-learning self-healing loop on a .paw adapter."""
     if not suite_path.exists():
@@ -44,7 +46,8 @@ def check(
         console.print(f"[bold red]Error parsing suite:[/bold red] {exc}")
         raise typer.Exit(code=1)
 
-    config.active_learning.auto_recompile = auto_recompile
+    if auto_recompile is not None:
+        config.active_learning.auto_recompile = auto_recompile
 
     # Select backend
     backend = RealPAWBackend() if backend_type.lower() == "real" else MockPAWBackend()

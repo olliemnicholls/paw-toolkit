@@ -16,6 +16,16 @@ JSON_BOOLEAN = r"(true|false)"
 JSON_NULL = r"null"
 
 
+def _json_collection_regex(open_lit: str, close_lit: str, entry_regex: str) -> str:
+    """Build a regex matching a bracketed, comma-separated, optionally-empty JSON collection body."""
+    comma_sep = rf"{JSON_WHITESPACE},{JSON_WHITESPACE}{entry_regex}"
+    return (
+        rf"{open_lit}{JSON_WHITESPACE}(?:"
+        rf"{entry_regex}(?:{comma_sep})*"
+        rf")?{JSON_WHITESPACE}{close_lit}"
+    )
+
+
 def _type_to_regex(annotation: Any) -> str:
     """Recursively convert a Python type annotation into a JSON-matching regex string."""
     origin = get_origin(annotation)
@@ -35,7 +45,7 @@ def _type_to_regex(annotation: Any) -> str:
             elif isinstance(val, bool):
                 literal_branches.append("true" if val else "false")
             elif isinstance(val, (int, float)):
-                literal_branches.append(str(val))
+                literal_branches.append(re.escape(str(val)))
             elif val is None:
                 literal_branches.append(JSON_NULL)
             else:
@@ -49,10 +59,10 @@ def _type_to_regex(annotation: Any) -> str:
             val = item.value
             if isinstance(val, str):
                 enum_branches.append(f'"{re.escape(val)}"')
-            elif isinstance(val, (int, float)):
-                enum_branches.append(str(val))
             elif isinstance(val, bool):
                 enum_branches.append("true" if val else "false")
+            elif isinstance(val, (int, float)):
+                enum_branches.append(re.escape(str(val)))
             else:
                 enum_branches.append(f'"{re.escape(str(val))}"')
         return f"(?:{'|'.join(enum_branches)})"
@@ -61,19 +71,20 @@ def _type_to_regex(annotation: Any) -> str:
     if origin in (list, List):
         item_type = args[0] if args else Any
         item_regex = _type_to_regex(item_type)
-        # Matches [] or [ item (, item)* ]
-        comma_sep = rf"{JSON_WHITESPACE},{JSON_WHITESPACE}{item_regex}"
-        return (
-            rf"\[{JSON_WHITESPACE}(?:"
-            rf"{item_regex}(?:{comma_sep})*"
-            rf")?{JSON_WHITESPACE}\]"
-        )
+        return _json_collection_regex(r"\[", r"\]", item_regex)
 
     # 5. Handle Nested Pydantic BaseModel
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return pydantic_to_regex(annotation, anchors=False)
 
-    # 6. Primitive types
+    # 6. Handle Dict / dict[K, V] (bare `dict` has no origin, only matches by identity)
+    if origin is dict or annotation is dict:
+        value_type = args[1] if len(args) > 1 else Any
+        value_regex = _type_to_regex(value_type)
+        entry = rf"{JSON_STRING}{JSON_WHITESPACE}:{JSON_WHITESPACE}{value_regex}"
+        return _json_collection_regex(r"\{", r"\}", entry)
+
+    # 7. Primitive types
     if annotation is str:
         return JSON_STRING
     if annotation is int:
