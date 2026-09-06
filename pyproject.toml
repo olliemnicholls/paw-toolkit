@@ -4,23 +4,46 @@ version = "0.1.0"
 description = "Production Runtime & Reliability Toolkit for Program-as-Weights (PAW)"
 readme = "README.md"
 requires-python = ">=3.11"
+# PAW-DEPS-01: every runtime/optional/dev dependency below was previously floor-only
+# (e.g. "pydantic>=2.6"), which lets `uv sync`/a fresh install silently resolve
+# whatever major version happens to be latest on PyPI at install time -- including
+# one released after this package, with breaking API changes or a compromised
+# release, that nothing here has ever been tested against. Each ceiling below is one
+# major version above the actual latest release as of 2026-09-06 (verified against
+# PyPI, not guessed), except for 0.x packages, which get their ceiling at the next
+# *minor* above the currently-tested release instead: semver treats a 0.x minor bump
+# as potentially breaking, and several of these (fastapi, uvicorn, httpx, typer,
+# interegular) have sat at 0.x for years with real behavioral changes across minors,
+# so a same-major-version ceiling would be no ceiling in practice.
 dependencies = [
-    "pydantic>=2.6",
-    "typer>=0.12",
-    "pyyaml>=6.0",
-    "interegular>=0.3.3",
-    "fastapi>=0.110.0",
-    "uvicorn>=0.28.0",
-    "httpx>=0.27.0",
+    "pydantic>=2.6,<3.0.0",
+    "typer>=0.12,<0.28.0",
+    "pyyaml>=6.0,<7.0.0",
+    # PAW-DEPS-03: interegular's algorithmic half (worst-case exponential DFA state
+    # blowup) is already closed by Track 09's PAW-SCHEMA-03 fix in
+    # logits_processor.py (_compile_fsm_safe's pattern-length cap, timeout backstop,
+    # and _MAX_FSM_STATES check) -- verified against that fix's own test coverage,
+    # not assumed here. This ceiling is the supply-chain half only: an unbounded
+    # floor-only spec would still let a future interegular release (compromised or
+    # merely incompatible) install silently.
+    "interegular>=0.3.3,<0.4.0",
+    "fastapi>=0.110.0,<0.142.0",
+    "uvicorn>=0.28.0,<0.53.0",
+    "httpx>=0.27.0,<0.29.0",
 ]
 
 [project.optional-dependencies]
 torch = [
-    "torch>=2.2.0",
-    "transformers>=4.40.0",
-    "peft>=0.10.0",
-    "safetensors>=0.4.0",
-    "accelerate>=0.28.0",
+    "torch>=2.2.0,<3.0.0",
+    # PAW-DEPS-01: transformers and accelerate have each already crossed a major
+    # version boundary (5.x and 1.x respectively) since their floors below were set;
+    # the ceiling here is one major version above *that* current reality, not above
+    # the old floor -- capping below the actual latest release would contradict this
+    # finding's own "researched, not guessed" instruction.
+    "transformers>=4.40.0,<6.0.0",
+    "peft>=0.10.0,<0.21.0",
+    "safetensors>=0.4.0,<0.9.0",
+    "accelerate>=0.28.0,<2.0.0",
 ]
 real = [
     "paw-kit[torch]",
@@ -28,8 +51,8 @@ real = [
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0",
-    "pytest-cov>=4.0",
+    "pytest>=8.0,<10.0.0",
+    "pytest-cov>=4.0,<8.0.0",
 ]
 
 [project.scripts]
