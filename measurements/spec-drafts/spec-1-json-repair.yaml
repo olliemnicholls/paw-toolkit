@@ -1,0 +1,46 @@
+task_name: json_repair
+spec: "Fix malformed JSON: repair missing quotes and trailing commas"
+
+standard_cases:
+  - input: "{name: 'Alice', age: 30,}"
+    expected: '{"name": "Alice", "age": 30}'
+  - input: "{'key': 'value'}"
+    expected: '{"key": "value"}'
+  - input: '{"a": 1, "b": 2,}'
+    expected: '{"a": 1, "b": 2}'
+  - input: "[1, 2, 3,]"
+    expected: "[1, 2, 3]"
+  - input: '{"nested": {"x": 1,},}'
+    expected: '{"nested": {"x": 1}}'
+  - input: "{foo: true, bar: false,}"
+    expected: '{"foo": true, "bar": false}'
+  - input: '{"list": [1, 2, 3,], "ok": true,}'
+    expected: '{"list": [1, 2, 3], "ok": true}'
+  - input: "{}"
+    expected: "{}"
+
+assertions:
+  - rule: "regex_match"
+    pattern: "^[\\{\\[].*[\\}\\]]$"
+  - rule: "not_contains"
+    value: "'"
+  - rule: "not_contains"
+    value: ",}"
+  - rule: "not_contains"
+    value: ",]"
+
+fuzzing:
+  inject_unicode: true
+  empty_inputs: false
+  whitespace_flood: true
+  payload_extremes: false
+  adversarial_probes:
+    - "{'a': 'b', \"c\": 'd',}"
+    - "// leading comment\n{a: 1,}"
+    - "{\"already\": \"valid\", \"json\": true}"
+    - "{a: {b: {c: 1,},},}"
+    - "{a: NaN, b: undefined,}"
+    - "{emoji: '🎉',}"
+
+active_learning:
+  auto_recompile: true

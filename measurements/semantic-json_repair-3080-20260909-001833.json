@@ -1,0 +1,1583 @@
+{
+  "label": "3080",
+  "task_name": "json_repair",
+  "spec": "Fix malformed JSON: repair missing quotes and trailing commas",
+  "max_spec_examples": 0,
+  "judge_model": "claude-haiku-4-5-20251001",
+  "total_cases": 153,
+  "structural_pass_rate": 93.4640522875817,
+  "semantic_pass_rate": 69.93464052287581,
+  "divergence_count": 40,
+  "divergences": [
+    {
+      "input": "// leading comment\n{a: 1,}",
+      "output": "{\"a\": 1}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Leading comment removed without instruction; spec only mentions quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "{a: NaN, b: undefined,}",
+      "output": "{\"a\": NaN, \"b\": undefined}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "NaN and undefined are not valid JSON values; should be null or strings.",
+      "failed_rules": []
+    },
+    {
+      "input": "   ",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input is whitespace only, not malformed JSON. Returning empty string is reasonable.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "   \t  \n  ",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input is only whitespace. Returning empty string is reasonable interpretation.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "\u200b{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Zero-width space character preserved in input but removed in output without justification.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed zero-width space but spec only asks to fix quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Zero-width space prefix removed without explanation; output differs from input.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains zero-width non-joiner character; output doesn't preserve or address it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removed invisible Unicode character (zero-width non-joiner) without addressing it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed invisible Unicode character \\u200c without justification; spec requires repair only.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Zero-width non-joiner character stripped without explanation; ambiguous handling.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output omits the right-to-left override character \\u202e present in input.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\u202e",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output silently removed right-to-left override character; should preserve or note it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output ignores the right-to-left override character that changes semantic meaning.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removed invisible right-to-left override character; spec only mentions quotes/commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\u202e",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed trailing comma correctly, but silently stripped right-to-left override character without addressing it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped invisible Unicode character (\\u202e) without addressing it explicitly.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\u202e",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed trailing comma but also removed closing brace, creating invalid structure.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output silently removed RTL override character (\\u202e) without addressing it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output ignores the right-to-left override character (\\u202e) in input.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output ignores the right-to-left override character U+202E at input start.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\u202e",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "model stripped invisible Unicode character instead of treating as malformed JSON",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped Unicode control character without explanation; unclear if intentional.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"key\": \"\ud83d\udd25\ud83d\ude80\ud83d\udea8\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input is valid emoji, not malformed JSON. Wrapping it adds structure unnecessarily.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removes emoji suffix without indication; spec says \"repair\" not \"remove content\"",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removes emojis entirely; spec requires repair, not removal of valid input.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped trailing emojis without attempting repair as per spec intent.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed leading null byte without explanation; spec requires repair, not deletion.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\\u0000",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output silently removed null terminator without addressing malformed single quotes.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removed leading null byte; spec says repair quotes/commas, not strip characters.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed leading null byte without justification; spec only mentions quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed leading null byte without justification; spec only mentions quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Leading null byte \\u0000 removed without specification; unclear if intentional.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\\u0000",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "null character removed without being a JSON repair issue; spec doesn't address this.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed null byte prefix instead of repairing JSON malformation within it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains non-printable control characters; output silently discards them without indication.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains non-JSON control characters (\\x00\\x1f) that should be addressed first.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed control characters but spec only requires fixing quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\u0000\u001f",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removes control characters but spec only requires fixing quotes/commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped control characters without explanation; spec requires JSON repair only.",
+      "failed_rules": []
+    }
+  ],
+  "all_cases": [
+    {
+      "input": "{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly repaired unquoted key, converted quotes to valid JSON, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly converted single quotes to double quotes, making valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma, result is valid JSON matching spec intent.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma, producing valid JSON array.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed both trailing commas from malformed JSON structure.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Added missing quotes around keys and removed trailing comma as specified.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas from array and object, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Input is already valid JSON; no repairs needed. Output correctly preserves it.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'a': 'b', \"c\": 'd',}",
+      "output": "{\"a\": \"b\", \"c\": \"d\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma, normalized quotes, repaired malformed JSON structure.",
+      "failed_rules": []
+    },
+    {
+      "input": "// leading comment\n{a: 1,}",
+      "output": "{\"a\": 1}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Leading comment removed without instruction; spec only mentions quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"already\": \"valid\", \"json\": true}",
+      "output": "{\"already\": \"valid\", \"json\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Input is already valid JSON; returning unchanged is correct behavior.",
+      "failed_rules": []
+    },
+    {
+      "input": "{a: {b: {c: 1,},},}",
+      "output": "{\"a\": {\"b\": {\"c\": 1}}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly fixed missing quotes around keys and removed all trailing commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "{a: NaN, b: undefined,}",
+      "output": "{\"a\": NaN, \"b\": undefined}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "NaN and undefined are not valid JSON values; should be null or strings.",
+      "failed_rules": []
+    },
+    {
+      "input": "{emoji: '\ud83c\udf89',}",
+      "output": "{\"emoji\": \"\ud83c\udf89\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly repaired unquoted key, converted single quotes to double quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "   ",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input is whitespace only, not malformed JSON. Returning empty string is reasonable.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "\t\t\t",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input contains only whitespace, not malformed JSON. Output should preserve or clarify this.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "\n\n\r\n",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input contains only whitespace, not malformed JSON. Output should preserve or clarify this.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "   \t  \n  ",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input is only whitespace. Returning empty string is reasonable interpretation.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "   {name: 'Alice', age: 30,}   \n",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly fixed unquoted key, converted single quotes to double quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t{name: 'Alice', age: 30,}\t\t",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma, added missing quotes around keys, normalized to valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "   {'key': 'value'}   \n",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Converted single quotes to double quotes, removed whitespace. Valid JSON repair.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t{'key': 'value'}\t\t",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Converted single quotes to double quotes, removed tabs. Valid JSON repair.",
+      "failed_rules": []
+    },
+    {
+      "input": "   {\"a\": 1, \"b\": 2,}   \n",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and trimmed whitespace; valid JSON output.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t{\"a\": 1, \"b\": 2,}\t\t",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and preserved valid JSON structure and data.",
+      "failed_rules": []
+    },
+    {
+      "input": "   [1, 2, 3,]   \n",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma; JSON now valid. Whitespace normalization is reasonable.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t[1, 2, 3,]\t\t",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and whitespace; valid JSON array produced.",
+      "failed_rules": []
+    },
+    {
+      "input": "   {\"nested\": {\"x\": 1,},}   \n",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and fixed malformed JSON structure.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t{\"nested\": {\"x\": 1,},}\t\t",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and returned valid JSON structure.",
+      "failed_rules": []
+    },
+    {
+      "input": "   {foo: true, bar: false,}   \n",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Added quotes around keys, removed trailing comma. Semantically valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t{foo: true, bar: false,}\t\t",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Fixed missing quotes around keys and removed trailing comma correctly.",
+      "failed_rules": []
+    },
+    {
+      "input": "   {\"list\": [1, 2, 3,], \"ok\": true,}   \n",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and normalized whitespace. JSON now valid.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t{\"list\": [1, 2, 3,], \"ok\": true,}\t\t",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly removed trailing commas and cleaned whitespace per spec.",
+      "failed_rules": []
+    },
+    {
+      "input": "   {}   \n",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Input is valid JSON; removing whitespace is reasonable interpretation of repair.",
+      "failed_rules": []
+    },
+    {
+      "input": "\t\t{}\t\t",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Input contains valid JSON with only surrounding whitespace; stripping it is reasonable.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is not malformed JSON; zero-width space isn't a JSON repair case.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "{name: 'Alice', age: 30,}\u200b",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Fixed unquoted keys, converted single quotes to double quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed zero-width space, added quotes, fixed trailing comma, valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\u200b",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Converted single quotes to double quotes, removed invisible zero-width space character.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Zero-width space character preserved in input but removed in output without justification.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}\u200b",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and invisible Unicode character, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and zero-width space; valid JSON result.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\u200b",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and zero-width space; valid JSON result.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing comma and zero-width space, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\u200b",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing commas and extra braces; produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed zero-width space but spec only asks to fix quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}\u200b",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly added missing quotes around keys and removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly fixed missing quotes around keys and removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}\u200b",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and invisible Unicode character per spec.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing commas and zero-width space, produced valid JSON correctly.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\u200b",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Zero-width space removed; empty object is valid JSON and reasonable repair.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200b{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Zero-width space prefix removed without explanation; output differs from input.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is not malformed JSON; it's a Unicode character. Spec doesn't apply.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "{name: 'Alice', age: 30,}\u200c",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly fixed unquoted keys, converted single quotes to double quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Fixed unquoted keys, converted single to double quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\u200c",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly converted single quotes to double quotes, removed invisible Unicode character.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains zero-width non-joiner character; output doesn't preserve or address it.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}\u200c",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and invisible Unicode character, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removed invisible Unicode character (zero-width non-joiner) without addressing it.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\u200c",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and invisible Unicode character to fix JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing comma and zero-width non-joiner, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\u200c",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed malformed trailing commas and invisible character from JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed invisible Unicode character \\u200c without justification; spec requires repair only.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}\u200c",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Added missing quotes around keys, removed trailing comma, produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly added quotes around keys and removed trailing comma per spec.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}\u200c",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas from array and object as specified.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and fixed malformed JSON structure per spec.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\u200c",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed zero-width non-joiner character; {} is valid JSON output.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Zero-width non-joiner character stripped without explanation; ambiguous handling.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input contains only Unicode right-to-left override character, not malformed JSON.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "{name: 'Alice', age: 30,}\u202e",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly fixed unquoted keys, converted quotes to double, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output omits the right-to-left override character \\u202e present in input.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\u202e",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output silently removed right-to-left override character; should preserve or note it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output ignores the right-to-left override character that changes semantic meaning.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}\u202e",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing comma and invisible Unicode character; valid JSON result.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removed invisible right-to-left override character; spec only mentions quotes/commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\u202e",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed trailing comma correctly, but silently stripped right-to-left override character without addressing it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped invisible Unicode character (\\u202e) without addressing it explicitly.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\u202e",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed trailing comma but also removed closing brace, creating invalid structure.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output silently removed RTL override character (\\u202e) without addressing it.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}\u202e",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly added quotes around keys, removed trailing comma, handled hidden character.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output ignores the right-to-left override character (\\u202e) in input.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}\u202e",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and right-to-left override character; valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output ignores the right-to-left override character U+202E at input start.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\u202e",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "model stripped invisible Unicode character instead of treating as malformed JSON",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped Unicode control character without explanation; unclear if intentional.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is BOM character, not malformed JSON. Removing it is reasonable but not \"fixing JSON\".",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "{name: 'Alice', age: 30,}\ufeff",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly fixed unquoted keys, converted quotes to double, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed BOM, fixed unquoted keys, converted quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\ufeff",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Converted single quotes to double quotes, removed BOM character, valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed BOM character, converted single quotes to double quotes, produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}\ufeff",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and BOM character; result is valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and BOM character; valid JSON output.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\ufeff",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing comma and BOM character; valid JSON array produced.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed BOM character and trailing comma, producing valid JSON array.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\ufeff",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and extra braces, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed BOM, trailing commas, and extra braces. Valid JSON produced.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}\ufeff",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly added missing quotes around keys and removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly added quotes around keys and removed trailing comma per spec.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}\ufeff",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and BOM character, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and BOM character, produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\ufeff",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed BOM character; empty object remains valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed BOM character and returned valid JSON object.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"key\": \"\ud83d\udd25\ud83d\ude80\ud83d\udea8\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input is valid emoji, not malformed JSON. Wrapping it adds structure unnecessarily.",
+      "failed_rules": []
+    },
+    {
+      "input": "{name: 'Alice', age: 30,}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly fixed unquoted key, converted single quotes to double quotes, removed trailing comma, stripped emoji.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed emojis, added missing quotes to keys, fixed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removes emoji suffix without indication; spec says \"repair\" not \"remove content\"",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removes emojis entirely; spec requires repair, not removal of valid input.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and emoji garbage; valid JSON remains.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and emoji prefix; valid JSON output.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and emoji artifacts; valid JSON array preserved.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and emoji prefix; valid JSON output.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and emoji garbage, produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed leading emojis, trailing commas, and produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Fixed missing quotes around keys, removed trailing comma, stripped non-JSON emoji characters.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed emojis, added quotes to keys, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and emoji garbage, produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed leading emojis, trailing commas, and produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped trailing emojis without attempting repair as per spec intent.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Emojis are not JSON; removing them to extract valid JSON is reasonable.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is valid JSON string literal. No malformed JSON to repair here.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "{name: 'Alice', age: 30,}\\u0000",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma, added missing quotes, standardized to valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed leading null byte without explanation; spec requires repair, not deletion.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\\u0000",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output silently removed null terminator without addressing malformed single quotes.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removed leading null byte; spec says repair quotes/commas, not strip characters.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}\\u0000",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing comma and null terminator, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed leading null byte without justification; spec only mentions quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\\u0000",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing comma and null terminator, produced valid JSON array.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed null byte, fixed trailing comma, produced valid JSON array.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\\u0000",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly removed trailing commas and null terminator, producing valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed leading null byte without justification; spec only mentions quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}\\u0000",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Added missing quotes around keys, removed trailing comma, stripped null byte.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Leading null byte \\u0000 removed without specification; unclear if intentional.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}\\u0000",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and null terminator, preserved all data.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed null byte prefix, fixed trailing commas, valid JSON output.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\\u0000",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "null character removed without being a JSON repair issue; spec doesn't address this.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed null byte prefix instead of repairing JSON malformation within it.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input contains only control characters, not JSON. Empty output is unreasonable.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^[\\{\\[].*[\\}\\]]$'"
+      ]
+    },
+    {
+      "input": "{name: 'Alice', age: 30,}\u0000\u001f",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly fixed unquoted keys, converted single quotes to double quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{name: 'Alice', age: 30,}",
+      "output": "{\"name\": \"Alice\", \"age\": 30}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed control characters, fixed unquoted keys, converted quotes, removed trailing comma.",
+      "failed_rules": []
+    },
+    {
+      "input": "{'key': 'value'}\u0000\u001f",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Converted single quotes to double quotes, removed null/control characters, valid JSON output.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{'key': 'value'}",
+      "output": "{\"key\": \"value\"}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains non-printable control characters; output silently discards them without indication.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"a\": 1, \"b\": 2,}\u0000\u001f",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing comma and null/control characters from malformed JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{\"a\": 1, \"b\": 2,}",
+      "output": "{\"a\": 1, \"b\": 2}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed control characters and trailing comma; valid JSON output produced correctly.",
+      "failed_rules": []
+    },
+    {
+      "input": "[1, 2, 3,]\u0000\u001f",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing comma and null/control characters; valid JSON array result.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f[1, 2, 3,]",
+      "output": "[1, 2, 3]",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains non-JSON control characters (\\x00\\x1f) that should be addressed first.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"nested\": {\"x\": 1,},}\u0000\u001f",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and null bytes, produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{\"nested\": {\"x\": 1,},}",
+      "output": "{\"nested\": {\"x\": 1}}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model removed control characters but spec only requires fixing quotes and commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "{foo: true, bar: false,}\u0000\u001f",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Added missing quotes around keys, removed trailing comma, stripped null bytes.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{foo: true, bar: false,}",
+      "output": "{\"foo\": true, \"bar\": false}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model removed control characters, added missing quotes, removed trailing comma correctly.",
+      "failed_rules": []
+    },
+    {
+      "input": "{\"list\": [1, 2, 3,], \"ok\": true,}\u0000\u001f",
+      "output": "{\"list\": [1, 2, 3], \"ok\": true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly removed trailing commas and null bytes; produced valid JSON.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{\"list\": [1, 2, 3,], \"ok\": true,}",
+      "output": "{\"list\":[1,2,3],\"ok\":true}",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Removed trailing commas and control characters; repaired malformed JSON correctly.",
+      "failed_rules": []
+    },
+    {
+      "input": "{}\u0000\u001f",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output removes control characters but spec only requires fixing quotes/commas.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f{}",
+      "output": "{}",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Model stripped control characters without explanation; spec requires JSON repair only.",
+      "failed_rules": []
+    }
+  ]
+}

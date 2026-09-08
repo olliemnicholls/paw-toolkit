@@ -1,0 +1,224 @@
+{
+  "label": "3080",
+  "teacher_model": "claude-haiku-4-5-20251001",
+  "threshold": 5,
+  "total_calls": 20,
+  "pre_threshold": {
+    "n": 5,
+    "mean_ms": 1879.7978958580643,
+    "note": "includes the real Claude API call latency each time; the threshold-th call additionally includes the full synchronous compile step"
+  },
+  "post_threshold": {
+    "n": 15,
+    "mean_ms": 589.0958762727678,
+    "note": "local llama.cpp inference via ProgramAsWeightsBackend, no network call"
+  },
+  "speedup_x": 3.190988040438541,
+  "teacher_tokens_total": {
+    "input": 501,
+    "output": 185,
+    "calls_billed": 5
+  },
+  "calls": [
+    {
+      "call": 1,
+      "ms": 1132.764148991555,
+      "phase": "teacher_or_compile",
+      "output": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      }
+    },
+    {
+      "call": 2,
+      "ms": 933.3579151425511,
+      "phase": "teacher_or_compile",
+      "output": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      }
+    },
+    {
+      "call": 3,
+      "ms": 925.0409388914704,
+      "phase": "teacher_or_compile",
+      "output": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      }
+    },
+    {
+      "call": 4,
+      "ms": 958.1712931394577,
+      "phase": "teacher_or_compile",
+      "output": {
+        "priority": "low",
+        "department": "technical",
+        "urgency_score": 1
+      }
+    },
+    {
+      "call": 5,
+      "ms": 5449.655183125287,
+      "phase": "teacher_or_compile",
+      "output": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      }
+    },
+    {
+      "call": 6,
+      "ms": 7599.317028885707,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "general",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 7,
+      "ms": 96.14523686468601,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 8,
+      "ms": 95.0939420145005,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 9,
+      "ms": 86.37714316137135,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 10,
+      "ms": 84.86883202567697,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 2
+      }
+    },
+    {
+      "call": 11,
+      "ms": 90.07722907699645,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 12,
+      "ms": 90.18425387330353,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 13,
+      "ms": 84.36968713067472,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "sales",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 14,
+      "ms": 84.24455020576715,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 15,
+      "ms": 89.21832405030727,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      }
+    },
+    {
+      "call": 16,
+      "ms": 89.2294489312917,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      }
+    },
+    {
+      "call": 17,
+      "ms": 85.25641006417572,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 18,
+      "ms": 84.71627393737435,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      }
+    },
+    {
+      "call": 19,
+      "ms": 89.23857496120036,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      }
+    },
+    {
+      "call": 20,
+      "ms": 88.10120890848339,
+      "phase": "adapter_or_fallback",
+      "output": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      }
+    }
+  ]
+}

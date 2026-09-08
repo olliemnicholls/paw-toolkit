@@ -1,0 +1,370 @@
+{
+  "label": "3080",
+  "teacher_model": "claude-haiku-4-5-20251001",
+  "n": 20,
+  "full_agreement_rate": 60.0,
+  "urgency_within_1_rate": 90.0,
+  "note": "Compares the compiled adapter's output against a FRESH independent teacher call on the same ticket, not the originally-traced response -- this is a true second opinion, not a training-label check. Disagreement does not necessarily mean the adapter is wrong (the teacher itself is not perfectly consistent call to call); it means the two disagree and a human should look at the specific case.",
+  "cases": [
+    {
+      "ticket": "I was charged twice on my credit card for invoice #INV-9821. Please refund immediately!",
+      "adapter_raw": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+      "adapter_parsed": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Our production API gateway is throwing 502 Bad Gateway errors across all regions!",
+      "adapter_raw": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+      "adapter_parsed": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "teacher_fresh": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "We are interested in an enterprise annual contract for 250 seats. Who can we talk to?",
+      "adapter_raw": "{\"priority\": \"high\", \"department\": \"sales\", \"urgency_score\": 4}",
+      "adapter_parsed": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "How do I update my profile picture in the settings page? I can't find the upload button.",
+      "adapter_raw": "{\"priority\": \"low\", \"department\": \"technical\", \"urgency_score\": 1}",
+      "adapter_parsed": {
+        "priority": "low",
+        "department": "technical",
+        "urgency_score": 1
+      },
+      "teacher_fresh": {
+        "priority": "low",
+        "department": "technical",
+        "urgency_score": 1
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Database replication lag is exceeding 45 minutes on our primary PostgreSQL cluster.",
+      "adapter_raw": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+      "adapter_parsed": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "teacher_fresh": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "general",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "general",
+        "urgency_score": 4
+      },
+      "agree_priority": false,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": false
+    },
+    {
+      "ticket": "My password reset email is never arriving in my inbox or spam folder.",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "technical",
+        "urgency_score": 4
+      },
+      "agree_priority": false,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": false
+    },
+    {
+      "ticket": "We need to add 5 more team members to our billing subscription plan.",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "technical",
+        "urgency_score": 4
+      },
+      "agree_priority": false,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": false
+    },
+    {
+      "ticket": "Thank you for the quick support yesterday, everything is working smoothly now!",
+      "adapter_raw": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+      "adapter_parsed": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "teacher_fresh": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "technical",
+        "urgency_score": 4
+      },
+      "agree_priority": false,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": false
+    },
+    {
+      "ticket": "Please cancel my subscription and confirm the final invoice amount.",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Is there a discount for non-profit organizations on the enterprise tier?",
+      "adapter_raw": "{\"priority\": \"high\", \"department\": \"sales\", \"urgency_score\": 4}",
+      "adapter_parsed": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "teacher_fresh": {
+        "priority": "medium",
+        "department": "sales",
+        "urgency_score": 2
+      },
+      "agree_priority": false,
+      "agree_department": true,
+      "agree_urgency_within_1": false,
+      "full_agreement": false
+    },
+    {
+      "ticket": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "low",
+        "department": "technical",
+        "urgency_score": 2
+      },
+      "agree_priority": false,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": false
+    },
+    {
+      "ticket": "Urgent: our webhook deliveries have been failing silently for 3 hours, losing orders.",
+      "adapter_raw": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+      "adapter_parsed": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "teacher_fresh": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Just wanted to say the new onboarding flow is much clearer, nice work.",
+      "adapter_raw": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+      "adapter_parsed": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "teacher_fresh": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Requesting a data export of all our account's usage logs for the last 12 months.",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 2
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    },
+    {
+      "ticket": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+      "adapter_raw": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+      "adapter_parsed": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "technical",
+        "urgency_score": 4
+      },
+      "agree_priority": false,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": false
+    },
+    {
+      "ticket": "What's the SLA for critical incidents on the enterprise support plan?",
+      "adapter_raw": "{\"priority\": \"high\", \"department\": \"sales\", \"urgency_score\": 4}",
+      "adapter_parsed": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "teacher_fresh": {
+        "priority": "medium",
+        "department": "general",
+        "urgency_score": 2
+      },
+      "agree_priority": false,
+      "agree_department": false,
+      "agree_urgency_within_1": false,
+      "full_agreement": false
+    },
+    {
+      "ticket": "The billing page shows a negative balance that doesn't match our invoice history.",
+      "adapter_raw": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+      "adapter_parsed": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "teacher_fresh": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "agree_priority": true,
+      "agree_department": true,
+      "agree_urgency_within_1": true,
+      "full_agreement": true
+    }
+  ]
+}

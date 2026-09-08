@@ -1,0 +1,1171 @@
+{
+  "label": "3080",
+  "task_name": "review_sentiment",
+  "spec": "Decide if this product review is positive or negative.",
+  "max_spec_examples": 0,
+  "judge_model": "claude-haiku-4-5-20251001",
+  "total_cases": 133,
+  "structural_pass_rate": 92.4812030075188,
+  "semantic_pass_rate": 89.47368421052632,
+  "divergence_count": 6,
+  "divergences": [
+    {
+      "input": "asdkfjal;ksdjf",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input is gibberish/garbage. Returning \"neutral\" is reasonable default for unclassifiable text.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\u202e",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; likely adversarial attempt to manipulate output.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eThis blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; text reversal may indicate adversarial manipulation attempt.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eI love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character (\\u202e), reversing text. Actual sentiment unclear.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eExceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; model should flag ambiguity.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eWorks exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; model failed to detect obfuscation attempt.",
+      "failed_rules": []
+    }
+  ],
+  "all_cases": [
+    {
+      "input": "This blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains strongly positive language (\"amazing,\" \"best purchase ever\") correctly classified.",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"terrible quality\" and \"broke,\" clearly indicating negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses clear positive sentiment with \"love\" and praising qualities.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states waste of money and advises against purchase. Clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states exceeded expectations and five stars, clearly positive.",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor service; negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states satisfaction (\"very happy\") and product met expectations (\"works exactly as described\").",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly criticizes product quality and durability, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "It's fine I guess, does the job.",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Spec asks for positive/negative only; neutral is reasonable but outside spec.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "Oh great, ANOTHER product that breaks in a week. Love it.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review uses sarcasm to express dissatisfaction with product durability and quality.",
+      "failed_rules": []
+    },
+    {
+      "input": "Good packaging but the product itself is garbage.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains strong negative language (\"garbage\") outweighing minor positive aspect.",
+      "failed_rules": []
+    },
+    {
+      "input": "",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Spec asks for positive/negative classification; neutral is outside scope.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "Ce produit est incroyable, je l'adore !",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "French text translates to \"This product is incredible, I love it!\" \u2014 clearly positive.",
+      "failed_rules": []
+    },
+    {
+      "input": "asdkfjal;ksdjf",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input is gibberish/garbage. Returning \"neutral\" is reasonable default for unclassifiable text.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "\u200b",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Spec requests positive/negative classification only; neutral is outside scope.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\u200b",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains explicitly positive language (\"amazing\", \"best purchase ever\").",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bThis blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clearly positive language (\"amazing,\" \"best purchase ever\") warranting positive classification.",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.\u200b",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clearly negative language (\"terrible,\" \"broke\") indicating dissatisfaction.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bTerrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"terrible quality\" and \"broke,\" clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.\u200b",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"love\" and praises two product qualities; clearly positive.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bI love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"I love,\" clearly expressing positive sentiment about product qualities.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.\u200b",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states waste of money and advises against purchase, clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bComplete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.\u200b",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Exceeded my expectations, five stars\" - clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bExceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Exceeded my expectations, five stars\" - clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.\u200b",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and unresponsive support, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bArrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor service response, clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.\u200b",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review states satisfaction with product performance and happiness, clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bWorks exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clear positive language (\"Works exactly as described, very happy\").",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.\u200b",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly criticizes product quality and durability. Clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bCheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product is cheaply made and stopped working. Clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is empty (zero-width character); spec requires classifying review as positive/negative, not neutral.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\u200c",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clear positive language (\"amazing,\" \"best purchase ever\").",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cThis blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains explicitly positive language (\"amazing,\" \"best purchase ever\").",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.\u200c",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses dissatisfaction with product quality and durability, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cTerrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Terrible quality\" and \"broke after one day,\" clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.\u200c",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"love\" and praises two product qualities, clearly positive.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cI love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"I love\" and praises qualities; clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.\u200c",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cComplete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.\u200c",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Exceeded my expectations, five stars\" clearly indicates positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cExceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"exceeded expectations\" and \"five stars,\" clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.\u200c",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor service; negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cArrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses dissatisfaction with broken product and poor customer service.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.\u200c",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states satisfaction (\"very happy\") and product met expectations (\"works exactly as described\").",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cWorks exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review states satisfaction (\"very happy\") and product meets expectations (\"works exactly as described\").",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.\u200c",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly criticizes product quality and durability. Negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cCheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product is cheaply made and broke quickly, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is invisible Unicode character; \"neutral\" misrepresents non-existent review content.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\u202e",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; likely adversarial attempt to manipulate output.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eThis blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; text reversal may indicate adversarial manipulation attempt.",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.\u202e",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses dissatisfaction. \"Terrible\" and \"broke\" indicate negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eTerrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Terrible quality, broke after one day\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.\u202e",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"love\" and praises vacuum qualities; clearly positive.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eI love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character (\\u202e), reversing text. Actual sentiment unclear.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.\u202e",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eComplete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses strong dissatisfaction and discourages purchase.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.\u202e",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly states positive sentiment with \"exceeded expectations\" and \"five stars.\"",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eExceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; model should flag ambiguity.",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.\u202e",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes defective product and poor service; negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eArrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product arriving broken and poor customer service, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.\u202e",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses satisfaction and happiness; positive classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eWorks exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; model failed to detect obfuscation attempt.",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.\u202e",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor quality, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eCheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product malfunction and poor quality; negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Spec requires binary positive/negative choice; neutral is outside scope.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\ufeff",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains strongly positive language (\"amazing,\" \"best purchase ever\"), warranting positive classification.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffThis blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses satisfaction and enthusiasm, definitively positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.\ufeff",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product is terrible and broke immediately, clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffTerrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Terrible quality, broke after one day\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.\ufeff",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states love and positive attributes (quiet, powerful).",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffI love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"I love\" and praises two product attributes clearly.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.\ufeff",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffComplete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.\ufeff",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Exceeded my expectations, five stars\" - clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffExceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Exceeded my expectations, five stars\" - clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.\ufeff",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product arrived broken and customer service failed to respond. Clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffArrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor service; negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.\ufeff",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states satisfaction (\"very happy\") and product meets expectations (\"works exactly as described\").",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffWorks exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains explicit positive language (\"Works exactly as described, very happy\").",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.\ufeff",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product failure and cheap quality, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffCheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product failed quickly and was poorly made.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Emojis \ud83d\udd25\ud83d\ude80 are positive sentiment markers; should classify as positive.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains explicit praise (\"amazing,\" \"best purchase ever\") and positive emojis.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8This blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clearly positive language (\"amazing\", \"best purchase ever\") and emojis.",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Terrible quality\" and \"broke after one day\"\u2014clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Terrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Terrible quality, broke after one day\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly uses \"love\" and praises qualities; clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8I love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"I love,\" clearly expressing positive sentiment about product.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Complete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"Complete waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"exceeded expectations\" and \"five stars,\" clearly positive.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Exceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"exceeded expectations\" and \"five stars,\" clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product arrived broken and customer service ignored complaints.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Arrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product arrived broken and customer service ignored complaints.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses satisfaction and happiness; positive sentiment is clearly appropriate.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Works exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses satisfaction with product performance; classification as positive is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product was cheaply made and failed quickly, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Cheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states product was cheaply made and failed quickly, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is null character, not a product review. \"Neutral\" misrepresents garbage input.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\\u0000",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clear positive language (\"amazing,\" \"best purchase ever\") indicating positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000This blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review content is clearly positive despite null byte prefix; correct classification.",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.\\u0000",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"terrible quality\" and product failure, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Terrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clear negative sentiment words \"terrible\" and \"broke\"",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.\\u0000",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses love and positive qualities about vacuum performance.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000I love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses satisfaction with product qualities; \"positive\" is correct classification.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.\\u0000",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"waste of money, do not buy\" - clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Complete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses dissatisfaction and recommends against purchase.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.\\u0000",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "\"Exceeded my expectations\" and \"five stars\" clearly indicate positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Exceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clear positive language (\"exceeded expectations\", \"five stars\").",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.\\u0000",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor service, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Arrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor service; negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.\\u0000",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review expresses satisfaction and happiness, clearly indicating positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Works exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses satisfaction. Null character is irrelevant to sentiment analysis.",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.\\u0000",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor quality, clearly negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Cheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly criticizes product quality and durability; \"negative\" is correct classification.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f",
+      "output": "neutral",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input is non-text garbage (control characters), not a product review. \"Neutral\" is misleading.",
+      "failed_rules": [
+        "regex_match: Output 'neutral' does not match pattern '^(positive|negative)$'",
+        "min_length: Output length 7 is below min_length 8",
+        "not_contains: Output contains forbidden substring 'neutral'"
+      ]
+    },
+    {
+      "input": "This blender is amazing, best purchase ever!\u0000\u001f",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clearly positive language (\"amazing,\" \"best purchase ever\") despite trailing garbage characters.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fThis blender is amazing, best purchase ever!",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clear positive language (\"amazing,\" \"best purchase ever\") despite null bytes.",
+      "failed_rules": []
+    },
+    {
+      "input": "Terrible quality, broke after one day.\u0000\u001f",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains strongly negative language (\"terrible,\" \"broke\"), classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fTerrible quality, broke after one day.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses dissatisfaction; classification as negative is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "I love how quiet and powerful this vacuum is.\u0000\u001f",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly states \"love\" and praises vacuum qualities; clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fI love how quiet and powerful this vacuum is.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Input contains positive sentiment words \"love,\" \"quiet,\" and \"powerful\" despite null bytes.",
+      "failed_rules": []
+    },
+    {
+      "input": "Complete waste of money, do not buy.\u0000\u001f",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review text clearly expresses dissatisfaction; negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fComplete waste of money, do not buy.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clear negative language (\"waste of money, do not buy\") clearly indicating negative sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Exceeded my expectations, five stars.\u0000\u001f",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly states \"exceeded expectations\" and \"five stars,\" unambiguously positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fExceeded my expectations, five stars.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains \"exceeded expectations\" and \"five stars\" indicating positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Arrived broken and customer service ignored me.\u0000\u001f",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product failure and poor service. Negative classification is correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fArrived broken and customer service ignored me.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review describes product arriving broken and poor customer service, clearly negative.",
+      "failed_rules": []
+    },
+    {
+      "input": "Works exactly as described, very happy.\u0000\u001f",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review clearly expresses satisfaction; classification as positive is semantically correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fWorks exactly as described, very happy.",
+      "output": "positive",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review text \"Works exactly as described, very happy\" is clearly positive sentiment.",
+      "failed_rules": []
+    },
+    {
+      "input": "Cheaply made, stopped working within a week.\u0000\u001f",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review explicitly criticizes product quality and durability. Negative classification correct.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fCheaply made, stopped working within a week.",
+      "output": "negative",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Review contains clearly negative language (\"cheaply made,\" \"stopped working\"). Correct classification.",
+      "failed_rules": []
+    }
+  ]
+}

@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from paw_kit.atomicio import atomic_write_text
 from paw_kit.backend.base import AbstractPAWBackend
-from paw_kit.schema.logits_processor import RegexLogitsProcessor
 
 # PAW-BACKEND-02: a Hugging Face repo ID is "repo-name" or "owner/repo-name" using
 # only letters, digits, '.', '_' and '-' in each segment. Approximates (does not
@@ -101,7 +100,14 @@ class RealPAWBackend(AbstractPAWBackend):
     ) -> str:
         """Execute local neural inference on resident model with specified adapter.
 
-        Applies RegexLogitsProcessor if grammar_constraint is provided.
+        `grammar_constraint` is forwarded to `runtime_executor` unmodified, if one is
+        set -- this class does not itself apply it. (Corrected 2026-09-08: this
+        docstring previously claimed "Applies RegexLogitsProcessor if grammar_constraint
+        is provided," which was never true -- `RegexLogitsProcessor` was imported here
+        and never used. Applying it against a real model requires driving a
+        token-by-token generation loop, which is the executor's job; see
+        `scripts/measure_schema_real_model.py` for a working reference implementation
+        against `transformers.generate()`.)
 
         Raises:
             RuntimeError: If real ML environment (torch/transformers) is not available.

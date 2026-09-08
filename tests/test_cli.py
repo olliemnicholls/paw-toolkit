@@ -3,10 +3,26 @@
 import json
 import os
 from pathlib import Path
+import re
 from typer.testing import CliRunner
 import pytest
 
 from paw_kit.cli import app, inspect, clean, test_app as paw_test_app
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Strip ANSI/Rich color escape codes from captured CLI output.
+
+    Rich's `Console` forces color output (regardless of the CliRunner's non-tty
+    stream) when `FORCE_COLOR` is set in the environment -- true of some dev/CI
+    setups, not just interactive terminals. Assertions on captured CLI text must not
+    assume plain output; strip color codes first so the test is deterministic either
+    way, rather than asserting on colorized text that only happens to be plain in
+    whatever environment the test was last run in.
+    """
+    return _ANSI_RE.sub("", text)
 
 runner = CliRunner()
 
@@ -454,7 +470,7 @@ def test_cli_export_dataset_requires_jsonl_extension_PAW_CLI_03(
 
     result = runner.invoke(app, ["export", "dataset", "--db", str(db_file), "--out", "dataset.txt"])
     assert result.exit_code == 1
-    assert "'.jsonl' extension" in result.output
+    assert "'.jsonl' extension" in strip_ansi(result.output)
 
 
 def test_cli_export_dataset_confirms_before_overwrite_PAW_CLI_03(

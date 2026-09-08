@@ -1,0 +1,46 @@
+task_name: phone_extractor
+spec: "Pull out the phone number from this text and format it consistently."
+
+standard_cases:
+  - input: "Call me at 555-123-4567 tomorrow."
+    expected: "(555) 123-4567"
+  - input: "My number is (555) 987-6543."
+    expected: "(555) 987-6543"
+  - input: "Contact: 555.222.3333"
+    expected: "(555) 222-3333"
+  - input: "Phone: 5551234567"
+    expected: "(555) 123-4567"
+  - input: "You can reach me at 555 444 7890 anytime."
+    expected: "(555) 444-7890"
+  - input: "Office line: +1-555-666-7777"
+    expected: "(555) 666-7777"
+  - input: "Text 555-888-9999 for info."
+    expected: "(555) 888-9999"
+  - input: "Her cell is 555-321-0000."
+    expected: "(555) 321-0000"
+
+assertions:
+  - rule: "regex_match"
+    pattern: "^\\(\\d{3}\\) \\d{3}-\\d{4}$"
+  - rule: "max_length"
+    value: 14
+  - rule: "min_length"
+    value: 14
+  - rule: "not_contains"
+    value: "ext"
+
+fuzzing:
+  inject_unicode: true
+  empty_inputs: true
+  whitespace_flood: false
+  payload_extremes: false
+  adversarial_probes:
+    - "Call 555-123-4567 or 555-987-6543, whichever works."
+    - "Dial 1-800-FLOWERS for delivery."
+    - "International line: +44 20 7946 0958"
+    - "Reach me at 555-222-3333 ext. 204."
+    - "no phone number here, just an email: a@b.com"
+    - "５５５－１２３－４５６７"
+
+active_learning:
+  auto_recompile: true

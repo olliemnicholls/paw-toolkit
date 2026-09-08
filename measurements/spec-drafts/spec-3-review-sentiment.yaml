@@ -1,0 +1,46 @@
+task_name: review_sentiment
+spec: "Decide if this product review is positive or negative."
+
+standard_cases:
+  - input: "This blender is amazing, best purchase ever!"
+    expected: "positive"
+  - input: "Terrible quality, broke after one day."
+    expected: "negative"
+  - input: "I love how quiet and powerful this vacuum is."
+    expected: "positive"
+  - input: "Complete waste of money, do not buy."
+    expected: "negative"
+  - input: "Exceeded my expectations, five stars."
+    expected: "positive"
+  - input: "Arrived broken and customer service ignored me."
+    expected: "negative"
+  - input: "Works exactly as described, very happy."
+    expected: "positive"
+  - input: "Cheaply made, stopped working within a week."
+    expected: "negative"
+
+assertions:
+  - rule: "regex_match"
+    pattern: "^(positive|negative)$"
+  - rule: "max_length"
+    value: 8
+  - rule: "min_length"
+    value: 8
+  - rule: "not_contains"
+    value: "neutral"
+
+fuzzing:
+  inject_unicode: true
+  empty_inputs: true
+  whitespace_flood: false
+  payload_extremes: false
+  adversarial_probes:
+    - "It's fine I guess, does the job."
+    - "Oh great, ANOTHER product that breaks in a week. Love it."
+    - "Good packaging but the product itself is garbage."
+    - ""
+    - "Ce produit est incroyable, je l'adore !"
+    - "asdkfjal;ksdjf"
+
+active_learning:
+  auto_recompile: true

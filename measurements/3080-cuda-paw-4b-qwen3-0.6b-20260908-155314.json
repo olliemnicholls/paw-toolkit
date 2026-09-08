@@ -1,0 +1,731 @@
+{
+  "label": "3080-cuda",
+  "timestamp": "20260908-155314",
+  "machine": {
+    "host": "ic-001401711",
+    "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+    "gpu": "NVIDIA GeForce RTX 3080, 10240 MiB",
+    "python": "3.12.3"
+  },
+  "suite": "examples/date_normalizer/suite.yaml",
+  "task_name": "date_normalizer",
+  "compiler": "paw-4b-qwen3-0.6b",
+  "gpu_layers": null,
+  "max_spec_examples": 0,
+  "compile_wall_s": 1.0274800679180771,
+  "manifest": {
+    "backend": "programasweights",
+    "program_id": "b6f244c72fb1af914ac6",
+    "slug": null,
+    "compiler": "paw-4b-qwen3-0.6b",
+    "status": "ready",
+    "spec": "Convert natural language date expressions into standard ISO-8601 YYYY-MM-DD format.",
+    "examples_folded_into_spec": 0,
+    "examples_count": 4,
+    "compiled_at": "2026-09-08T14:53:15Z"
+  },
+  "latency": {
+    "cold_ms": 2012.9219319205731,
+    "warm_calls": 10,
+    "p50_ms": 65.44007500633597,
+    "p90_ms": 66.28294289112091,
+    "p99_ms": 71.03842892684042,
+    "mean_ms": 65.24207151960582
+  },
+  "paw_test": {
+    "total": 82,
+    "passed": 71,
+    "pass_rate": 86.58536585365853,
+    "cases": [
+      {
+        "input": "January 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.840282917022705,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.43126909248531,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.360065057873726,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.16094296239316,
+        "execution_error": null
+      },
+      {
+        "input": "  \t\n  2026-01-01  \n\t  ",
+        "output": "2026-01-01",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.17348694615066,
+        "execution_error": null
+      },
+      {
+        "input": "2026\u5e7409\u670805\u65e5",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.99721009843051,
+        "execution_error": null
+      },
+      {
+        "input": "2026\u201412\u201431",
+        "output": "2026-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.96102197282016,
+        "execution_error": null
+      },
+      {
+        "input": "   ",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 12.643218040466309,
+        "execution_error": null
+      },
+      {
+        "input": "\t\t\t",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 17.41267810575664,
+        "execution_error": null
+      },
+      {
+        "input": "\n\n\r\n",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 13.430900173261762,
+        "execution_error": null
+      },
+      {
+        "input": "   \t  \n  ",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 16.28481806255877,
+        "execution_error": null
+      },
+      {
+        "input": "   January 15, 2026   \n",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 69.40570496954024,
+        "execution_error": null
+      },
+      {
+        "input": "\t\tJanuary 15, 2026\t\t",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 66.16767798550427,
+        "execution_error": null
+      },
+      {
+        "input": "   2026/09/05   \n",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.6317169778049,
+        "execution_error": null
+      },
+      {
+        "input": "\t\t2026/09/05\t\t",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.54757079295814,
+        "execution_error": null
+      },
+      {
+        "input": "   December 31st, 2025   \n",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.07334506325424,
+        "execution_error": null
+      },
+      {
+        "input": "\t\tDecember 31st, 2025\t\t",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 64.51414292678237,
+        "execution_error": null
+      },
+      {
+        "input": "   2024-02-29   \n",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.24971290491521,
+        "execution_error": null
+      },
+      {
+        "input": "\t\t2024-02-29\t\t",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.3034548740834,
+        "execution_error": null
+      },
+      {
+        "input": "\u200b",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 11.806482914835215,
+        "execution_error": null
+      },
+      {
+        "input": "January 15, 2026\u200b",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.95673409476876,
+        "execution_error": null
+      },
+      {
+        "input": "\u200bJanuary 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.57868402078748,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05\u200b",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.78071994893253,
+        "execution_error": null
+      },
+      {
+        "input": "\u200b2026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.18057896755636,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025\u200b",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.07693696767092,
+        "execution_error": null
+      },
+      {
+        "input": "\u200bDecember 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 64.97507798485458,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29\u200b",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.44459103234112,
+        "execution_error": null
+      },
+      {
+        "input": "\u200b2024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.94492196664214,
+        "execution_error": null
+      },
+      {
+        "input": "\u200c",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 11.357417795807123,
+        "execution_error": null
+      },
+      {
+        "input": "January 15, 2026\u200c",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 64.44651400670409,
+        "execution_error": null
+      },
+      {
+        "input": "\u200cJanuary 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.12215384282172,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05\u200c",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.666981972754,
+        "execution_error": null
+      },
+      {
+        "input": "\u200c2026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 63.72104096226394,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025\u200c",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.9748099707067,
+        "execution_error": null
+      },
+      {
+        "input": "\u200cDecember 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.9056531470269,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29\u200c",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.72611397132277,
+        "execution_error": null
+      },
+      {
+        "input": "\u200c2024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.5470211058855,
+        "execution_error": null
+      },
+      {
+        "input": "\u202e",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 13.294636970385909,
+        "execution_error": null
+      },
+      {
+        "input": "January 15, 2026\u202e",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.2429941110313,
+        "execution_error": null
+      },
+      {
+        "input": "\u202eJanuary 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.581553891301155,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05\u202e",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.856312211602926,
+        "execution_error": null
+      },
+      {
+        "input": "\u202e2026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.427775003015995,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025\u202e",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.668293084949255,
+        "execution_error": null
+      },
+      {
+        "input": "\u202eDecember 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 63.786353915929794,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29\u202e",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 63.95404017530382,
+        "execution_error": null
+      },
+      {
+        "input": "\u202e2024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.591103207319975,
+        "execution_error": null
+      },
+      {
+        "input": "\ufeff",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 11.377761838957667,
+        "execution_error": null
+      },
+      {
+        "input": "January 15, 2026\ufeff",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.03882403112948,
+        "execution_error": null
+      },
+      {
+        "input": "\ufeffJanuary 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.49390782229602,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05\ufeff",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.01195507310331,
+        "execution_error": null
+      },
+      {
+        "input": "\ufeff2026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.59960497543216,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025\ufeff",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.602966859936714,
+        "execution_error": null
+      },
+      {
+        "input": "\ufeffDecember 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.68275885283947,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29\ufeff",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.301992973312736,
+        "execution_error": null
+      },
+      {
+        "input": "\ufeff2024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.019707169383764,
+        "execution_error": null
+      },
+      {
+        "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 12.437324970960617,
+        "execution_error": null
+      },
+      {
+        "input": "January 15, 2026\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 64.30678209289908,
+        "execution_error": null
+      },
+      {
+        "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8January 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 63.28769284300506,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.837368877604604,
+        "execution_error": null
+      },
+      {
+        "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea82026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.88730802386999,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.57902302220464,
+        "execution_error": null
+      },
+      {
+        "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8December 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.97001102939248,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 65.46822213567793,
+        "execution_error": null
+      },
+      {
+        "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea82024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.655641067773104,
+        "execution_error": null
+      },
+      {
+        "input": "\\u0000",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 12.552064144983888,
+        "execution_error": null
+      },
+      {
+        "input": "January 15, 2026\\u0000",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.471393099054694,
+        "execution_error": null
+      },
+      {
+        "input": "\\u0000January 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.707527143880725,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05\\u0000",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.755948001518846,
+        "execution_error": null
+      },
+      {
+        "input": "\\u00002026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.91407307051122,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025\\u0000",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 63.38994391262531,
+        "execution_error": null
+      },
+      {
+        "input": "\\u0000December 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.94349704310298,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29\\u0000",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.8064790032804,
+        "execution_error": null
+      },
+      {
+        "input": "\\u00002024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.59088807180524,
+        "execution_error": null
+      },
+      {
+        "input": "\u0000\u001f",
+        "output": "",
+        "passed": false,
+        "failed_rules": [
+          "regex_match: Output '' does not match pattern '^\\d{4}-\\d{2}-\\d{2}$'",
+          "min_length: Output length 0 is below min_length 10"
+        ],
+        "latency_ms": 11.411261977627873,
+        "execution_error": null
+      },
+      {
+        "input": "January 15, 2026\u0000\u001f",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.36516993865371,
+        "execution_error": null
+      },
+      {
+        "input": "\u0000\u001fJanuary 15, 2026",
+        "output": "2026-01-15",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.99810281395912,
+        "execution_error": null
+      },
+      {
+        "input": "2026/09/05\u0000\u001f",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.025943072512746,
+        "execution_error": null
+      },
+      {
+        "input": "\u0000\u001f2026/09/05",
+        "output": "2026-09-05",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.961818020790815,
+        "execution_error": null
+      },
+      {
+        "input": "December 31st, 2025\u0000\u001f",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 61.84629793278873,
+        "execution_error": null
+      },
+      {
+        "input": "\u0000\u001fDecember 31st, 2025",
+        "output": "2025-12-31",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.08640104159713,
+        "execution_error": null
+      },
+      {
+        "input": "2024-02-29\u0000\u001f",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 62.00934713706374,
+        "execution_error": null
+      },
+      {
+        "input": "\u0000\u001f2024-02-29",
+        "output": "2024-02-29",
+        "passed": true,
+        "failed_rules": [],
+        "latency_ms": 64.02037013322115,
+        "execution_error": null
+      }
+    ]
+  }
+}
