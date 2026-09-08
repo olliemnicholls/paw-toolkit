@@ -1,0 +1,1303 @@
+{
+  "label": "3080-fewshot8",
+  "task_name": "phone_extractor",
+  "spec": "Pull out the phone number from this text and format it consistently.",
+  "max_spec_examples": 8,
+  "judge_model": "claude-haiku-4-5-20251001",
+  "total_cases": 134,
+  "structural_pass_rate": 92.53731343283582,
+  "semantic_pass_rate": 85.82089552238806,
+  "divergence_count": 21,
+  "divergences": [
+    {
+      "input": "Office line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output dropped the +1 country code present in input without justification.",
+      "failed_rules": []
+    },
+    {
+      "input": "Call 555-123-4567 or 555-987-6543, whichever works.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Spec says \"pull out the phone number\" (singular), but input contains two numbers. Model should acknowledge ambiguity.",
+      "failed_rules": []
+    },
+    {
+      "input": "International line: +44 20 7946 0958",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output is a placeholder number, not the actual phone number from input.",
+      "failed_rules": []
+    },
+    {
+      "input": "Reach me at 555-222-3333 ext. 204.",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output omits extension 204, which is part of the phone number contact information.",
+      "failed_rules": []
+    },
+    {
+      "input": "no phone number here, just an email: a@b.com",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "No phone number exists in input; empty string is reasonable response.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Empty input reasonably produces empty output; no phone number to extract.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "\u200b",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains only zero-width space; empty output is reasonable response.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "\u200c",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains only invisible zero-width character; empty output is reasonable.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "\u200cOffice line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed country code +1 without justification; spec says format consistently, not strip components.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eCall me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output ignores potential security issue.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eMy number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output includes formatting, but spec asks to \"pull out\" the number itself.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eContact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output should flag or handle this.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202ePhone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; model should flag or handle this security issue.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eYou can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output ignores potential obfuscation.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\u202e",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed country code +1 without justification; spec says format consistently, not normalize.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eOffice line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output omits country code (+1) present in input; inconsistent formatting choice.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eText 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output doesn't acknowledge potential obfuscation risk.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eHer cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output doesn't acknowledge potential obfuscation.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains only BOM character, no phone number present. Empty output reasonable.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains no phone number; empty string is reasonable response.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Office line: +1-555-666-7777\u0000\u001f",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed country code (+1) without justification; spec says format consistently, not strip information.",
+      "failed_rules": []
+    }
+  ],
+  "all_cases": [
+    {
+      "input": "Call me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Successfully extracted phone number in standard formatted convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard US convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output dropped the +1 country code present in input without justification.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard consistent parenthetical notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "Call 555-123-4567 or 555-987-6543, whichever works.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Spec says \"pull out the phone number\" (singular), but input contains two numbers. Model should acknowledge ambiguity.",
+      "failed_rules": []
+    },
+    {
+      "input": "Dial 1-800-FLOWERS for delivery.",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Model failed to extract \"1-800-FLOWERS\" phone number present in input text.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "International line: +44 20 7946 0958",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output is a placeholder number, not the actual phone number from input.",
+      "failed_rules": []
+    },
+    {
+      "input": "Reach me at 555-222-3333 ext. 204.",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output omits extension 204, which is part of the phone number contact information.",
+      "failed_rules": []
+    },
+    {
+      "input": "no phone number here, just an email: a@b.com",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "No phone number exists in input; empty string is reasonable response.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "\uff15\uff15\uff15\uff0d\uff11\uff12\uff13\uff0d\uff14\uff15\uff16\uff17",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly identified phone number despite full-width characters, reformatted to standard US format.",
+      "failed_rules": []
+    },
+    {
+      "input": "",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Empty input reasonably produces empty output; no phone number to extract.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "\u200b",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains only zero-width space; empty output is reasonable response.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Call me at 555-123-4567 tomorrow.\u200b",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard (XXX) XXX-XXXX notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bCall me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard consistent formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.\u200b",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and maintained standard formatting (555) 987-6543.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bMy number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting (555) 987-6543.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333\u200b",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent US format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bContact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567\u200b",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bPhone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and applied standard US formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.\u200b",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US phone formatting consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bYou can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\u200b",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard domestic format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bOffice line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.\u200b",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bText 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard (XXX) XXX-XXXX notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.\u200b",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard parenthetical format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200bHer cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard consistent formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200c",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains only invisible zero-width character; empty output is reasonable.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Call me at 555-123-4567 tomorrow.\u200c",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cCall me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard consistent formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.\u200c",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted and maintained standard phone number format (555) 987-6543.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cMy number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting (555) 987-6543.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333\u200c",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and converted to standard US format (555) 222-3333.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cContact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted correct phone number and applied standard consistent formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567\u200c",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and applied standard US formatting convention consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cPhone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.\u200c",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cYou can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted correct number and applied standard US phone formatting consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\u200c",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard US format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cOffice line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed country code +1 without justification; spec says format consistently, not strip components.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.\u200c",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cText 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and applied standard formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.\u200c",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard consistent formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u200cHer cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent (555) 321-0000 format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202e",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input contains only invisible Unicode character; returning empty string is reasonable but ambiguous.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Call me at 555-123-4567 tomorrow.\u202e",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eCall me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output ignores potential security issue.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.\u202e",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting (555) 987-6543.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eMy number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output includes formatting, but spec asks to \"pull out\" the number itself.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333\u202e",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eContact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output should flag or handle this.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567\u202e",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202ePhone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; model should flag or handle this security issue.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.\u202e",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and formatted it consistently using standard US format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eYou can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output ignores potential obfuscation.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\u202e",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed country code +1 without justification; spec says format consistently, not normalize.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eOffice line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Output omits country code (+1) present in input; inconsistent formatting choice.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.\u202e",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eText 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output doesn't acknowledge potential obfuscation risk.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.\u202e",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard (XXX) XXX-XXXX notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u202eHer cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Input contains right-to-left override character; output doesn't acknowledge potential obfuscation.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeff",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains only BOM character, no phone number present. Empty output reasonable.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Call me at 555-123-4567 tomorrow.\ufeff",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard parenthetical format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffCall me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard consistent formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.\ufeff",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number in standard formatted parentheses-hyphen style.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffMy number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting (555) 987-6543.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333\ufeff",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffContact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567\ufeff",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffPhone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.\ufeff",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffYou can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\ufeff",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard US domestic format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffOffice line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard US format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.\ufeff",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffText 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.\ufeff",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent (XXX) XXX-XXXX style.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ufeffHer cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent (XXX) XXX-XXXX format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": true,
+      "judge_reason": "Input contains no phone number; empty string is reasonable response.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Call me at 555-123-4567 tomorrow.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent parenthetical notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Call me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting with parentheses and hyphens.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8My number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting (555) 987-6543.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Contact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Phone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard consistent formatting (parentheses/hyphens).",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8You can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard US format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Office line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard US notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Text 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and applied standard consistent formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.\ud83d\udd25\ud83d\ude80\ud83d\udea8",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted correct number and reformatted to standard US phone format consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\ud83d\udd25\ud83d\ude80\ud83d\udea8Her cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input contains null byte only; returning empty string is reasonable but ambiguous whether phone number was found or input was invalid.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Call me at 555-123-4567 tomorrow.\\u0000",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model extracted phone number and reformatted to standard parenthetical notation consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Call me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.\\u0000",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000My number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and maintained standard formatting as specified.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333\\u0000",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Contact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567\\u0000",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Phone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and formatted to standard US convention (555) 123-4567.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.\\u0000",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000You can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\\u0000",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard US notation consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Office line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Extracted phone number and reformatted to standard US notation consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.\\u0000",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and applied standard US formatting consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Text 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard (XXX) XXX-XXXX notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.\\u0000",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\\u0000Her cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied consistent (XXX) XXX-XXXX formatting.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001f",
+      "output": "",
+      "structural_pass": false,
+      "semantic_pass": false,
+      "judge_reason": "Input contains only non-printable control characters, no phone number exists to extract.",
+      "failed_rules": [
+        "regex_match: Output '' does not match pattern '^\\(\\d{3}\\) \\d{3}-\\d{4}$'",
+        "min_length: Output length 0 is below min_length 14"
+      ]
+    },
+    {
+      "input": "Call me at 555-123-4567 tomorrow.\u0000\u001f",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard (XXX) XXX-XXXX format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fCall me at 555-123-4567 tomorrow.",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and reformatted to standard parenthetical notation.",
+      "failed_rules": []
+    },
+    {
+      "input": "My number is (555) 987-6543.\u0000\u001f",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and formatted it consistently as shown.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fMy number is (555) 987-6543.",
+      "output": "(555) 987-6543",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and maintained standard formatting as specified.",
+      "failed_rules": []
+    },
+    {
+      "input": "Contact: 555.222.3333\u0000\u001f",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard parentheses-dash convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fContact: 555.222.3333",
+      "output": "(555) 222-3333",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard (XXX) XXX-XXXX format.",
+      "failed_rules": []
+    },
+    {
+      "input": "Phone: 5551234567\u0000\u001f",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fPhone: 5551234567",
+      "output": "(555) 123-4567",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "You can reach me at 555 444 7890 anytime.\u0000\u001f",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied standard US formatting consistently.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fYou can reach me at 555 444 7890 anytime.",
+      "output": "(555) 444-7890",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard (XXX) XXX-XXXX format.",
+      "failed_rules": []
+    },
+    {
+      "input": "Office line: +1-555-666-7777\u0000\u001f",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": false,
+      "judge_reason": "Removed country code (+1) without justification; spec says format consistently, not strip information.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fOffice line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to consistent (XXX) XXX-XXXX standard format.",
+      "failed_rules": []
+    },
+    {
+      "input": "Text 555-888-9999 for info.\u0000\u001f",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and reformatted to standard consistent format.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fText 555-888-9999 for info.",
+      "output": "(555) 888-9999",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and applied standard formatting convention.",
+      "failed_rules": []
+    },
+    {
+      "input": "Her cell is 555-321-0000.\u0000\u001f",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Model correctly extracted phone number and reformatted to standard parenthetical style.",
+      "failed_rules": []
+    },
+    {
+      "input": "\u0000\u001fHer cell is 555-321-0000.",
+      "output": "(555) 321-0000",
+      "structural_pass": true,
+      "semantic_pass": true,
+      "judge_reason": "Correctly extracted phone number and applied consistent (XXX) XXX-XXXX formatting.",
+      "failed_rules": []
+    }
+  ]
+}

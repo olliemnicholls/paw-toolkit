@@ -117,9 +117,20 @@ def main() -> int:
         print("programasweights SDK not importable", file=sys.stderr)
         return 2
 
-    print(f"[compile] task={suite.task_name!r} spec={suite.spec!r} max_spec_examples={args.max_spec_examples}")
+    # BUG, found 2026-09-09 while reading a suspiciously-unchanged A/B result: this used
+    # to hardcode `examples=[]` here regardless of --max-spec-examples, so every
+    # "fewshot" A/B run silently compiled with zero examples folded in -- identical to
+    # the terse-spec baseline it was supposed to be compared against. --max-spec-examples
+    # only configured the backend's *cap*; with no examples ever passed in, there was
+    # nothing for that cap to apply to. Fixed: build real examples from the suite's own
+    # standard_cases, same convention as scripts/measure_real_backend.py.
+    examples = [{"input": c.input, "output": c.expected} for c in suite.standard_cases if c.expected]
+    examples_used = min(len(examples), args.max_spec_examples)
+    print(f"[compile] task={suite.task_name!r} spec={suite.spec!r} "
+          f"max_spec_examples={args.max_spec_examples} examples_available={len(examples)} "
+          f"examples_folded_in={examples_used}")
     t0 = time.perf_counter()
-    backend.compile(suite.spec, [], adapter_path)  # no examples folded in -- terse-spec test
+    backend.compile(suite.spec, examples, adapter_path)
     compile_s = time.perf_counter() - t0
     print(f"[compile] done in {compile_s:.1f}s -> {adapter_path}")
 

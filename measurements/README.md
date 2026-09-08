@@ -274,6 +274,59 @@ is, not a clean ground truth** — a stricter or more lenient judge prompt would
 numbers without anything about the adapters changing. Full case-by-case output, including
 every judge reason string, is in `measurements/semantic-*-3080-*.json`.
 
+## Does folding examples into the spec text actually help? A real answer, on the second try
+
+`paw_kit/backend/programasweights.py`'s own docstring names this as an open question:
+the upstream compiler doesn't accept training examples directly, so traced/gold
+examples can only reach it as few-shot demonstrations folded into the spec text
+(`max_spec_examples`) — "whether it measurably helps is an open question... do not
+assume it does." This section answers it, on the three terse specs above: same spec,
+same compiler, `max_spec_examples=0` (already measured above) vs `max_spec_examples=8`
+(all 8 available standard-case examples folded in).
+
+**First attempt was wrong and is worth stating plainly rather than quietly fixing**:
+`scripts/measure_semantic_correctness.py` originally called
+`backend.compile(suite.spec, [], adapter_path)` — a hardcoded empty examples list,
+regardless of `--max-spec-examples`. The flag configured the backend's cap; with
+nothing ever passed in for it to cap, three "fewshot8" runs silently compiled with zero
+examples folded in, identical to the baseline they were meant to be compared against.
+Caught because the first result set looked suspiciously unchanged (phone-extractor
+still 0% structural with the exact same dash-separated outputs) — confirmed via the
+compile manifest's own `examples_folded_into_spec` field, which read `0` for a run
+that had just been given `--max-spec-examples 8`. Fixed (build real examples from
+`suite.standard_cases`, same convention as `measure_real_backend.py`) and re-run; the
+numbers below are from the corrected script, confirmed via each manifest actually
+reading `examples_folded_into_spec: 8`.
+
+| Spec | Structural: 0 examples → 8 examples | Semantic: 0 examples → 8 examples |
+|---|---|---|
+| Phone extractor (`"...format it consistently"`) | **0.0% → 93.3%** | 89.6% → 86.4% |
+| Review sentiment (`"positive or negative"`) | 92.5% → **100.0%** | 89.5% → 88.7% |
+| JSON repair (docs' own example) | 93.5% → 93.2% | 69.9% → 68.4% |
+
+**Yes, dramatically, for format ambiguity; no, for everything else.** The phone
+extractor and review-sentiment jumps are real and large: with 8 examples all showing
+`(555) 123-4567`-style formatting, the adapter switched from reliably outputting
+`555-123-4567` to reliably outputting the parenthesized format the examples
+demonstrated — the exact ambiguity flagged earlier in this document as the reason the
+0-example run failed structurally. Review sentiment's forced-binary leakage
+(`"neutral"` on ambiguous input) also disappeared entirely once examples pinned the
+output down. JSON repair, whose failures were mostly about invisible-Unicode handling
+the docs' own two named defects (missing quotes, trailing commas) never covered, was
+unmoved — the 8 examples don't demonstrate anything about control characters, so there
+was nothing for them to fix.
+
+**A new failure mode showed up specifically because of the examples, not despite
+them**: given `"International line: +44 20 7946 0958"` (a real UK number, nothing like
+the examples), the 8-example adapter returned `(555) 123-4567` — not a formatting
+choice, the literal example number, verbatim, for an input that shares nothing with it.
+The 0-example adapter never did this; its worst failures were dropping information
+(an extension, a country code) or fabricating plausible-looking digits, not regurgitating
+a training example wholesale. Folding in examples fixed the format-consistency problem
+and introduced a memorization-under-distribution-shift one — both real, on the same
+adapter, from the same fix. Worth knowing before treating "fold in examples" as a
+free-standing recommendation rather than a trade-off.
+
 ## Fail-open safety under a real failure
 
 Every existing test of "local compiled functions are never a single point of failure"
