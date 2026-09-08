@@ -197,10 +197,10 @@ def test_assertion_evaluator() -> None:
     f_nc, _ = evaluate_assertion("contains FAIL here", AssertionRule(rule="not_contains", value="FAIL"))
     assert f_nc is False
 
-    # Unknown rule
-    unk_pass, unk_msg = evaluate_assertion("val", AssertionRule(rule="unknown_rule"))
-    assert unk_pass is False
-    assert "Unknown assertion rule" in unk_msg
+    # Unknown rule: now rejected at construction time (fail fast, see
+    # test_assertion_rule_rejects_unknown_rule_name below) -- evaluate_assertion's own
+    # "Unknown assertion rule" fallback is still exercised directly, via the
+    # model_construct() bypass, in the PAW-TEST-04 section further down.
 
 
 def test_test_runner_execution(tmp_path: Path) -> None:
@@ -231,6 +231,34 @@ def test_test_runner_execution(tmp_path: Path) -> None:
     assert report.failed_cases == 0
     assert report.is_success is True
     assert report.pass_rate == 100.0
+
+
+def test_test_runner_failed_rule_names_matches_failed_rules(tmp_path: Path) -> None:
+    """`failed_rule_names` (added alongside the free-text `failed_rules`, see
+    conductor/deferred/index.md's "Off-spec label leakage" entry) lets a caller check
+    which rule failed without string-parsing `failed_rules`."""
+    adapter_path = str(tmp_path / "bad_output.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Always wrong", examples=[{"input": "x", "output": "not-a-date"}], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="failed_rule_names_test",
+        spec="Always wrong",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="x")],
+        assertions=[
+            AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+            AssertionRule(rule="max_length", value=3),
+        ],
+        fuzzing=FuzzingConfig(),
+    )
+
+    report = TestRunner(backend=backend).run(config)
+    assert report.failed_cases == 1
+    result = report.results[0]
+    assert result.passed is False
+    assert result.failed_rule_names == ["regex_match", "max_length"]
+    assert len(result.failed_rule_names) == len(result.failed_rules)
 
 
 def test_active_learning_self_healing_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -500,6 +528,25 @@ def test_evaluate_assertion_min_length_non_integer_value_fails_gracefully_PAW_TE
     passed, reason = evaluate_assertion("hello", rule)
     assert passed is False
     assert "must be an integer" in reason
+
+
+def test_evaluate_assertion_unknown_rule_fails_gracefully_via_model_construct_PAW_TEST_04() -> None:
+    """evaluate_assertion's own fallback for a rule name it doesn't implement -- reachable
+    only via model_construct() now that AssertionRule rejects an unknown rule name at
+    construction time (see test_assertion_rule_rejects_unknown_rule_name)."""
+    rule = AssertionRule.model_construct(rule="unknown_rule")
+    passed, reason = evaluate_assertion("val", rule)
+    assert passed is False
+    assert "Unknown assertion rule" in reason
+
+
+def test_assertion_rule_rejects_unknown_rule_name() -> None:
+    """A suite.yaml naming a plausible-sounding but unimplemented rule (e.g. `contains`,
+    `is_valid_json`, `one_of` -- none of which evaluate_assertion actually implements)
+    used to load successfully and silently fail every case at eval time. Now fails fast
+    at construction, matching this class's own _validate_value convention."""
+    with pytest.raises(ValueError, match="Unknown assertion rule"):
+        AssertionRule(rule="contains", value="x")
 
 
 # --- PAW-TEST-06: bounded fuzzer payload length and total case count --------------

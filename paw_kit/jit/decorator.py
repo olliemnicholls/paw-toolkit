@@ -3,6 +3,7 @@
 from functools import wraps
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -19,7 +20,31 @@ from paw_kit.schema.loader import get_default_backend, load
 
 T = TypeVar("T")
 
+logger = logging.getLogger("paw_kit.jit")
+
 _GLOBAL_COMPILER = BackgroundCompiler()
+
+# Deferred-topic fix (conductor/deferred/index.md, "Silent fail-open, no signal"):
+# the fail-open except block below used to be silent -- no log, no counter -- on the
+# path the README recommends for real production use. `_FAIL_OPEN_COUNTS` is a plain
+# in-process counter (reset on restart, not persisted -- this is a signal for "is this
+# happening at all," not an audit log) keyed on task_id, read via
+# `wrapper.get_fail_open_count()`.
+_FAIL_OPEN_COUNTS: Dict[str, int] = {}
+_FAIL_OPEN_COUNTS_LOCK = threading.Lock()
+
+
+def _record_fail_open(task_id: str, exc: Exception) -> None:
+    with _FAIL_OPEN_COUNTS_LOCK:
+        _FAIL_OPEN_COUNTS[task_id] = _FAIL_OPEN_COUNTS.get(task_id, 0) + 1
+        count = _FAIL_OPEN_COUNTS[task_id]
+    logger.warning(
+        "paw_kit.jit fail-open: task_id=%s fell back to the wrapped function after a "
+        "local-inference error (%s: %s). This is call #%d for this task since process "
+        "start -- if that number keeps climbing, the compiled adapter is not being used "
+        "and every call is silently paying the wrapped function's own cost instead.",
+        task_id, type(exc).__name__, exc, count,
+    )
 
 # PAW-JIT-05: cache of loaded adapter callables, keyed on
 # task_id -> {(adapter_path, stat-identity, backend): callable}. The outer task_id
@@ -184,8 +209,12 @@ def compile_on_hit(
                     else:
                         output_str = active_backend.infer(adapter_path, input_payload)
                         return output_str  # type: ignore[return-value]
-                except Exception:
-                    # Fail-Open Safety: transparently route to wrapped function on local failure
+                except Exception as exc:
+                    # Fail-Open Safety: transparently route to wrapped function on local failure.
+                    # Transparent to the *caller* deliberately stays true -- this only adds a
+                    # log line and a counter a developer has to go looking for, not any change
+                    # to the return value or exception behavior on this path.
+                    _record_fail_open(task_id, exc)
                     return func(*args, **kwargs)
 
             # 2. Adapter not ready: invoke wrapped function (teacher)
@@ -234,6 +263,9 @@ def compile_on_hit(
         wrapper.db = db  # type: ignore[attr-defined]
         wrapper.get_call_count = lambda: db.get_call_count(task_id)  # type: ignore[attr-defined]
         wrapper.is_compiled = lambda: db.get_adapter_path(task_id) is not None  # type: ignore[attr-defined]
+        # PAW-JIT: see _record_fail_open -- in-process count of "no signal" fail-opens
+        # for this task since process start, not persisted across restarts.
+        wrapper.get_fail_open_count = lambda: _FAIL_OPEN_COUNTS.get(task_id, 0)  # type: ignore[attr-defined]
         return wrapper
 
     return decorator

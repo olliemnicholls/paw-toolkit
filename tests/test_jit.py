@@ -184,8 +184,10 @@ def test_compile_on_hit_with_pydantic_model(tmp_path: Path) -> None:
     assert res3.confidence == 0.95
 
 
-def test_compile_on_hit_fail_open_safety(tmp_path: Path) -> None:
-    """Verify Fail-Open safety: local adapter errors fall back transparently to teacher."""
+def test_compile_on_hit_fail_open_safety(tmp_path: Path, caplog) -> None:
+    """Verify Fail-Open safety: local adapter errors fall back transparently to teacher,
+    and (conductor/deferred/index.md, "Silent fail-open, no signal") that the fallback
+    is no longer silent: it logs and increments a per-task counter a developer can poll."""
     cache_dir = str(tmp_path / "paw_cache_failopen")
     backend = MockPAWBackend()
 
@@ -208,15 +210,23 @@ def test_compile_on_hit_fail_open_safety(tmp_path: Path) -> None:
     robust_service("input")
     assert robust_service.is_compiled()  # type: ignore[attr-defined]
     assert teacher_invocations == 1
+    assert robust_service.get_fail_open_count() == 0  # type: ignore[attr-defined]
 
     # Now intentionally break the compiled adapter to simulate runtime exception/corruption
     adapter_path = robust_service.db.get_adapter_path(robust_service.task_id)  # type: ignore[attr-defined]
     backend.set_default_response(adapter_path, "MALFORMED_OUTPUT_CAUSING_PARSE_ERROR")
 
     # Call 2: Local adapter throws/fails schema parsing -> must transparently fall back!
-    res = robust_service("unknown input")
+    with caplog.at_level("WARNING", logger="paw_kit.jit"):
+        res = robust_service("unknown input")
     assert teacher_invocations == 2  # Teacher was engaged as fail-open fallback!
     assert res.sentiment == "fallback_positive"
+    assert robust_service.get_fail_open_count() == 1  # type: ignore[attr-defined]
+    assert any("fail-open" in rec.message for rec in caplog.records)
+
+    # Call 3: same broken adapter again -> counter accumulates, not just flips a flag.
+    robust_service("another unknown input")
+    assert robust_service.get_fail_open_count() == 2  # type: ignore[attr-defined]
 
 
 def test_background_compiler_duplicate_prevention(tmp_path: Path) -> None:

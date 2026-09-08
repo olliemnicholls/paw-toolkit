@@ -64,6 +64,13 @@ class TestCaseResult(BaseModel):
     output: str
     passed: bool
     failed_rules: List[str] = Field(default_factory=list)
+    # Deferred-topic fix (conductor/deferred/index.md, "Off-spec label leakage under
+    # forced classification, no signal"): `failed_rules` is human-readable free text
+    # ("not_contains: Output contains forbidden substring 'neutral'") -- fine to read,
+    # but a caller who wants to branch on *which rule* failed without string-parsing
+    # had no structured field to check. This is that field: just the rule names, in the
+    # same order as `failed_rules`, e.g. `["not_contains"]`.
+    failed_rule_names: List[str] = Field(default_factory=list)
     latency_ms: float = 0.0
     # PAW-TEST-08: the raw exception text from a failed backend.infer() call used to
     # be embedded directly in `output` (e.g. "[EXCEPTION: <str(exc)>]"), which could
@@ -200,10 +207,12 @@ class TestRunner:
 
             # Evaluate assertions
             failed_rules: List[str] = []
+            failed_rule_names: List[str] = []
             for rule in config.assertions:
                 passed, reason = evaluate_assertion(out, rule)
                 if not passed:
                     failed_rules.append(f"{rule.rule}: {reason}")
+                    failed_rule_names.append(rule.rule)
 
             case_passed = len(failed_rules) == 0
             if case_passed:
@@ -217,6 +226,7 @@ class TestRunner:
                     output=out,
                     passed=case_passed,
                     failed_rules=failed_rules,
+                    failed_rule_names=failed_rule_names,
                     latency_ms=latency,
                     execution_error=execution_error,
                 )

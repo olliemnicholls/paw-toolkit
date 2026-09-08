@@ -9,6 +9,18 @@ from paw_kit.pathsafety import ensure_contained
 
 _NUMERIC_VALUE_RULES = {"max_length", "min_length"}
 _REQUIRED_VALUE_RULES = _NUMERIC_VALUE_RULES | {"exact_match", "not_contains"}
+# The complete set `evaluate_assertion` (paw_kit/test/runner.py) actually implements.
+# Found 2026-09-09: a suite.yaml naming any *other* rule (e.g. a plausible-sounding
+# `contains`, `is_valid_json`, `one_of`) used to load successfully and then silently
+# fail every single case at eval time via evaluate_assertion's "Unknown assertion rule"
+# fallback -- the same "no signal until you go read the per-case output" shape as the
+# two `conductor/deferred/index.md` entries this fix sits alongside. Validated here, at
+# suite-load time, matching this class's own established convention (see
+# _validate_value's docstring) rather than left for evaluate_assertion's fallback to
+# paper over. A directly-constructed or `model_construct()`-bypassed AssertionRule can
+# still reach that fallback -- see tests/test_test_harness.py's PAW-TEST-04 section --
+# and it stays as the defense-in-depth backstop for that path.
+_KNOWN_RULES = _REQUIRED_VALUE_RULES | {"regex_match"}
 
 # PAW-TEST-01: yaml.safe_load already avoids instantiating arbitrary Python objects,
 # but standard PyYAML places no limit on anchor/alias expansion -- a "YAML bomb"
@@ -52,6 +64,12 @@ class AssertionRule(BaseModel):
     @model_validator(mode="after")
     def _validate_value(self) -> "AssertionRule":
         """Fail fast at suite-load time instead of crashing (or silently mismatching) mid test-run."""
+        if self.rule not in _KNOWN_RULES:
+            raise ValueError(
+                f"Unknown assertion rule {self.rule!r}; evaluate_assertion only implements "
+                f"{sorted(_KNOWN_RULES)}. A typo here would otherwise load successfully and "
+                "silently fail every case at eval time."
+            )
         if self.rule in _REQUIRED_VALUE_RULES and self.value is None:
             raise ValueError(f"'{self.rule}' assertion requires a 'value' field")
         if self.rule in _NUMERIC_VALUE_RULES:
