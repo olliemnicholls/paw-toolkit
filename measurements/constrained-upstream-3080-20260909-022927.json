@@ -1,0 +1,79 @@
+{
+  "label": "3080",
+  "adapter": "measurements/phone_extractor-paw-4b-qwen3-0.6b.paw",
+  "schema_regex": "\\{[ \\t\\n\\r]*\"area_code\"[ \\t\\n\\r]*:[ \\t\\n\\r]*(-?(0|[1-9][0-9]{0,99}))[ \\t\\n\\r]*,[ \\t\\n\\r]*\"number\"[ \\t\\n\\r]*:[ \\t\\n\\r]*\"([^\"\\\\\\x00-\\x1f\\x7f-\\x9f]|\\\\.)*\"[ \\t\\n\\r]*,[ \\t\\n\\r]*\"kind\"[ \\t\\n\\r]*:[ \\t\\n\\r]*(?:\"mobile\"|\"landline\"|\"unknown\")[ \\t\\n\\r]*\\}",
+  "vocabulary_size": 151408,
+  "max_tokens": 128,
+  "unconstrained": [
+    {
+      "input": "Office line: +1-555-666-7777",
+      "output": "(555) 666-7777",
+      "parses": false,
+      "ms": 159.76405143737793
+    },
+    {
+      "input": "Call me on 555-222-3333 ext. 204",
+      "output": "(555) 222-3333",
+      "parses": false,
+      "ms": 86.78340911865234
+    },
+    {
+      "input": "Reach support at (555) 987 6543 anytime",
+      "output": "(555) 987-6543",
+      "parses": false,
+      "ms": 84.90490913391113
+    },
+    {
+      "input": "Text 555-111-2222 for mobile support",
+      "output": "(555) 111-2222",
+      "parses": false,
+      "ms": 80.90472221374512
+    },
+    {
+      "input": "no phone number here at all",
+      "output": "",
+      "parses": false,
+      "ms": 12.879133224487305
+    }
+  ],
+  "constrained": [
+    {
+      "input": "Office line: +1-555-666-7777",
+      "output": "{ \"area_code\": 555, \"number\": \"666-7777\" \t, \"kind\": \"mobile\" \t}",
+      "parses": true,
+      "ms": 46816.437005996704
+    },
+    {
+      "input": "Call me on 555-222-3333 ext. 204",
+      "output": "{ \"area_code\": 555, \"number\": \"222-3333\" \t, \"kind\": \"mobile\" \t}",
+      "parses": true,
+      "ms": 333.67323875427246
+    },
+    {
+      "input": "Reach support at (555) 987 6543 anytime",
+      "output": "{  \t\"area_code\": 555, \"number\": \"987-6543\" \t, \"kind\": \"mobile\" \t}",
+      "parses": true,
+      "ms": 3215.1126861572266
+    },
+    {
+      "input": "Text 555-111-2222 for mobile support",
+      "output": "{  \t\"area_code\": 555, \"number\": \"111-2222\" \t, \"kind\": \"mobile\" \t}",
+      "parses": true,
+      "ms": 333.73475074768066
+    },
+    {
+      "input": "no phone number here at all",
+      "output": "{\"area_code\": 0, \"number\": \"\"",
+      "parses": false,
+      "ms": 8819.45252418518
+    }
+  ],
+  "unconstrained_valid": 0,
+  "constrained_valid": 4,
+  "cases": 5,
+  "fsm_states_visited": 30,
+  "get_allowed_tokens_s": 50.845,
+  "mask_s": 0.682,
+  "logits_processor_calls": 1719,
+  "ms_per_token_masking": 0.397
+}

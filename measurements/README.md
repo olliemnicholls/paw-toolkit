@@ -487,6 +487,98 @@ structural rate as `93.3%` while the run artifact it cites
 one. Corrected at the source (the table now reads `92.5%`); this section's own
 `92.5% (124/134)` fast-compiler row was already right throughout.
 
+## Constrained decoding against the real upstream adapter: the hook wasn't missing
+
+Every claim in this project about grammar-constrained decoding has carried the same
+caveat: it has never been applied to a real *compiled PAW adapter*.
+`measure_schema_real_model.py` proved the FSM works, but against a separate HuggingFace
+model. `ProgramAsWeightsBackend.infer()` warns it "cannot apply grammar_constraint at
+decoding time: the upstream SDK exposes no grammar/logits hook." `RealPAWBackend` — the
+placeholder where masking was supposed to eventually live — raises `NotImplementedError`.
+The conclusion drawn from that, in this document and in `README.md`, was that paw-kit
+would need its own in-process PyTorch runtime before `paw.schema` could reach a real
+adapter.
+
+**That conclusion was wrong, and it was wrong about the SDK's *public* surface only.**
+The upstream runtime is a hand-rolled decode loop over `llama-cpp-python`
+(`programasweights/runtime_llamacpp.py:490-500`). It holds a real `llama_cpp.Llama` at
+`PawFunction._llm` and calls `_llm.sample(temp=...)` once per token.
+`llama_cpp.Llama.sample()` accepts both `logits_processor=` and `grammar=`. The SDK just
+never passes either. The hook is not missing — it is behind a private attribute.
+
+`scripts/measure_constrained_decoding_upstream.py` injects one. It asks the
+phone-extractor adapter (compiled to emit a bare string like `(555) 666-7777`) for a
+Pydantic object it was never trained on, with the regex produced by paw-kit's own
+`pydantic_to_regex`:
+
+```python
+class Contact(BaseModel):
+    area_code: int
+    number: str
+    kind: Literal["mobile", "landline", "unknown"]
+```
+
+| | Valid `Contact` parses | Mean latency |
+|---|---|---|
+| Unconstrained (SDK as shipped) | **0/5** | 74 ms |
+| `RegexLogitsProcessor` injected | **4/5** | 334 ms warm, once every FSM state is cached |
+
+```
+'Office line: +1-555-666-7777'
+   unconstrained -> '(555) 666-7777'
+   constrained   -> '{ "area_code": 555, "number": "666-7777", "kind": "mobile" }'
+```
+
+A program compiled to emit a bare phone string was forced into a JSON schema it has no
+training signal for, with the digits still correctly extracted from the input. Nothing
+but token-level masking can do that, so this is not ambiguous: **paw-kit's constrained
+decoding does work against the real upstream backend.** No in-process PyTorch runtime is
+required for it, which was the single strongest argument for building one.
+
+**The per-token masking cost is fine; the warm-up cost is not.** Instrumented over the
+same run:
+
+| | |
+|---|---|
+| numpy masking | 0.68 s over 1719 tokens = **0.40 ms/token** |
+| `get_allowed_tokens` | **50.85 s** across 30 distinct FSM states |
+
+Masking itself comes in comfortably under the "<2ms per-token overhead" budget in
+`roadmap.md` — that claim survives contact with a 151k-token vocabulary. Essentially all
+the cost is `get_allowed_tokens`, which walks the whole vocabulary the first time it sees
+each FSM state: ~1.7 s per new state, 30 states for this schema, and the first call pays
+most of it (46.8 s, vs 334 ms for a later call that revisits only cached states).
+
+That is a **warm-up** cost, not a per-token one, and in principle it is fully
+precomputable: the state → allowed-token-set map depends only on (regex, vocabulary),
+both of which are fixed before any input arrives. Today it is recomputed from scratch in
+every process, and `RegexLogitsProcessor`'s LRU caches are in-memory only. Persisting
+that map per (schema, vocabulary) is the obvious fix and is not attempted here.
+
+**Fragility, stated plainly.** This reaches into `PawFunction._llm` — a private attribute
+of a third party's object — and monkeypatches `sample`. It is unsupported and can break
+on any upstream release, with no deprecation contract to rely on. The script fails loudly
+with a specific message if `_llm` ever stops being there, but that is detection, not
+protection. **Nothing in this section is shipped in `paw_kit/`**, and it should not be
+copied there as-is. The defensible near-term ask is upstream-facing: `PawFunction.__call__`
+takes `(input_text, max_tokens, temperature)` and could take `logits_processor` and pass
+it through to the `sample()` call it already makes. That is a small, additive upstream
+change that would turn this from a private-attribute hack into a supported integration —
+and it is a concrete thing to open an issue about rather than a reason to build a
+competing runtime.
+
+**The 5th case is a real limitation, not a rounding error.** Given `"no phone number here
+at all"`, the constrained adapter emits `{"area_code": 0, "number": ""` and stalls: the
+model wants to stop, the FSM will not accept a terminator until the schema is satisfied,
+and it exhausts the token budget mid-object. This is the same family as the forced-binary
+`"neutral"` leakage logged elsewhere in this document — a schema with no representable
+"not applicable" case, meeting input that has no valid answer. Constrained decoding makes
+the output *shaped*; it cannot make it *answerable*.
+
+**Scope limits**: one adapter, one schema, one machine, one run. The comparison is
+structural validity only — no semantic judging was run on the constrained outputs, so
+"4/5 parse" says nothing about whether `kind: "mobile"` is the right classification.
+
 ## Reproducing
 
 ```bash
@@ -502,6 +594,10 @@ uv run python scripts/measure_semantic_correctness.py measurements/spec-drafts/s
 
 # re-score the JIT-speedup ticket-triage adapter against a fresh, independent teacher call
 uv run python scripts/measure_triage_semantic_agreement.py --label your-machine-name
+
+# constrained decoding against a real compiled adapter (needs no PAW_API_KEY --
+# runs offline against an already-cached program)
+uv run python scripts/measure_constrained_decoding_upstream.py --label your-machine-name
 ```
 
 **A note on cost, because we went looking and found nothing to report**: the upstream

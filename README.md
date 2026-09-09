@@ -68,7 +68,7 @@ a frontier API, and who want evidence before they trust it:
 |---|---|---|
 | Tracing decorator, SQLite trace DB, background compile, hot-swap, fail-open | Implemented, unit-tested, **and run for real**: a real Claude teacher + real compiled adapter (~11x steady-state latency, not yet checked for output *correctness*), plus two real induced failures (one confirmed clean fallback, one inconclusive) | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the numbers above — see [`measurements/`](./measurements) |
 | `suite.yaml` runner, fuzzer, active-learning loop | Implemented, unit-tested, **and run for real** against the real 11/82 fuzzer failures below with a live Claude teacher: 0 repaired, correctly — the teacher declines to hallucinate labels the suite's own assertions would reject, surfacing a gap in the suite's assertions rather than the model | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the run above — see [`measurements/`](./measurements) |
-| Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **and confirmed against a real model**: 15/15 valid Pydantic parses (100%) both raw and fence-stripped, vs 0/15 raw / 11/15 (73%) fence-stripped unconstrained. **Not shipped wired into any `paw_kit` backend** — `RealPAWBackend.infer()` forwards `grammar_constraint` to a caller-supplied `runtime_executor` unmodified; applying it is the executor's job, demonstrated only in `scripts/measure_schema_real_model.py`, not in the library itself | Real generation on `Qwen2.5-0.5B-Instruct`; an initial ~13x latency-cost measurement was a caching bug in the test script (fixed) — properly measured, constrained decoding is roughly on par with unconstrained once warm; see [`measurements/`](./measurements) |
+| Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **and confirmed against a real model**: 15/15 valid Pydantic parses (100%) both raw and fence-stripped, vs 0/15 raw / 11/15 (73%) fence-stripped unconstrained. **Not shipped wired into any `paw_kit` backend**, but no longer for want of a place to put it: masking has now been driven against a real upstream-compiled adapter (0/5 → 4/5 valid Pydantic parses, 0.40ms/token) by injecting it into the llama.cpp sampling loop the upstream SDK already runs — see [`measurements/`](./measurements). That path reaches a *private* SDK attribute and is an experiment, not a shipped feature; the blocker to shipping it is a one-time-per-schema FSM warm-up (~1.7s per new state), not the absence of a runtime | Real generation on `Qwen2.5-0.5B-Instruct`; an initial ~13x latency-cost measurement was a caching bug in the test script (fixed) — properly measured, constrained decoding is roughly on par with unconstrained once warm; see [`measurements/`](./measurements) |
 | HTTP server, Docker export, dataset export, CLI | Implemented, unit-tested | `MockPAWBackend` |
 | `ProgramAsWeightsBackend` (official upstream SDK) | Implemented, unit-tested against a fake SDK, **and run end-to-end against the real service and a real model** | Real compile + inference on an RTX 3080 and an A100; see [`measurements/`](./measurements) |
 | `RealPAWBackend` (in-process PyTorch/PEFT) | Stub. Raises `NotImplementedError`. | Nothing |
@@ -309,8 +309,12 @@ In order, and nothing gets announced until the first item is done:
    (verbatim memorization of an example for out-of-distribution input). Not a flat
    yes/no; read the section before deciding whether to fold examples in for your task.
 3. Wire `--backend real` in the CLI to `ProgramAsWeightsBackend`.
-4. Either implement `RealPAWBackend` (in-process PEFT on Qwen3-0.6B, where the logits
-   processor can actually be applied) or delete it.
+4. Decide `RealPAWBackend`'s fate. It was the placeholder for an in-process PEFT path,
+   justified mainly as "the only place the logits processor could ever be applied" —
+   which [`measurements/`](./measurements) has since shown to be false: constrained
+   decoding reaches the real upstream adapter through llama.cpp's own sampling loop.
+   The remaining question is narrower, and is about the FSM warm-up cost and whether
+   upstream will accept a `logits_processor` passthrough, not about building a runtime.
 
 ## Relationship to upstream
 
