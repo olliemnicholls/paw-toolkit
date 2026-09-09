@@ -14,7 +14,7 @@ from rich.table import Table
 import typer
 
 from paw_kit.backend.mock import MockPAWBackend
-from paw_kit.backend.real import RealPAWBackend
+from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.pathsafety import ensure_contained
 from paw_kit.test.active import run_active_learning_loop
 from paw_kit.test.runner import TestRunner
@@ -37,22 +37,55 @@ def test_app_main() -> None:
 
 
 def _resolve_cli_backend(backend_type: str) -> Any:
-    """Resolve backend from CLI flag with graceful degradation and clear guidance."""
-    if backend_type.lower() == "real":
-        real_backend = RealPAWBackend()
-        if not real_backend.is_available():
-            console.print(
-                "[bold yellow]Warning:[/bold yellow] Real GPU/CPU backend requires PyTorch and transformers packages.\n"
-                "  To install: [cyan]pip install 'paw-kit[torch]'[/cyan]\n"
-                "  Falling back to [green]MockPAWBackend[/green] for zero-hardware execution."
-            )
-        else:
-            console.print(
-                "[bold yellow]Note:[/bold yellow] Direct PyTorch neural execution is under active development for v0.2.\n"
-                "  Falling back to [green]MockPAWBackend[/green] for this run."
-            )
+    """Resolve the --backend flag to a concrete backend.
+
+    `real` resolves to `ProgramAsWeightsBackend` -- the official upstream SDK, and the
+    only backend in paw-kit proven end to end against a real model (see
+    `measurements/`). It previously resolved to `RealPAWBackend`, whose `compile()` and
+    `infer()` raise `NotImplementedError`, so this function returned `MockPAWBackend()`
+    on *every* path: `paw-test check --backend real` printed a "falling back" notice and
+    then tested a dictionary lookup. That made the CLI structurally incapable of
+    exercising a real compiled adapter, which is the one thing `paw-test` exists to do.
+
+    Falling back to the mock is still possible (the SDK is an optional dependency), but
+    it is now the exception and it is always announced, never the silent default.
+    """
+    resolved = backend_type.strip().lower()
+
+    if resolved == "mock":
         return MockPAWBackend()
-    return MockPAWBackend()
+
+    if resolved != "real":
+        raise typer.BadParameter(
+            f"Unknown backend {backend_type!r}. Expected 'mock' or 'real'.",
+            param_hint="--backend",
+        )
+
+    backend = ProgramAsWeightsBackend()
+    if not backend.is_available():
+        console.print(
+            "[bold yellow]Warning:[/bold yellow] --backend real needs the official upstream SDK.\n"
+            "  To install: [cyan]pip install programasweights "
+            "--extra-index-url https://pypi.programasweights.com/simple/[/cyan]\n"
+            "  Falling back to [green]MockPAWBackend[/green] -- results below come from a "
+            "dictionary lookup, not a model."
+        )
+        return MockPAWBackend()
+
+    if not backend.has_api_key():
+        # Not fatal: inference against an already-cached program needs no key. Only
+        # compilation does, and the backend raises its own clear error if one is needed.
+        console.print(
+            "[bold yellow]Note:[/bold yellow] PAW_API_KEY is not set. Inference on an "
+            "already-compiled adapter will work; compiling a new one will not.\n"
+            "  Get a key at [cyan]https://programasweights.com/settings[/cyan]"
+        )
+
+    console.print(
+        f"[green]Backend:[/green] ProgramAsWeightsBackend "
+        f"([dim]compiler={backend.compiler}[/dim])"
+    )
+    return backend
 
 
 def _run_triage_demo() -> None:

@@ -525,3 +525,70 @@ def test_cli_serve_api_key_warns_on_commandline_PAW_CLI_07(
     assert res_env.exit_code == 0
     assert "Warning" not in res_env.output
 
+
+
+# ---------------------------------------------------------------- backend resolution
+
+
+def test_resolve_cli_backend_mock_is_default():
+    """`--backend mock` (the default) resolves to MockPAWBackend, unchanged."""
+    from paw_kit.backend.mock import MockPAWBackend
+    from paw_kit.cli import _resolve_cli_backend
+
+    assert isinstance(_resolve_cli_backend("mock"), MockPAWBackend)
+
+
+def test_resolve_cli_backend_real_returns_upstream_not_mock(monkeypatch):
+    """`--backend real` resolves to ProgramAsWeightsBackend when the SDK is available.
+
+    Regression test for the central bug this replaced: `_resolve_cli_backend` used to
+    return `MockPAWBackend()` on *every* path, so `paw-test check --backend real`
+    silently exercised a dictionary lookup instead of a compiled adapter.
+    """
+    from paw_kit.backend.mock import MockPAWBackend
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+    from paw_kit.cli import _resolve_cli_backend
+
+    monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: True)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "has_api_key", lambda self: True)
+
+    backend = _resolve_cli_backend("real")
+    assert isinstance(backend, ProgramAsWeightsBackend)
+    assert not isinstance(backend, MockPAWBackend)
+
+
+def test_resolve_cli_backend_real_falls_back_loudly_without_sdk(monkeypatch, capsys):
+    """Without the upstream SDK, `--backend real` degrades to mock but says so."""
+    from paw_kit.backend.mock import MockPAWBackend
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+    from paw_kit.cli import _resolve_cli_backend
+
+    monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: False)
+
+    backend = _resolve_cli_backend("real")
+    assert isinstance(backend, MockPAWBackend)
+    out = strip_ansi(capsys.readouterr().out)
+    assert "not a model" in out
+    assert "pip install programasweights" in out
+
+
+def test_resolve_cli_backend_real_without_api_key_still_returns_upstream(monkeypatch, capsys):
+    """A missing PAW_API_KEY is a warning, not a downgrade: cached-program inference works."""
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+    from paw_kit.cli import _resolve_cli_backend
+
+    monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: True)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "has_api_key", lambda self: False)
+
+    backend = _resolve_cli_backend("real")
+    assert isinstance(backend, ProgramAsWeightsBackend)
+    assert "PAW_API_KEY is not set" in strip_ansi(capsys.readouterr().out)
+
+
+def test_resolve_cli_backend_rejects_unknown_value():
+    """A typo'd backend name is an error, not a silent fall back to mock."""
+    import typer
+    from paw_kit.cli import _resolve_cli_backend
+
+    with pytest.raises(typer.BadParameter):
+        _resolve_cli_backend("rael")

@@ -27,7 +27,6 @@ from starlette.datastructures import Headers
 
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.mock import MockPAWBackend
-from paw_kit.backend.real import RealPAWBackend
 from paw_kit.schema.loader import load
 from paw_kit.serve.models import (
     AnthropicContentBlock,
@@ -337,7 +336,14 @@ def create_app(
         raise FileNotFoundError(f"Adapter file not found: {adapter_path}")
 
     selected_backend = backend or MockPAWBackend()
-    backend_type = "real" if isinstance(selected_backend, RealPAWBackend) else "mock"
+    # Report the backend actually in use. This used to be
+    # `"real" if isinstance(selected_backend, RealPAWBackend) else "mock"`, which
+    # mislabelled every backend that was neither of those two -- including
+    # ProgramAsWeightsBackend, the only one proven against a real model -- as "mock".
+    backend_type = (
+        "mock" if isinstance(selected_backend, MockPAWBackend)
+        else type(selected_backend).__name__
+    )
     # Return basename to avoid exposing host filesystem directory layout
     state = ServerState(path_obj.name, backend_type)
     configured_api_key = api_key or os.environ.get("PAW_API_KEY")

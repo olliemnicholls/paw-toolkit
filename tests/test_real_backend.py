@@ -39,18 +39,6 @@ def test_real_backend_not_implemented_when_available(monkeypatch: pytest.MonkeyP
         backend.infer(adapter_path=adapter_path, input_text="Hello world")
 
 
-def test_cli_backend_resolution_fallback() -> None:
-    """Verify CLI _resolve_cli_backend gracefully warns and falls back to MockPAWBackend."""
-    from paw_kit.cli import _resolve_cli_backend
-    from paw_kit.backend.mock import MockPAWBackend
-
-    backend = _resolve_cli_backend("real")
-    assert isinstance(backend, MockPAWBackend)
-
-    backend_mock = _resolve_cli_backend("mock")
-    assert isinstance(backend_mock, MockPAWBackend)
-
-
 def test_real_backend_custom_runtime_executor(tmp_path: Path) -> None:
     """Verify RealPAWBackend works with runtime_executor bridge."""
     def mock_runtime_executor(adapter_path: str, input_text: str, constraint: str | None) -> str:
