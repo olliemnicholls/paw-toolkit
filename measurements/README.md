@@ -300,9 +300,18 @@ reading `examples_folded_into_spec: 8`.
 
 | Spec | Structural: 0 examples → 8 examples | Semantic: 0 examples → 8 examples |
 |---|---|---|
-| Phone extractor (`"...format it consistently"`) | **0.0% → 93.3%** | 89.6% → 86.4% |
+| Phone extractor (`"...format it consistently"`) | **0.0% → 92.5%** (124/134) | 89.6% → 85.8% |
 | Review sentiment (`"positive or negative"`) | 92.5% → **100.0%** | 89.5% → 88.7% |
-| JSON repair (docs' own example) | 93.5% → 93.2% | 69.9% → 68.4% |
+| JSON repair (docs' own example) | 93.5% → 92.8% | 69.9% → 68.0% |
+
+**Correction (2026-09-09, caught by the delegated finetune-compiler agent below cross-checking
+this table against the artifact it cites):** this table originally read 93.3%/86.4%/93.2%/68.4%
+for three of these six cells — each off by rounding to the wrong nearby number rather than the
+actual `structural_pass_rate`/`semantic_pass_rate` fields in
+`measurements/semantic-phone_extractor-3080-fewshot8-20260909-005717.json` and
+`measurements/semantic-json_repair-3080-fewshot8-20260909-005723.json`. Corrected above; the
+review-sentiment row (100.0%/88.7%) was already right. None of the qualitative conclusions below
+change — the phone-extractor swing is 0.0%→92.5%, not 0.0%→93.3%, still the same dramatic result.
 
 **Yes, dramatically, for format ambiguity; no, for everything else.** The phone
 extractor and review-sentiment jumps are real and large: with 8 examples all showing
@@ -370,6 +379,113 @@ fake backend). `scripts/measure_fail_open.py` induces two real failures against 
 Net: fail-open on the most realistic failure mode (missing/corrupted local state) is
 confirmed for real. Fail-open on a rejected compile request is not yet — nothing
 available made the real service actually reject a request during this test session.
+
+## Finetune compiler (`paw-ft-bs48`), for real
+
+Everything above this line — 3 hardware configs, JIT hot-swap, active learning, grammar
+decoding, fail-open, the three terse specs, the folded-examples A/B — used exactly one
+compiler, `paw-4b-qwen3-0.6b` (the paper's single-forward-pass "pseudo-program" mapper).
+The account also exposes `paw-ft-bs48`, the finetune compiler from "Compile by Training"
+(arXiv:2609.04199), which `paw_kit` routes through `compile_async` + polling. It had
+never been run. This section runs it, once, on the highest-signal suite available:
+
+```bash
+uv run python scripts/measure_semantic_correctness.py \
+    measurements/spec-drafts/spec-2-phone-extractor.yaml \
+    --compiler paw-ft-bs48 --label finetune-3080 --max-spec-examples 8
+```
+
+Same suite, same 8 folded-in examples, same judge, same 3080, as the `max_spec_examples=8`
+fast-compiler run two sections up — so this is a clean three-way comparison on identical
+input. Result: `measurements/semantic-phone_extractor-finetune-3080-20260909-010553.json`.
+
+| Run | Compiler | Examples | Compile wall | Structural | Semantic |
+|---|---|---|---|---|---|
+| Terse baseline | `paw-4b-qwen3-0.6b` | 0 | ~1–5s | **0.0%** | 89.6% |
+| Folded examples | `paw-4b-qwen3-0.6b` | 8 | ~1–5s | 92.5% (124/134) | 85.8% (115/134) |
+| Finetune | `paw-ft-bs48` | 8 | **180.8s** | 93.3% (125/134) | 87.3% (117/134) |
+
+It works end-to-end. No auth problem, no timeout, no payment or quota error; the async
+job reached `status: ready` with a distinct `program_id` (`42db8135a1ac0089ce3d`, vs the
+fast compiler's `1b070b72ff231d4710c3` for the same spec), and the resulting program
+downloaded and ran locally like any other. Compile took **180.8s against the fast
+compiler's 1.0–5.0s** on the same machine (`compile_wall_s` in the three hardware runs at
+the top of this file) — 36–180x, and squarely inside the "~2-5 min" the upstream
+`list_compilers()` description advertises for this compiler. That is not a hang and not a
+surprise; it is the advertised cost.
+
+**The headline is not in the percentages. 132 of the 134 outputs are byte-identical to
+the fast compiler's.** Not similar — identical. Every one of the 8 standard cases, every
+Unicode-injected variant, every empty/BOM/emoji probe. Two cases differ, and both are
+out-of-distribution adversarial probes:
+
+| Input | `paw-4b-qwen3-0.6b`, 8 ex. | `paw-ft-bs48`, 8 ex. |
+|---|---|---|
+| `"Dial 1-800-FLOWERS for delivery."` | `""` | `(800) 777-7777` |
+| `"International line: +44 20 7946 0958"` | `(555) 123-4567` | `(207) 794-0958` |
+
+Read those two rows carefully, because they are the only real evidence either way about
+whether this is a different compile:
+
+- The UK-number case is the memorization failure flagged in the folded-examples section
+  above: the fast compiler returned `(555) 123-4567` — the literal example number, verbatim,
+  for an input sharing nothing with it. **`paw-ft-bs48` does not do that.** It returns
+  `(207) 794-0958`, which is the input's own digits (`20 7946 0958`) re-grouped into the
+  demonstrated format. Still wrong — it drops `+44` and passes a London landline off as a
+  US number — but wrong in a way that is *derived from the input* rather than copied from
+  a demonstration. That is a genuinely different, and arguably better-behaved, failure.
+- The vanity-number case goes the other way. The fast compiler declined (empty string);
+  `paw-ft-bs48` emitted `(800) 777-7777`, fabricated digits with no relationship to
+  `FLOWERS` (the keypad mapping would be `356-9377`). This is the same hallucination class
+  as the 0-example run's `1-800-555-0123`, and it is the one case where the finetuned
+  program is *worse*: it is the case that moved structural pass from 124 to 125, and the
+  entire structural improvement in the table above is this single fabricated answer
+  satisfying a regex. Reported as a defect, not a gain.
+
+**The semantic column is noise, and this run happens to prove it.** Semantic pass went
+85.8% → 87.3%, which looks like a small improvement. It is not: only 2 of 134 outputs
+changed, and both were judged incorrect in both runs. Six cases flipped verdict, and all
+six flipped on **byte-identical output text** — the judge said `(555) 666-7777` for
+`"Office line: +1-555-666-7777"` was correct in one run and "removed country code +1
+without justification" in the other; the zero-width-space-prefixed copy of that same input
+flipped the opposite direction in the same pair of runs. That is a **4.5% (6/134)
+test-retest flip rate on a fixed input/output pair**, measured for free here because the
+adapter held still. Every semantic-pass number in this document is a `max_tokens=60`,
+default-temperature Claude call; treat differences of ~2 points between any two rows as
+indistinguishable from this. Logged in `conductor/deferred/index.md`.
+
+**So: is `paw-ft-bs48` a genuinely different compile, or the same behavior on a slower
+path?** On this task, honestly: **neither cleanly, and closer to the second than anyone
+would hope.** It is demonstrably not the same program (different `program_id`, different
+`compiler_kind` upstream — `finetune_lora` vs `mapper_lora`), and its two divergences are
+not random: one replaces example-regurgitation with input-derived extraction, which is the
+single most encouraging thing in this run. But 132/134 identical outputs and a structural
+"gain" that consists entirely of one hallucination passing a regex is not a result anyone
+should describe as "much higher accuracy" (the upstream description's phrase) on the
+strength of this test. On a task where an 8-example fast compile already sits at 93%,
+there is almost nothing left for a finetune to win, and three minutes of compile bought
+about one probe's worth of behavioral difference.
+
+Scope limits, stated rather than buried: **one suite, one task, one run, one seed.** The
+places `paw-ft-bs48` would plausibly earn its wall-time — a task the fast compiler
+genuinely fails at, a longer spec, more than 8 examples, an output format with real
+structure — are exactly the places this test did not go. A single negative-to-neutral
+result on a near-saturated task is weak evidence about the compiler in general, and is
+not a reason to conclude the finetune path doesn't work. It is a reason not to reach for
+it by default.
+
+*Cost note, since this was the one compiler expected to carry real cost*: no
+payment, quota, or rate error at any point, consistent with the unmetered-beta reading in
+the cost note below. One `compile_async` job, ~3 minutes of upstream compute, 134 local
+inferences, 134 Haiku judge calls.
+
+**Bookkeeping discrepancy caught here, fixed at the source**: this section originally
+flagged that the folded-examples table above reported the phone-extractor 8-example
+structural rate as `93.3%` while the run artifact it cites
+(`measurements/semantic-phone_extractor-3080-fewshot8-20260909-005717.json`) records
+`92.537%` (124/134) — a rounding/transcription slip in the earlier table, not in this
+one. Corrected at the source (the table now reads `92.5%`); this section's own
+`92.5% (124/134)` fast-compiler row was already right throughout.
 
 ## Reproducing
 
