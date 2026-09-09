@@ -88,7 +88,7 @@ Not on PyPI yet. From source:
 git clone https://github.com/olliemnicholls/paw-toolkit
 cd paw-toolkit
 uv sync --dev          # or: pip install -e .
-uv run pytest -q       # 227 tests, no GPU, no network, no API key
+uv run pytest -q       # 231 tests, no GPU, no network, no API key
 ```
 
 For a real backend, install the `real` extra and get an API key from
@@ -264,9 +264,12 @@ overwrites the adapter in place (and, on a real backend, costs a paid upstream c
 CLI runs **read-only against `--backend real`**: `auto_recompile` is forced off with a
 printed notice, and passing `--auto-recompile` explicitly is refused rather than allowed,
 because stub labels must never become training signal for a paid compile. Drive the loop
-from code, with a real teacher, when you want it to actually repair something. Against the
-mock backend (the default) it recompiles freely — nothing there costs money or leaves
-memory.
+from code, with a real teacher, when you want it to actually repair something. Against the mock
+backend (the default) it recompiles freely, but that is **not** harmless either:
+`MockPAWBackend.compile()` writes a real file, so recompiling replaces whatever
+`adapter_path` points at with a mock stub containing the demo teacher's invented labels.
+`paw-test check` therefore refuses to recompile any adapter that does not identify itself
+as a mock manifest, so a real compiled adapter cannot be destroyed by a stray run.
 
 ---
 

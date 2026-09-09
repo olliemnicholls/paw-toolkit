@@ -24,6 +24,21 @@ from paw_kit.test.suite import load_suite
 
 console = Console()
 
+
+def _e(value: object) -> str:
+    """Escape a value for interpolation into a Rich markup string.
+
+    Rich parses square brackets as markup tags, so an unescaped interpolation either
+    silently deletes the bracketed span or raises MarkupError and takes the command down.
+    Both were live bugs here: an install hint printed `pip install 'paw-kit'` because
+    Rich ate "[real]", and an adapter path like `[v2]model.paw` crashed `paw-inspect`.
+    Paths, filenames, exception text and model output are all attacker- or
+    environment-controlled; route every one of them through this.
+
+    `tests/test_cli.py::test_no_unescaped_console_interpolations` enforces its use.
+    """
+    return escape(str(value))
+
 # PAW-CLI-06: cap on how much of a candidate adapter file `paw-inspect` will attempt
 # to parse as JSON. See `inspect()` below.
 _MAX_INSPECT_FILE_BYTES = 50 * 1024 * 1024
@@ -38,21 +53,29 @@ def test_app_main() -> None:
     """paw-test: Test runner and active-learning self-healing suite."""
 
 
+# PAW-CLI-06 applies the same reasoning to `paw-inspect`: a `.paw` path is user-supplied
+# and may point at anything, so never read one unbounded. This cap is smaller because a
+# manifest is a few hundred bytes of JSON -- an adapter file larger than this is not one.
+_MAX_MANIFEST_BYTES = 1 * 1024 * 1024
+
+
 def _declared_adapter_backend(adapter_path: str) -> Optional[str]:
     """Return the `backend` an existing .paw manifest declares, or None.
 
-    None means "no opinion": the file is absent, unreadable, not JSON, or carries no
-    `backend` key. Callers must treat that as "unknown", never as "mock" -- this is used
-    to decide whether overwriting the file is safe, so an unreadable manifest must not
-    read as permission.
+    None means "no opinion": the file is unreadable, oversized, not JSON, or carries no
+    usable `backend` key. It does **not** mean "safe to overwrite" -- callers must gate on
+    whether the file *exists* (see `check()`), because an absent adapter is the legitimate
+    first-compile case while a present-but-unreadable one is not.
     """
     try:
-        raw = Path(adapter_path).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
+        path = Path(adapter_path)
+        if not path.is_file() or path.stat().st_size > _MAX_MANIFEST_BYTES:
+            return None
+        # UnicodeDecodeError is a ValueError, not an OSError -- a binary .paw used to
+        # escape this function as an uncaught traceback on the default invocation.
+        raw = path.read_text(encoding="utf-8")
         manifest = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+    except (OSError, ValueError):
         return None
     if not isinstance(manifest, dict):
         return None
@@ -135,7 +158,7 @@ def _resolve_cli_backend(backend_type: str) -> Any:
 
     console.print(
         f"[green]Backend:[/green] ProgramAsWeightsBackend "
-        f"([dim]compiler={backend.compiler}[/dim])"
+        f"([dim]compiler={_e(backend.compiler)}[/dim])"
     )
     return backend
 
@@ -305,11 +328,11 @@ def _run_pii_demo() -> None:
             result = scrub_fn(text)
             ms = (time.perf_counter() - t0) * 1000
             console.print(f"\n[bold]Item #{i}[/bold] [{ms:.2f}ms] — {result.total_redacted} entity(ies) redacted")
-            console.print(f"  [dim]Raw:[/dim]       {text}")
-            console.print(f"  [green]Sanitized:[/green] {result.sanitized_text}")
+            console.print(f"  [dim]Raw:[/dim]       {_e(text)}")
+            console.print(f"  [green]Sanitized:[/green] {_e(result.sanitized_text)}")
             if result.entities:
                 for e in result.entities:
-                    console.print(f"  [yellow]  → {e.entity_type}:[/yellow] {e.value}")
+                    console.print(f"  [yellow]  → {_e(e.entity_type)}:[/yellow] {_e(e.value)}")
 
         console.print("\n[bold green]✓[/bold green] Every output validated against the Pydantic schema, fail-open on mismatch")
         console.print("[bold green]✓[/bold green] Simulated adapter (MockPAWBackend, no model) — timings are not a benchmark\n")
@@ -325,7 +348,7 @@ def demo_cmd(
     elif scenario.lower() == "pii":
         _run_pii_demo()
     else:
-        console.print(f"[bold red]Unknown scenario:[/bold red] '{scenario}'. Choose 'triage' or 'pii'.")
+        console.print(f"[bold red]Unknown scenario:[/bold red] '{_e(scenario)}'. Choose 'triage' or 'pii'.")
         raise typer.Exit(code=1)
 
 
@@ -340,13 +363,13 @@ def check(
 ) -> None:
     """Run test suite assertions and active-learning self-healing loop on a .paw adapter."""
     if not suite_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Suite file '{suite_path}' does not exist.")
+        console.print(f"[bold red]Error:[/bold red] Suite file '{_e(suite_path)}' does not exist.")
         raise typer.Exit(code=1)
 
     try:
         config = load_suite(str(suite_path))
     except Exception as exc:
-        console.print(f"[bold red]Error parsing suite:[/bold red] {exc}")
+        console.print(f"[bold red]Error parsing suite:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
 
     if auto_recompile is not None:
@@ -369,7 +392,8 @@ def check(
             config.active_learning.auto_recompile = False
             console.print(
                 "[bold yellow]Note:[/bold yellow] auto-recompile is disabled for "
-                f"--backend {backend_type}. Recompiling would submit a paid upstream "
+                f"--backend {_e(backend_type.strip().lower())}. Recompiling would submit a "
+                "paid upstream "
                 f"compile and overwrite [cyan]{escape(config.adapter_path)}[/cyan] in place.\n"
                 "  Running assertions read-only. Pass [cyan]--auto-recompile[/cyan] "
                 "explicitly to allow recompilation."
@@ -392,22 +416,33 @@ def check(
     # with a mock stub whose examples are cli_teacher's fabricated labels. Reproduced
     # against a real programasweights manifest: it was replaced wholesale. Nothing about
     # that is specific to --backend real; it is the *default* invocation.
-    if config.active_learning.auto_recompile:
+    if config.active_learning.auto_recompile and Path(config.adapter_path).exists():
+        # Gate on existence, not on the return value. An *absent* adapter is the normal
+        # first-compile case and must stay allowed; a file that is present but whose
+        # manifest cannot be read is the dangerous case -- it may be a third-party
+        # AbstractPAWBackend adapter, a foreign format, or binary weights, none of which
+        # the mock may silently replace. Anything present that does not positively
+        # identify itself as "mock" is protected.
         existing_backend = _declared_adapter_backend(config.adapter_path)
-        if existing_backend is not None and existing_backend != "mock":
+        if existing_backend != "mock":
             config.active_learning.auto_recompile = False
             console.print(
                 "[bold yellow]Note:[/bold yellow] auto-recompile is disabled: "
-                f"[cyan]{escape(config.adapter_path)}[/cyan] is a "
-                f"[bold]{escape(existing_backend)}[/bold] adapter, and recompiling would "
-                "replace it with a mock stub built from this CLI's demo teacher.\n"
+                f"[cyan]{escape(config.adapter_path)}[/cyan] is "
+                + (
+                    f"a [bold]{escape(existing_backend)}[/bold] adapter"
+                    if existing_backend
+                    else "not a readable mock manifest"
+                )
+                + ", and recompiling would replace it with a mock stub built from this "
+                "CLI's demo teacher.\n"
                 "  Running assertions read-only. Recompile it with the backend that "
                 "produced it, from code."
             )
 
     console.print(
-        f"[bold cyan]Running paw.test check on:[/bold cyan] {config.task_name} "
-        f"([dim]{escape(config.adapter_path)}[/dim]) [dim](backend: {actual_backend})[/dim]"
+        f"[bold cyan]Running paw.test check on:[/bold cyan] {_e(config.task_name)} "
+        f"([dim]{escape(config.adapter_path)}[/dim]) [dim](backend: {_e(actual_backend)})[/dim]"
     )
 
     # PAW-CLI-02: adapter_path containment used to be checked here directly, but
@@ -440,7 +475,7 @@ def check(
 
         console.print(
             f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
-            f"({report.passed_cases}/{report.total_cases}) [dim](backend: {actual_backend})[/dim]"
+            f"({report.passed_cases}/{report.total_cases}) [dim](backend: {_e(actual_backend)})[/dim]"
         )
         if not report.is_success:
             raise typer.Exit(code=1)
@@ -475,7 +510,7 @@ def check(
     if al_report.is_success:
         console.print(f"\n[bold green][SUCCESS][/bold green] All assertions passed! (Iterations: {al_report.iterations_run})")
         if al_report.recompiled:
-            console.print(f"  [cyan][UPDATE][/cyan] Recompiled and updated artifact: {config.adapter_path}")
+            console.print(f"  [cyan][UPDATE][/cyan] Recompiled and updated artifact: {_e(config.adapter_path)}")
         raise typer.Exit(code=0)
     else:
         console.print(f"\n[bold red][FAIL][/bold red] Assertions failed after {al_report.iterations_run} iteration(s).")
@@ -488,7 +523,7 @@ def inspect(
 ) -> None:
     """Inspect metadata, task spec, and file properties of a .paw adapter artifact."""
     if not adapter_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Adapter file '{adapter_path}' does not exist.")
+        console.print(f"[bold red]Error:[/bold red] Adapter file '{_e(adapter_path)}' does not exist.")
         raise typer.Exit(code=1)
 
     stat = adapter_path.stat()
@@ -542,21 +577,21 @@ def clean(
     try:
         resolved_cache = ensure_contained(cache_dir, Path.cwd(), label="--cache-dir")
     except ValueError as exc:
-        console.print(f"[bold red]Error:[/bold red] {exc}")
+        console.print(f"[bold red]Error:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
 
     if not resolved_cache.exists():
-        console.print(f"[dim]Cache directory '{cache_dir}' does not exist. Nothing to clean.[/dim]")
+        console.print(f"[dim]Cache directory '{_e(cache_dir)}' does not exist. Nothing to clean.[/dim]")
         raise typer.Exit(code=0)
 
     files_to_remove = list(resolved_cache.glob("*"))
     if not files_to_remove:
-        console.print(f"[dim]No cached artifacts found in '{cache_dir}'.[/dim]")
+        console.print(f"[dim]No cached artifacts found in '{_e(cache_dir)}'.[/dim]")
         raise typer.Exit(code=0)
 
-    console.print(f"[bold yellow]{'Dry run: would remove' if dry_run else 'Purging'}[/bold yellow] {len(files_to_remove)} files in '{cache_dir}':")
+    console.print(f"[bold yellow]{'Dry run: would remove' if dry_run else 'Purging'}[/bold yellow] {len(files_to_remove)} files in '{_e(cache_dir)}':")
     for file in files_to_remove:
-        console.print(f"  - {file.name}")
+        console.print(f"  - {_e(file.name)}")
 
     if dry_run:
         raise typer.Exit(code=0)
@@ -573,7 +608,7 @@ def clean(
             if file.is_file():
                 file.unlink()
         except Exception as exc:
-            console.print(f"    [red]Failed to delete {file.name}: {exc}[/red]")
+            console.print(f"    [red]Failed to delete {_e(file.name)}: {_e(exc)}[/red]")
 
     console.print("[bold green]Cache cleaned successfully.[/bold green]")
 
@@ -607,7 +642,7 @@ def serve(
 ) -> None:
     """Launch high-performance OpenAI & Anthropic compatible HTTP microservice."""
     if not adapter_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Adapter file '{adapter_path}' does not exist.")
+        console.print(f"[bold red]Error:[/bold red] Adapter file '{_e(adapter_path)}' does not exist.")
         raise typer.Exit(code=1)
 
     # PAW-CLI-07: a value passed on the command line lands in argv, which is visible
@@ -630,9 +665,9 @@ def serve(
 
     backend = _resolve_cli_backend(backend_type)
     actual_type = backend_label(backend)
-    console.print(f"[bold green]Launching PAW microservice on http://{host}:{port}[/bold green]")
-    console.print(f"  [cyan]Adapter:[/cyan] {adapter_path}")
-    console.print(f"  [cyan]Backend:[/cyan] {actual_type}")
+    console.print(f"[bold green]Launching PAW microservice on http://{_e(host)}:{port}[/bold green]")
+    console.print(f"  [cyan]Adapter:[/cyan] {_e(adapter_path)}")
+    console.print(f"  [cyan]Backend:[/cyan] {_e(actual_type)}")
     if api_key:
         console.print("  [yellow]Authentication:[/yellow] Bearer token active")
     elif allow_anonymous:
@@ -660,20 +695,20 @@ def export_docker_cmd(
 ) -> None:
     """Generate production-ready Dockerfile and docker-compose deployment assets."""
     if not adapter_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Adapter file '{adapter_path}' does not exist.")
+        console.print(f"[bold red]Error:[/bold red] Adapter file '{_e(adapter_path)}' does not exist.")
         raise typer.Exit(code=1)
 
     from paw_kit.serve.docker import export_docker_scaffold
 
     try:
         dest = export_docker_scaffold(adapter_path=adapter_path, output_dir=out_dir)
-        console.print(f"[bold green]Docker deployment assets successfully generated in:[/bold green] {dest.resolve()}")
+        console.print(f"[bold green]Docker deployment assets successfully generated in:[/bold green] {_e(dest.resolve())}")
         console.print("  - Dockerfile")
         console.print("  - .dockerignore")
         console.print("  - docker-compose.yml")
         console.print("  - README.md")
     except Exception as exc:
-        console.print(f"[bold red]Error exporting Docker assets:[/bold red] {exc}")
+        console.print(f"[bold red]Error exporting Docker assets:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
 
 
@@ -687,17 +722,17 @@ def export_dataset_cmd(
 ) -> None:
     """Export traced SQLite teacher-student interaction pairs to standard JSONL format."""
     if not db_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Trace database '{db_path}' does not exist.")
+        console.print(f"[bold red]Error:[/bold red] Trace database '{_e(db_path)}' does not exist.")
         raise typer.Exit(code=1)
 
     # PAW-CLI-03: refuse a destination that doesn't even look like the format we're
     # about to write, and confirm before silently clobbering an existing file --
     # neither was checked before.
     if out_file.suffix != ".jsonl":
-        console.print(f"[bold red]Error:[/bold red] --out must have a '.jsonl' extension: {out_file}")
+        console.print(f"[bold red]Error:[/bold red] --out must have a '.jsonl' extension: {_e(out_file)}")
         raise typer.Exit(code=1)
     if out_file.exists() and not force:
-        if not typer.confirm(f"{out_file} already exists. Overwrite?"):
+        if not typer.confirm(f"{_e(out_file)} already exists. Overwrite?"):
             console.print("[dim]Aborted -- file was not overwritten.[/dim]")
             raise typer.Exit(code=0)
 
@@ -716,11 +751,11 @@ def export_dataset_cmd(
             cursor.execute("SELECT input_payload, teacher_output FROM traces ORDER BY timestamp ASC;")
             rows = cursor.fetchall()
     except Exception as exc:
-        console.print(f"[bold red]Error exporting dataset:[/bold red] {exc}")
+        console.print(f"[bold red]Error exporting dataset:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
 
     if not rows:
-        console.print(f"[yellow]Warning:[/yellow] No traces found in {db_path}.")
+        console.print(f"[yellow]Warning:[/yellow] No traces found in {_e(db_path)}.")
         # PAW-CLI-04: this Exit used to sit inside the write's try/except below.
         # typer.Exit subclasses RuntimeError, so the bare `except Exception` there
         # swallowed it and re-raised as exit 1 -- an empty trace DB printed this
@@ -746,9 +781,9 @@ def export_dataset_cmd(
                 }
                 f.write(json.dumps(record) + "\n")
 
-        console.print(f"[bold green]Successfully exported {len(rows)} traces to:[/bold green] {out_file.resolve()}")
+        console.print(f"[bold green]Successfully exported {len(rows)} traces to:[/bold green] {_e(out_file.resolve())}")
     except Exception as exc:
-        console.print(f"[bold red]Error exporting dataset:[/bold red] {exc}")
+        console.print(f"[bold red]Error exporting dataset:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
 
 

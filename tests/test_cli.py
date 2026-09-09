@@ -75,6 +75,7 @@ def test_cli_check_passing_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     # Seed mock adapter with standard output
     adapter_path.write_text(
         json.dumps({
+            "backend": "mock",
             "spec": "Convert dates",
             "examples": [
                 {"input": "today", "output": "2026-09-05"},
@@ -105,6 +106,7 @@ def test_cli_check_no_auto_recompile_failure(tmp_path: Path, monkeypatch: pytest
     adapter_path = tmp_path / "model_fail.paw"
     adapter_path.write_text(
         json.dumps({
+            "backend": "mock",
             "spec": "Convert dates",
             "examples": [],
             "rules": {"today": "INVALID_OUTPUT_DATE"},
@@ -163,6 +165,7 @@ def test_cli_check_rejects_adapter_path_outside_cwd_even_without_recompile_PAW_T
     outside_adapter = tmp_path / "outside_model.paw"
     outside_adapter.write_text(
         json.dumps({
+            "backend": "mock",
             "spec": "Convert dates",
             "examples": [
                 {"input": "today", "output": "2026-09-05"},
@@ -632,7 +635,9 @@ def test_resolve_cli_backend_real_falls_back_when_sdk_present_but_unimportable(m
 def _real_backend_suite(tmp_path):
     """A suite with auto_recompile on, plus a stub adapter, for the guard tests below."""
     adapter = tmp_path / "guard.paw"
-    adapter.write_text(json.dumps({"task_name": "guard", "spec": "s", "examples": []}))
+    adapter.write_text(
+        json.dumps({"backend": "mock", "task_name": "guard", "spec": "s", "examples": []})
+    )
     suite = tmp_path / "suite.yaml"
     suite.write_text(
         "task_name: guard\n"
@@ -861,3 +866,61 @@ def test_check_output_survives_rich_markup_in_paths_and_errors(tmp_path, monkeyp
     # ...and neither bracketed span was silently swallowed.
     assert "[v2]adapter.paw" in out
     assert "[/usr/lib/libllama.so]" in out
+
+
+def test_no_unescaped_console_interpolations():
+    """Every string interpolated into a Rich console.print must go through `_e()`.
+
+    Rich parses square brackets as markup. An unescaped interpolation either silently
+    deletes the bracketed span or raises MarkupError and kills the command -- both were
+    live bugs here (an install hint printed `pip install 'paw-kit'` because Rich ate
+    "[real]"; an adapter named `[v2]model.paw` crashed `paw-inspect` and made another
+    command report a different filename than the one it wrote). Three review rounds each
+    found more instances of this same class, so it is enforced mechanically rather than
+    by eye.
+
+    To add an entry to the allowlist below, the value must be provably never a string:
+    an int, a float, or a literal. A `Path`, a name, an exception, or anything derived
+    from user input, the filesystem, or model output does not qualify -- wrap it in `_e()`.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    numeric_or_literal_allowlist = {
+        "i", "ms", "port", "result.total_redacted",
+        "report.pass_rate", "report.passed_cases", "report.total_cases",
+        "rep.pass_rate", "rep.passed_cases", "rep.total_cases",
+        "al_report.iterations_run",
+        "len(files_to_remove)", "len(rows)",
+        "'Dry run: would remove' if dry_run else 'Purging'",
+    }
+
+    source = _Path(__file__).parent.parent.joinpath("paw_kit", "cli.py").read_text()
+    offenders = []
+    for node in ast.walk(ast.parse(source)):
+        is_console_print = (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "print"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "console"
+        )
+        if not is_console_print:
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.FormattedValue):
+                continue
+            expr = inner.value
+            escaped = (
+                isinstance(expr, ast.Call)
+                and isinstance(expr.func, ast.Name)
+                and expr.func.id in ("_e", "escape")
+            )
+            src = ast.unparse(expr)
+            if not escaped and src not in numeric_or_literal_allowlist:
+                offenders.append(f"cli.py:{node.lineno}: {src}")
+
+    assert not offenders, (
+        "Unescaped interpolation into Rich markup (wrap in _e(), or add to the "
+        "allowlist only if provably never a string):\n  " + "\n  ".join(offenders)
+    )
