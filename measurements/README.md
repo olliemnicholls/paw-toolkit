@@ -518,10 +518,24 @@ class Contact(BaseModel):
     kind: Literal["mobile", "landline", "unknown"]
 ```
 
-| | Valid `Contact` parses | Mean latency |
+| | Valid `Contact` parses | Latency (5 runs) |
 |---|---|---|
-| Unconstrained (SDK as shipped) | **0/5** | 74 ms |
-| `RegexLogitsProcessor` injected | **4/5** | 334 ms warm, once every FSM state is cached |
+| Unconstrained (SDK as shipped) | **0/5** | mean 85 ms (range 13–160 ms) |
+| `RegexLogitsProcessor` injected | **4/5** | median 3.2 s; 47 s on the first call, 334 ms on the two runs that revisited only cached FSM states |
+
+The two columns are not a like-for-like latency comparison: unconstrained output here is a
+~10-token bare string, constrained output a ~30-token JSON object. See the warm-up analysis
+below for where the constrained time actually goes.
+
+> **Corrected 2026-09-09, in Phase F review.** This table first reported "74 ms" and "334 ms
+> warm" as *mean latency*. Neither is supportable from the artifact. The unconstrained
+> samples are `[159.8, 86.8, 84.9, 80.9, 12.9]` — mean 85.0, median 84.9; **no aggregation
+> of them yields 74**. The constrained samples are `[46816, 334, 3215, 334, 8819]`, and the
+> measurement script's own printed warm statistic (`constrained[1:]`) is **3175 ms** — the
+> "334 ms" reported was the best two of five, an order of magnitude below the script's own
+> output, silently dropping the two runs (3.2 s and 8.8 s) that hit new FSM states. Same
+> class of transcription error as the 93.3%→92.5% correction logged earlier in this file,
+> and left visible here for the same reason.
 
 ```
 'Office line: +1-555-666-7777'
@@ -566,6 +580,17 @@ it through to the `sample()` call it already makes. That is a small, additive up
 change that would turn this from a private-attribute hack into a supported integration —
 and it is a concrete thing to open an issue about rather than a reason to build a
 competing runtime.
+
+**What the 0/5 → 4/5 does and does not measure.** The unconstrained `0/5` is *definitional
+rather than measured*: this adapter was compiled to emit a bare phone string, so it could
+never have parsed as `Contact`, and the baseline was guaranteed before the run started. That
+is the point of the probe — it shows masking can impose a schema the adapter was never
+trained on — but the number does not travel with that context, so do not quote it as an
+accuracy improvement. More pointedly: **all four constrained outputs answer `kind:
+"mobile"`**, including for `"Office line: +1-555-666-7777"`, which is a landline by any
+reading. That field is not being driven by the input at all. Masking made the output
+*shaped*, and left one field unanchored — structural validity is the whole of what 4/5
+claims.
 
 **The 5th case is a real limitation, not a rounding error.** Given `"no phone number here
 at all"`, the constrained adapter emits `{"area_code": 0, "number": ""` and stalls: the

@@ -65,8 +65,27 @@ def _resolve_cli_backend(backend_type: str) -> Any:
     if not backend.is_available():
         console.print(
             "[bold yellow]Warning:[/bold yellow] --backend real needs the official upstream SDK.\n"
-            "  To install: [cyan]pip install programasweights "
-            "--extra-index-url https://pypi.programasweights.com/simple/[/cyan]\n"
+            # Escape the [ so Rich does not parse "[real]" as a markup tag and print
+            # `pip install 'paw-kit'` -- wrong advice, and silently wrong.
+            "  To install: [cyan]pip install 'paw-kit\\[real]'[/cyan]\n"
+            "  Falling back to [green]MockPAWBackend[/green] -- results below come from a "
+            "dictionary lookup, not a model."
+        )
+        return MockPAWBackend()
+
+    # `is_available()` only calls find_spec -- it never imports. A package that is present
+    # but unimportable (mismatched llama_cpp, half-finished install, a broken CUDA build)
+    # therefore passes the check above and fails later, inside infer(), where TestRunner's
+    # blanket `except Exception` turns it into "[EXECUTION_ERROR]" and a 0% pass rate that
+    # reads as the *model* failing the user's assertions. Force the import here instead, so
+    # infrastructure failure surfaces as infrastructure failure and the announced-fallback
+    # contract above still applies to it.
+    try:
+        backend._paw()
+    except Exception as exc:
+        console.print(
+            "[bold yellow]Warning:[/bold yellow] the upstream SDK is installed but could "
+            f"not be loaded: {exc}\n"
             "  Falling back to [green]MockPAWBackend[/green] -- results below come from a "
             "dictionary lookup, not a model."
         )
@@ -302,8 +321,41 @@ def check(
 
     # Select backend safely
     backend = _resolve_cli_backend(backend_type)
+    is_real = not isinstance(backend, MockPAWBackend)
+    actual_backend = type(backend).__name__
 
-    console.print(f"[bold cyan]Running paw.test check on:[/bold cyan] {config.task_name} ([dim]{config.adapter_path}[/dim])")
+    # A real backend's compile() is a paid remote submission that overwrites
+    # config.adapter_path *in place*. `auto_recompile` defaults to True (suite.py) and the
+    # shipped example suite sets it true, so before this guard existed, adding one flag to
+    # the command the README prints -- `paw-test check examples/date_normalizer/suite.yaml
+    # --backend real` -- would submit up to max_iterations-1 real compiles, built on labels
+    # invented by cli_teacher below (a demo stub that answers "2026-01-01" to almost
+    # anything), and destroy the adapter it was asked to test. Never fire that implicitly.
+    if is_real and config.active_learning.auto_recompile:
+        if auto_recompile is not True:
+            config.active_learning.auto_recompile = False
+            console.print(
+                "[bold yellow]Note:[/bold yellow] auto-recompile is disabled for "
+                f"--backend {backend_type}. Recompiling would submit a paid upstream "
+                f"compile and overwrite [cyan]{config.adapter_path}[/cyan] in place.\n"
+                "  Running assertions read-only. Pass [cyan]--auto-recompile[/cyan] "
+                "explicitly to allow recompilation."
+            )
+        else:
+            # Explicit opt-in still must not feed a stub teacher into a paid compile.
+            raise typer.BadParameter(
+                "--auto-recompile with a real backend needs a real teacher; the CLI's "
+                "built-in teacher is a demo stub that answers '2026-01-01' to almost any "
+                "input, and its labels would become training signal for a paid compile "
+                "that overwrites your adapter. Drive the loop from code instead: "
+                "run_active_learning_loop(config, backend, teacher_provider=...).",
+                param_hint="--auto-recompile",
+            )
+
+    console.print(
+        f"[bold cyan]Running paw.test check on:[/bold cyan] {config.task_name} "
+        f"([dim]{config.adapter_path}[/dim]) [dim](backend: {actual_backend})[/dim]"
+    )
 
     # PAW-CLI-02: adapter_path containment used to be checked here directly, but
     # load_suite() (paw_kit.test.suite, PAW-TEST-02) now validates it unconditionally
@@ -321,13 +373,24 @@ def check(
                 console.print(f"  [red][FAIL][/red] Input: {res.input[:50]!r} -> {res.output[:40]!r}")
                 for reason in res.failed_rules:
                     console.print(f"         [dim red]{reason}[/dim red]")
+                # TestRunner catches backend exceptions into "[EXECUTION_ERROR]" and stashes
+                # the message here. Without printing it, a backend that cannot run at all is
+                # indistinguishable from a model failing the user's assertions.
+                if res.execution_error:
+                    console.print(f"         [dim red]backend error: {res.execution_error}[/dim red]")
 
-        console.print(f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% ({report.passed_cases}/{report.total_cases})")
+        console.print(
+            f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
+            f"({report.passed_cases}/{report.total_cases}) [dim](backend: {actual_backend})[/dim]"
+        )
         if not report.is_success:
             raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
-    # Simulated frontier teacher for active-learning auto-repair in CLI check
+    # Demo-only stub teacher for active-learning auto-repair in CLI check. This is NOT a
+    # frontier model -- it is a two-branch lookup. The guard above guarantees it can only
+    # ever reach MockPAWBackend, whose compile() is an in-memory no-op, so its fabricated
+    # labels cannot become training signal for a paid compile or overwrite a real adapter.
     def cli_teacher(inp: str) -> str:
         console.print(f"  [yellow][ACTION][/yellow] Active learning: Querying frontier teacher for '{inp[:40]}'...")
         # If input was an invalid date, return canonical gold label

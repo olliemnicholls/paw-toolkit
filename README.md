@@ -68,7 +68,7 @@ a frontier API, and who want evidence before they trust it:
 |---|---|---|
 | Tracing decorator, SQLite trace DB, background compile, hot-swap, fail-open | Implemented, unit-tested, **and run for real**: a real Claude teacher + real compiled adapter (~11x steady-state latency, not yet checked for output *correctness*), plus two real induced failures (one confirmed clean fallback, one inconclusive) | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the numbers above — see [`measurements/`](./measurements) |
 | `suite.yaml` runner, fuzzer, active-learning loop | Implemented, unit-tested, **and run for real** against the real 11/82 fuzzer failures below with a live Claude teacher: 0 repaired, correctly — the teacher declines to hallucinate labels the suite's own assertions would reject, surfacing a gap in the suite's assertions rather than the model | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the run above — see [`measurements/`](./measurements) |
-| Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **and confirmed against a real model**: 15/15 valid Pydantic parses (100%) both raw and fence-stripped, vs 0/15 raw / 11/15 (73%) fence-stripped unconstrained. **Not shipped wired into any `paw_kit` backend**, but no longer for want of a place to put it: masking has now been driven against a real upstream-compiled adapter (0/5 → 4/5 valid Pydantic parses, 0.40ms/token) by injecting it into the llama.cpp sampling loop the upstream SDK already runs — see [`measurements/`](./measurements). That path reaches a *private* SDK attribute and is an experiment, not a shipped feature; the blocker to shipping it is a one-time-per-schema FSM warm-up (~1.7s per new state), not the absence of a runtime | Real generation on `Qwen2.5-0.5B-Instruct`; an initial ~13x latency-cost measurement was a caching bug in the test script (fixed) — properly measured, constrained decoding is roughly on par with unconstrained once warm; see [`measurements/`](./measurements) |
+| Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **and confirmed against a real model**: 15/15 valid Pydantic parses (100%) both raw and fence-stripped, vs 0/15 raw / 11/15 (73%) fence-stripped unconstrained. **Not shipped wired into any `paw_kit` backend**, but no longer for want of a place to put it: masking has now been driven against a real upstream-compiled adapter (a bare-string adapter forced into a JSON schema it was never trained on: 4/5 structurally valid, 0.40ms/token masking — structural validity only, and the schema's `kind` field came out `"mobile"` for all four regardless of input) by injecting it into the llama.cpp sampling loop the upstream SDK already runs — see [`measurements/`](./measurements). That path reaches a *private* SDK attribute and is an experiment, not a shipped feature; the blocker to shipping it is a one-time-per-schema FSM warm-up (~1.7s per new state), not the absence of a runtime | Real generation on `Qwen2.5-0.5B-Instruct`; an initial ~13x latency-cost measurement was a caching bug in the test script (fixed) — properly measured, constrained decoding is roughly on par with unconstrained once warm; see [`measurements/`](./measurements) |
 | HTTP server, Docker export, dataset export, CLI | Implemented, unit-tested | `MockPAWBackend` |
 | `ProgramAsWeightsBackend` (official upstream SDK) | Implemented, unit-tested against a fake SDK, **and run end-to-end against the real service and a real model** | Real compile + inference on an RTX 3080 and an A100; see [`measurements/`](./measurements) |
 | `RealPAWBackend` (in-process PyTorch/PEFT) | Stub. Raises `NotImplementedError`. | Nothing |
@@ -258,6 +258,16 @@ failing inputs are sent to the teacher inside a delimited prompt, the returned l
 checked against the suite's own assertions before being trusted, and the adapter is
 recompiled with them folded in.
 
+**`paw-test check` supplies its own teacher**, and it is a demo stub — a two-branch lookup
+that answers `"2026-01-01"` to almost any input, not a frontier model. Because recompilation
+overwrites the adapter in place (and, on a real backend, costs a paid upstream compile), the
+CLI runs **read-only against `--backend real`**: `auto_recompile` is forced off with a
+printed notice, and passing `--auto-recompile` explicitly is refused rather than allowed,
+because stub labels must never become training signal for a paid compile. Drive the loop
+from code, with a real teacher, when you want it to actually repair something. Against the
+mock backend (the default) it recompiles freely — nothing there costs money or leaves
+memory.
+
 ---
 
 ## Serve over HTTP
@@ -281,7 +291,7 @@ uv run paw-kit export dataset --db ./.paw/traces.db --out traces.jsonl
 
 ```
 paw-kit demo [--scenario pii]         mock-backend walkthroughs
-paw-test check suite.yaml             run a suite (--backend real currently falls back to mock; see roadmap)
+paw-test check suite.yaml             run a suite (--backend real runs the upstream SDK, read-only)
 paw-inspect adapter.paw               show an adapter manifest
 paw-clean [--dry-run]                 remove cached adapters and trace DB
 paw-serve adapter.paw --port 8000     HTTP server
@@ -308,7 +318,9 @@ In order, and nothing gets announced until the first item is done:
    format (unicode-handling edge cases) — and introduced a new failure mode of its own
    (verbatim memorization of an example for out-of-distribution input). Not a flat
    yes/no; read the section before deciding whether to fold examples in for your task.
-3. Wire `--backend real` in the CLI to `ProgramAsWeightsBackend`.
+3. ~~Wire `--backend real` in the CLI to `ProgramAsWeightsBackend`.~~ **Done** — it
+   resolves to the upstream SDK, announces any fallback to the mock, and refuses to
+   recompile (a paid, destructive operation) unless asked explicitly. See `paw_kit/cli.py`.
 4. Decide `RealPAWBackend`'s fate. It was the placeholder for an in-process PEFT path,
    justified mainly as "the only place the logits processor could ever be applied" —
    which [`measurements/`](./measurements) has since shown to be false: constrained

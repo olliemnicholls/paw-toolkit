@@ -47,6 +47,29 @@ from paw_kit.serve.models import (
 logger = logging.getLogger("paw_kit.serve")
 
 
+def backend_label(backend: object) -> str:
+    """Describe a backend as "mock" or "real" for telemetry.
+
+    Two deliberate choices. First, the test is `isinstance(..., MockPAWBackend)` rather
+    than a whitelist of known real backends: the previous form was
+    `"real" if isinstance(b, RealPAWBackend) else "mock"`, which mislabelled *every* other
+    backend -- including `ProgramAsWeightsBackend`, the only one proven against a real
+    model, and any third-party `AbstractPAWBackend` -- as "mock". Anything that is not the
+    known test double is real.
+
+    Second, this returns a fixed two-value vocabulary rather than `type(backend).__name__`.
+    PAW-SERVE-06 deliberately stripped backend implementation detail out of the telemetry
+    surface; a concrete class name is exactly what that finding removed, so it must not
+    come back in through the label if `ServerState` is ever re-exposed. It also matches
+    what `paw-serve` prints to the user.
+
+    Factored out as a function because `ServerState.backend_name` is currently write-only
+    (PAW-SERVE-06 removed it from `/health`), which would otherwise make this logic
+    untestable and unobservable -- the state it is stored on is a closure local.
+    """
+    return "mock" if isinstance(backend, MockPAWBackend) else "real"
+
+
 class ServerState:
     """Thread-safe runtime server telemetry state."""
 
@@ -336,14 +359,7 @@ def create_app(
         raise FileNotFoundError(f"Adapter file not found: {adapter_path}")
 
     selected_backend = backend or MockPAWBackend()
-    # Report the backend actually in use. This used to be
-    # `"real" if isinstance(selected_backend, RealPAWBackend) else "mock"`, which
-    # mislabelled every backend that was neither of those two -- including
-    # ProgramAsWeightsBackend, the only one proven against a real model -- as "mock".
-    backend_type = (
-        "mock" if isinstance(selected_backend, MockPAWBackend)
-        else type(selected_backend).__name__
-    )
+    backend_type = backend_label(selected_backend)
     # Return basename to avoid exposing host filesystem directory layout
     state = ServerState(path_obj.name, backend_type)
     configured_api_key = api_key or os.environ.get("PAW_API_KEY")

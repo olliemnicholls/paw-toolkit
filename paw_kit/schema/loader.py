@@ -18,7 +18,8 @@ _NO_BACKEND_WARNING = (
     "MockPAWBackend -- a deterministic rule/example-based stub, not a real model. "
     "Any adapter 'compiled' against it will keep returning that stub's synthetic "
     "output forever, silently, including after @compile_on_hit hot-swaps to it. "
-    "Pass backend=RealPAWBackend(...) (v0.2, `pip install 'paw-kit[torch]'`) or "
+    "Pass backend=ProgramAsWeightsBackend(...) (`pip install 'paw-kit[real]'`, get an "
+    "API key at https://programasweights.com/settings) or "
     "your own AbstractPAWBackend for real production inference."
 )
 

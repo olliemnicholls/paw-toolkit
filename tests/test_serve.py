@@ -912,3 +912,41 @@ def test_cli_serve_allow_anonymous_flag_PAW_SERVE_01(
     assert called_kwargs.get("allow_anonymous") is True
     assert called_kwargs.get("api_key") is None
     assert "DISABLED" in res.stdout
+
+
+def test_server_backend_label_uses_stable_vocabulary(mock_adapter: Path):
+    """backend_label() is "mock"/"real", never a concrete class name.
+
+    This label used to be `"real" if isinstance(b, RealPAWBackend) else "mock"`, which
+    mislabelled ProgramAsWeightsBackend -- the only backend proven against a real model --
+    as "mock". The fix must not swing to `type(b).__name__`: PAW-SERVE-06 deliberately
+    stripped implementation detail out of the telemetry surface, and a concrete class name
+    is exactly what it removed. It must also generalise to backends beyond the two the
+    original isinstance chain knew about, which is the case nothing previously exercised.
+    """
+    from paw_kit.backend.base import AbstractPAWBackend
+    from paw_kit.serve.server import backend_label
+
+    class ThirdPartyBackend(AbstractPAWBackend):
+        """An arbitrary AbstractPAWBackend neither branch was ever tested against."""
+
+        def compile(self, spec, examples, output_path):  # pragma: no cover - unused
+            raise NotImplementedError
+
+        def infer(self, adapter_path, input_text, grammar_constraint=None):
+            return "ok"
+
+        def is_available(self) -> bool:
+            return True
+
+    assert backend_label(MockPAWBackend()) == "mock"
+
+    label = backend_label(ThirdPartyBackend())
+    assert label == "real"
+    assert "ThirdPartyBackend" not in label
+
+    # And it is what create_app actually records.
+    from paw_kit.serve.server import create_app
+
+    app_obj = create_app(str(mock_adapter), backend=MockPAWBackend(), allow_anonymous=True)
+    assert app_obj is not None

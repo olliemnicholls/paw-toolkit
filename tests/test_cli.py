@@ -551,6 +551,10 @@ def test_resolve_cli_backend_real_returns_upstream_not_mock(monkeypatch):
 
     monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: True)
     monkeypatch.setattr(ProgramAsWeightsBackend, "has_api_key", lambda self: True)
+    # _resolve_cli_backend forces the SDK import (is_available only calls find_spec).
+    # Stub it: the real import succeeds on a dev box with the [real] extra and fails in
+    # CI without it, which would make this test's result depend on the environment.
+    monkeypatch.setattr(ProgramAsWeightsBackend, "_paw", lambda self: object())
 
     backend = _resolve_cli_backend("real")
     assert isinstance(backend, ProgramAsWeightsBackend)
@@ -569,7 +573,7 @@ def test_resolve_cli_backend_real_falls_back_loudly_without_sdk(monkeypatch, cap
     assert isinstance(backend, MockPAWBackend)
     out = strip_ansi(capsys.readouterr().out)
     assert "not a model" in out
-    assert "pip install programasweights" in out
+    assert "paw-kit[real]" in out
 
 
 def test_resolve_cli_backend_real_without_api_key_still_returns_upstream(monkeypatch, capsys):
@@ -579,6 +583,7 @@ def test_resolve_cli_backend_real_without_api_key_still_returns_upstream(monkeyp
 
     monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: True)
     monkeypatch.setattr(ProgramAsWeightsBackend, "has_api_key", lambda self: False)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "_paw", lambda self: object())
 
     backend = _resolve_cli_backend("real")
     assert isinstance(backend, ProgramAsWeightsBackend)
@@ -592,3 +597,155 @@ def test_resolve_cli_backend_rejects_unknown_value():
 
     with pytest.raises(typer.BadParameter):
         _resolve_cli_backend("rael")
+
+
+def test_resolve_cli_backend_real_falls_back_when_sdk_present_but_unimportable(monkeypatch, capsys):
+    """A present-but-broken SDK must fail at resolution, not silently as a 0% pass rate.
+
+    `is_available()` only calls `find_spec` -- it never imports. A package that is
+    installed but unimportable (mismatched llama_cpp, broken CUDA build, half-finished
+    install) therefore used to pass the availability check, get announced as
+    `ProgramAsWeightsBackend`, and then raise inside every `infer()`, where TestRunner's
+    blanket `except Exception` turned it into "[EXECUTION_ERROR]" and a 0.0% pass rate.
+    The user, having been told they were on a real backend, reads that as the *model*
+    failing their assertions. Infrastructure failure must not masquerade as model failure.
+    """
+    from paw_kit.backend.mock import MockPAWBackend
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+    from paw_kit.cli import _resolve_cli_backend
+
+    def _boom(self):
+        raise ImportError("libllama.so: cannot open shared object file")
+
+    monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: True)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "_paw", _boom)
+
+    backend = _resolve_cli_backend("real")
+
+    assert isinstance(backend, MockPAWBackend)
+    out = strip_ansi(capsys.readouterr().out)
+    assert "could not be loaded" in out
+    assert "libllama.so" in out
+    assert "not a model" in out
+
+
+def _real_backend_suite(tmp_path):
+    """A suite with auto_recompile on, plus a stub adapter, for the guard tests below."""
+    adapter = tmp_path / "guard.paw"
+    adapter.write_text(json.dumps({"task_name": "guard", "spec": "s", "examples": []}))
+    suite = tmp_path / "suite.yaml"
+    suite.write_text(
+        "task_name: guard\n"
+        'spec: "Normalize a date."\n'
+        f'adapter_path: "{adapter.name}"\n'
+        "standard_cases:\n"
+        '  - input: "January 15, 2026"\n'
+        '    expected: "2026-01-15"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+        "active_learning:\n"
+        "  auto_recompile: true\n"
+        "  max_iterations: 3\n"
+    )
+    return suite
+
+
+def test_check_real_backend_disables_auto_recompile_by_default(tmp_path, monkeypatch, capsys):
+    """`--backend real` must not fire a paid, destructive recompile implicitly.
+
+    auto_recompile defaults to True and the shipped example suite sets it true, so before
+    this guard `paw-test check <suite> --backend real` -- one flag added to the command
+    the README prints -- submitted up to max_iterations-1 real upstream compiles built on
+    labels invented by the CLI's demo stub teacher, and overwrote the adapter in place.
+    """
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+
+    suite = _real_backend_suite(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: True)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "has_api_key", lambda self: True)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "_paw", lambda self: object())
+
+    def _must_not_compile(self, *a, **kw):
+        raise AssertionError("compile() reached with a real backend and no explicit opt-in")
+
+    monkeypatch.setattr(ProgramAsWeightsBackend, "compile", _must_not_compile)
+    monkeypatch.setattr(
+        ProgramAsWeightsBackend, "infer", lambda self, *a, **kw: "2026-01-15"
+    )
+
+    result = runner.invoke(paw_test_app, ["check", str(suite), "--backend", "real"])
+    out = strip_ansi(result.output)
+
+    assert "auto-recompile is disabled" in out
+    assert "overwrite" in out
+    # The run still happens -- read-only, not skipped.
+    assert "Pass rate:" in out
+    assert "backend: ProgramAsWeightsBackend" in out
+
+
+def test_check_real_backend_refuses_explicit_auto_recompile(tmp_path, monkeypatch):
+    """Explicit --auto-recompile is refused, not honoured: the CLI teacher is a stub.
+
+    The built-in `cli_teacher` answers "2026-01-01" to almost any input. Those labels
+    must never become training signal for a paid compile that overwrites the adapter, so
+    the explicit opt-in path errors and points the user at the code-level API instead.
+    """
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+
+    suite = _real_backend_suite(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: True)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "has_api_key", lambda self: True)
+    monkeypatch.setattr(ProgramAsWeightsBackend, "_paw", lambda self: object())
+
+    def _must_not_compile(self, *a, **kw):
+        raise AssertionError("compile() reached despite the stub-teacher refusal")
+
+    monkeypatch.setattr(ProgramAsWeightsBackend, "compile", _must_not_compile)
+
+    result = runner.invoke(
+        paw_test_app, ["check", str(suite), "--backend", "real", "--auto-recompile"]
+    )
+
+    assert result.exit_code == 2
+    assert "demo stub" in strip_ansi(result.output)
+
+
+def test_check_mock_backend_still_recompiles_freely(tmp_path, monkeypatch):
+    """The guard is scoped to real backends: the mock costs nothing and is unaffected."""
+    suite = _real_backend_suite(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(paw_test_app, ["check", str(suite), "--backend", "mock"])
+    out = strip_ansi(result.output)
+
+    assert "auto-recompile is disabled" not in out
+    assert "Iteration 1:" in out
+
+
+def test_check_surfaces_backend_execution_error(tmp_path, monkeypatch):
+    """A backend that cannot run must say so, not read as failed assertions.
+
+    TestRunner catches backend exceptions into "[EXECUTION_ERROR]" and stashes the message
+    on TestCaseResult.execution_error. The CLI never printed that field, so a backend
+    failing on every call presented as a 0.0% pass rate against the user's assertions.
+    """
+    from paw_kit.backend.mock import MockPAWBackend
+
+    suite = _real_backend_suite(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def _boom(self, *a, **kw):
+        raise RuntimeError("llama runtime unavailable")
+
+    monkeypatch.setattr(MockPAWBackend, "infer", _boom)
+
+    result = runner.invoke(
+        paw_test_app, ["check", str(suite), "--backend", "mock", "--no-auto-recompile"]
+    )
+    out = strip_ansi(result.output)
+
+    assert "backend error: llama runtime unavailable" in out
+    assert "Pass rate: 0.0%" in out
