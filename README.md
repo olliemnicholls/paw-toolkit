@@ -10,15 +10,24 @@
 > It runs a real model through the official upstream SDK via `ProgramAsWeightsBackend`,
 > which has now been measured end to end on an RTX 3080 and an A100 (see
 > [`measurements/`](./measurements)) — including a real teacher-vs-compiled-adapter
-> comparison, a real grammar-constrained-decoding test against a live model, and a real
-> fail-open test. Two of the numbers from the first pass of that testing were wrong and
-> have since been corrected in place, with the mistake left visible rather than quietly
-> fixed — see `measurements/README.md` if you want the specifics before trusting any
-> number in this repo. Everything else runs on a deterministic mock so you can try the
-> workflow with no GPU and no API key. **What's still untested: whether the compiled
-> adapter's outputs are actually correct, as opposed to merely fast and schema-shaped** —
-> every real measurement so far checks speed or structural validity, not semantic
-> quality. Treat that specific claim as open regardless of what any speed number implies.
+> comparison, a real grammar-constrained-decoding test against a live model, a real
+> fail-open test, and a real end-to-end run of the upstream finetune compiler. A few
+> numbers from the first passes of that testing were wrong (arithmetic slips, a
+> cache-discarding bug in a measurement script, transcription errors) and have since
+> been corrected in place, with each mistake left visible rather than quietly fixed —
+> see `measurements/README.md` if you want the specifics before trusting any number in
+> this repo. Everything else runs on a deterministic mock so you can try the workflow
+> with no GPU and no API key. **Semantic correctness — whether the compiled adapter's
+> outputs are actually right, not just fast and schema-shaped — has now been measured,
+> and the honest answer is "it depends, and don't trust the exact percentage past ±2
+> points":** structural-vs-semantic agreement ranged from 60% (a ticket-triage adapter
+> re-scored against a fresh teacher call) to ~90% depending on task; real hallucinations
+> and memorization failures were found by fuzzing, not by inspection; and the LLM judge
+> used to score "semantic" itself flipped its verdict on 4.5% of cases given
+> byte-identical input and output, so every semantic-pass number here carries that much
+> unreported noise. Not a clean "yes it works" — see
+> [`measurements/README.md`](./measurements/README.md#semantic-correctness-for-real-does-it-mean-the-right-thing-not-just-look-right)
+> for the actual breakdown before repeating any percentage from this project as settled.
 
 ---
 
@@ -275,10 +284,20 @@ paw-kit export docker|dataset ...     scaffolding and trace export
 
 In order, and nothing gets announced until the first item is done:
 
-1. Run `ProgramAsWeightsBackend` end to end against the real service on an RTX 3080 (11GB)
-   and an A100. Publish actual compile time, per-call latency, and `paw-test` pass rates on
-   the three example tasks, with the exact commands used.
-2. Decide from those numbers whether folding traced examples into the spec helps at all.
+1. ~~Run `ProgramAsWeightsBackend` end to end against the real service on an RTX 3080
+   (11GB) and an A100. Publish actual compile time, per-call latency, and `paw-test`
+   pass rates on the three example tasks, with the exact commands used.~~ **Done** —
+   see [`measurements/`](./measurements), plus real JIT hot-swap, grammar-constrained
+   decoding, fail-open, semantic-correctness, and finetune-compiler tests that went
+   beyond the original scope of this item.
+2. ~~Decide from those numbers whether folding traced examples into the spec helps at
+   all.~~ **Done, and the honest answer is "it depends on the failure mode."** A real
+   A/B test (`measurements/README.md#does-folding-examples-into-the-spec-text-actually-help-a-real-answer-on-the-second-try`)
+   found folding examples in fixed format-ambiguity failures dramatically (one task
+   went from 0% to 92.5% structural pass) and did nothing for failures unrelated to
+   format (unicode-handling edge cases) — and introduced a new failure mode of its own
+   (verbatim memorization of an example for out-of-distribution input). Not a flat
+   yes/no; read the section before deciding whether to fold examples in for your task.
 3. Wire `--backend real` in the CLI to `ProgramAsWeightsBackend`.
 4. Either implement `RealPAWBackend` (in-process PEFT on Qwen3-0.6B, where the logits
    processor can actually be applied) or delete it.
