@@ -1,0 +1,87 @@
+name: Upstream Contract
+
+# Weekly early-warning on the upstream `programasweights` SDK.
+#
+# Why this exists: every other test in this repo runs against a fake SDK or the mock
+# backend, so nothing in normal CI notices when upstream renames a function or drops a
+# keyword that `ProgramAsWeightsBackend` passes. Users would find out first, at runtime,
+# inside a compile.
+#
+# What it does NOT do: compile, infer, or use PAW_API_KEY. It is signature inspection
+# only (`tests/test_upstream_contract.py`), so it needs no secrets, no GPU and no quota,
+# and cannot be flaky. Nothing here costs anything to run.
+#
+# Note: GitHub only runs `schedule` on the default branch, and disables cron in repos
+# with 60 days of no activity. `workflow_dispatch` is here so it can always be triggered
+# by hand.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  workflow_dispatch:
+  # Also run when the packaging that pins upstream changes, so a bad bound is caught
+  # at the moment it is introduced rather than up to a week later.
+  push:
+    paths:
+      - "pyproject.toml"
+      - "tests/test_upstream_contract.py"
+      - ".github/workflows/upstream-contract.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pinned:
+    # Does the range we actually ship still resolve, install, and satisfy the contract?
+    # A failure here means users installing `paw-kit[real]` today are affected.
+    name: Declared range (users are affected if this fails)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - run: uv python install 3.12
+
+      - name: Install with the real backend extra
+        run: uv sync --dev --extra real
+
+      - name: Report resolved upstream version
+        run: uv run python -c "import programasweights as p; print('programasweights', p.__version__)"
+
+      - name: Upstream contract
+        run: uv run pytest tests/test_upstream_contract.py -v
+
+      - name: Full suite, with the real SDK importable
+        run: uv run pytest -q
+
+  latest:
+    # Does the newest release upstream has published still satisfy the contract, even
+    # if it is above our declared ceiling? A failure here means the NEXT time we widen
+    # the bound, it breaks -- caught with lead time, while nobody is affected yet.
+    name: Latest upstream release (early warning only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - run: uv python install 3.12
+
+      - name: Install paw-kit, then force the newest upstream release
+        run: |
+          uv sync --dev
+          uv pip install --upgrade programasweights
+
+      - name: Report resolved upstream version
+        run: uv run python -c "import programasweights as p; print('programasweights', p.__version__)"
+
+      - name: Upstream contract against latest
+        run: uv run pytest tests/test_upstream_contract.py -v

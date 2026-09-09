@@ -45,8 +45,26 @@ torch = [
     "safetensors>=0.4.0,<0.9.0",
     "accelerate>=0.28.0,<2.0.0",
 ]
+# The official upstream SDK: the only dependency that yields a *working* real backend
+# (`paw_kit.backend.programasweights.ProgramAsWeightsBackend`). It is imported lazily by
+# that module, so paw-kit and its test suite run fine without it -- but nothing here
+# previously declared it at all, so `pip install paw-kit[real]` installed PyTorch (the
+# dependencies of `RealPAWBackend`, which raises NotImplementedError) and left the
+# backend that actually works uninstallable through package metadata.
+#
+# On public PyPI, despite the `--extra-index-url https://pypi.programasweights.com/simple/`
+# in the upstream README: verified 2026-09-09 that `programasweights==0.4.4` resolves and
+# installs from pypi.org alone (pulling llama-cpp-python, numpy, jinja2). No custom index
+# needed. Floor is the version actually tested against; ceiling follows PAW-DEPS-01's 0.x
+# convention (next *minor*, since a 0.x minor bump may break).
+paw = [
+    "programasweights>=0.4.4,<0.5.0",
+]
+# `real` means "a backend that really runs a model". That is the upstream SDK -- not
+# torch, which only serves `RealPAWBackend` (a stub) and the standalone measurement
+# scripts. Install `paw-kit[torch]` explicitly if you want those.
 real = [
-    "paw-kit[torch]",
+    "paw-kit[paw]",
 ]
 
 [dependency-groups]

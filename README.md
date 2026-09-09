@@ -88,16 +88,26 @@ Not on PyPI yet. From source:
 git clone https://github.com/olliemnicholls/paw-toolkit
 cd paw-toolkit
 uv sync --dev          # or: pip install -e .
-uv run pytest -q       # ~200 tests, no GPU, no network
+uv run pytest -q       # 217 tests, no GPU, no network, no API key
 ```
 
-For a real backend, also install the upstream SDK and get an API key from
+For a real backend, install the `real` extra and get an API key from
 [programasweights.com/settings](https://programasweights.com/settings):
 
 ```bash
-pip install programasweights --extra-index-url https://pypi.programasweights.com/simple/
+uv sync --extra real   # or: pip install 'paw-kit[real]'
 export PAW_API_KEY=paw_sk_...
 ```
+
+`paw-kit[real]` pulls the official upstream SDK, which is what
+`ProgramAsWeightsBackend` runs on. It resolves from PyPI directly — the
+`--extra-index-url` in upstream's own README is not needed (verified 2026-09-09 against
+`programasweights==0.4.4`). No API key is required to *run* an already-compiled program;
+only to compile a new one.
+
+`paw-kit[torch]` is a separate, optional extra pulling PyTorch/transformers. It serves
+`RealPAWBackend` (a stub) and the standalone measurement scripts — it is **not** what you
+want for a working real backend, and it used to be what `[real]` installed.
 
 ---
 

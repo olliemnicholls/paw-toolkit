@@ -490,8 +490,8 @@ one. Corrected at the source (the table now reads `92.5%`); this section's own
 ## Reproducing
 
 ```bash
-pip install programasweights --extra-index-url https://pypi.programasweights.com/simple/
-export PAW_API_KEY=paw_sk_...        # https://programasweights.com/settings
+uv sync --extra real                 # pulls the upstream SDK from PyPI
+export PAW_API_KEY=paw_sk_...        # https://programasweights.com/settings; compile only
 
 uv run python scripts/measure_real_backend.py examples/date_normalizer/suite.yaml \
     --compiler paw-4b-qwen3-0.6b --calls 50 --label your-machine-name

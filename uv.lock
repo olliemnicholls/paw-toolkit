@@ -280,6 +280,15 @@ nvtx = [
 ]
 
 [[package]]
+name = "diskcache"
+version = "5.6.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916, upload-time = "2023-08-31T06:12:00.316Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550, upload-time = "2023-08-31T06:11:58.822Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -432,6 +441,19 @@ sdist = { url = "https://files.pythonhosted.org/packages/df/bf/f7da0350254c0ed7c
 wheels = [
     { url = "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl", hash = "sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67", size = 134899, upload-time = "2025-03-05T20:05:00.369Z" },
 ]
+
+[[package]]
+name = "llama-cpp-python"
+version = "0.3.19"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "diskcache" },
+    { name = "jinja2" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d7/0f/b26ceec20294f5d592ac137ccc2f10e91fa1f35bb8555906b5718a625ac1/llama_cpp_python-0.3.19.tar.gz", hash = "sha256:6816e4a0a74ae9a356e7a0546e13147543f01f695c86a28d940e4b86519acf13", size = 59043951, upload-time = "2026-03-25T22:32:32.581Z" }
 
 [[package]]
 name = "markdown-it-py"
@@ -880,12 +902,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+paw = [
+    { name = "programasweights" },
+]
 real = [
-    { name = "accelerate" },
-    { name = "peft" },
-    { name = "safetensors" },
-    { name = "torch" },
-    { name = "transformers" },
+    { name = "programasweights" },
 ]
 torch = [
     { name = "accelerate" },
@@ -907,8 +928,9 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0,<0.142.0" },
     { name = "httpx", specifier = ">=0.27.0,<0.29.0" },
     { name = "interegular", specifier = ">=0.3.3,<0.4.0" },
-    { name = "paw-kit", extras = ["torch"], marker = "extra == 'real'" },
+    { name = "paw-kit", extras = ["paw"], marker = "extra == 'real'" },
     { name = "peft", marker = "extra == 'torch'", specifier = ">=0.10.0,<0.21.0" },
+    { name = "programasweights", marker = "extra == 'paw'", specifier = ">=0.4.4,<0.5.0" },
     { name = "pydantic", specifier = ">=2.6,<3.0.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0.0" },
     { name = "safetensors", marker = "extra == 'torch'", specifier = ">=0.4.0,<0.9.0" },
@@ -917,7 +939,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12,<0.28.0" },
     { name = "uvicorn", specifier = ">=0.28.0,<0.53.0" },
 ]
-provides-extras = ["torch", "real"]
+provides-extras = ["torch", "paw", "real"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -954,6 +976,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "programasweights"
+version = "0.4.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "llama-cpp-python" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/6c/991eb5a595443be8d3febcd8235e16a151947d09832625ef13988e3c9a3f/programasweights-0.4.4.tar.gz", hash = "sha256:1d57da13bed1658cf7bf4fb6b8329bac9e148d41c91090ae8d9f3f257ea11670", size = 115373, upload-time = "2026-07-18T22:58:17.54Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/87/211d2898dea4514abe65e474c66593047b1d1214c31075475fee13528280/programasweights-0.4.4-py3-none-any.whl", hash = "sha256:c1d8bc54bc4225ff882722cc4986e7b29912225bcd5ebe215297e5dcf8cfa68c", size = 56713, upload-time = "2026-07-18T22:58:16.503Z" },
 ]
 
 [[package]]
