@@ -63,9 +63,9 @@ def backend_label(backend: object) -> str:
     come back in through the label if `ServerState` is ever re-exposed. It also matches
     what `paw-serve` prints to the user.
 
-    Factored out as a function because `ServerState.backend_name` is currently write-only
-    (PAW-SERVE-06 removed it from `/health`), which would otherwise make this logic
-    untestable and unobservable -- the state it is stored on is a closure local.
+    Factored out as a function so the logic is testable and has a single definition:
+    `paw-serve` prints it to the user, and it was previously duplicated inline in the CLI
+    with a different vocabulary (`backend_type.lower()`), so the two could disagree.
     """
     return "mock" if isinstance(backend, MockPAWBackend) else "real"
 
@@ -73,9 +73,12 @@ def backend_label(backend: object) -> str:
 class ServerState:
     """Thread-safe runtime server telemetry state."""
 
-    def __init__(self, adapter_path: str, backend_name: str) -> None:
-        self.adapter_path = adapter_path
-        self.backend_name = backend_name
+    def __init__(self) -> None:
+        # `adapter_path` and `backend_name` used to be stored here and were read
+        # nowhere: PAW-SERVE-06 removed both from /health, leaving write-only state
+        # that no test could observe and no endpoint could expose. Dead telemetry is
+        # worse than none -- it reads as a live signal. `backend_label()` above is the
+        # surviving, tested half; the CLI is its consumer.
         self.start_time = time.time()
         self.total_requests = 0
         self.error_count = 0
@@ -359,9 +362,8 @@ def create_app(
         raise FileNotFoundError(f"Adapter file not found: {adapter_path}")
 
     selected_backend = backend or MockPAWBackend()
-    backend_type = backend_label(selected_backend)
     # Return basename to avoid exposing host filesystem directory layout
-    state = ServerState(path_obj.name, backend_type)
+    state = ServerState()
     configured_api_key = api_key or os.environ.get("PAW_API_KEY")
     if not configured_api_key and not allow_anonymous:
         # PAW-SERVE-01: default-deny. Without this, every inference endpoint is

@@ -573,7 +573,7 @@ def test_resolve_cli_backend_real_falls_back_loudly_without_sdk(monkeypatch, cap
     assert isinstance(backend, MockPAWBackend)
     out = strip_ansi(capsys.readouterr().out)
     assert "not a model" in out
-    assert "paw-kit[real]" in out
+    assert "programasweights" in out
 
 
 def test_resolve_cli_backend_real_without_api_key_still_returns_upstream(monkeypatch, capsys):
@@ -749,3 +749,115 @@ def test_check_surfaces_backend_execution_error(tmp_path, monkeypatch):
 
     assert "backend error: llama runtime unavailable" in out
     assert "Pass rate: 0.0%" in out
+
+
+def test_check_refuses_to_recompile_a_non_mock_adapter(tmp_path, monkeypatch):
+    """The mock backend must not overwrite an adapter another backend produced.
+
+    `MockPAWBackend.compile()` writes a real file (atomic_write_text) -- it is not the
+    in-memory no-op the first pass at the --backend real guard assumed. So plain
+    `paw-test check suite.yaml`, default backend, default auto_recompile=True, used to
+    replace whatever `adapter_path` pointed at with a mock stub whose examples are
+    cli_teacher's fabricated labels. Reproduced against a real programasweights manifest
+    before this guard: it was destroyed wholesale, on the *default* invocation.
+    """
+    adapter = tmp_path / "real.paw"
+    original = json.dumps(
+        {"backend": "programasweights", "program_id": "prog_abc123", "compiler": "paw-4b"}
+    )
+    adapter.write_text(original)
+    suite = tmp_path / "suite.yaml"
+    suite.write_text(
+        "task_name: n1\n"
+        'spec: "Normalize a date."\n'
+        'adapter_path: "real.paw"\n'
+        "standard_cases:\n"
+        '  - input: "January 15, 2026"\n'
+        '    expected: "2026-01-15"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+        "active_learning:\n"
+        "  auto_recompile: true\n"
+        "  max_iterations: 2\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(paw_test_app, ["check", "suite.yaml"])
+    out = strip_ansi(result.output)
+
+    assert "auto-recompile is disabled" in out
+    assert "programasweights adapter" in out
+    # The point of the test: the file on disk is untouched.
+    assert adapter.read_text() == original
+
+
+def test_check_still_recompiles_a_mock_adapter(tmp_path, monkeypatch):
+    """The N1 guard is scoped to foreign adapters: a mock adapter recompiles as before."""
+    adapter = tmp_path / "mock.paw"
+    adapter.write_text(json.dumps({"backend": "mock", "spec": "s", "examples": []}))
+    suite = tmp_path / "suite.yaml"
+    suite.write_text(
+        "task_name: n1mock\n"
+        'spec: "Normalize a date."\n'
+        'adapter_path: "mock.paw"\n'
+        "standard_cases:\n"
+        '  - input: "January 15, 2026"\n'
+        '    expected: "2026-01-15"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+        "active_learning:\n"
+        "  auto_recompile: true\n"
+        "  max_iterations: 2\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(paw_test_app, ["check", "suite.yaml"])
+    out = strip_ansi(result.output)
+
+    assert "auto-recompile is disabled" not in out
+    assert "Iteration 1:" in out
+
+
+def test_check_output_survives_rich_markup_in_paths_and_errors(tmp_path, monkeypatch):
+    """Bracketed text in a path or backend error must not be eaten or crash the CLI.
+
+    Rich parses square brackets as markup tags. An unescaped interpolation either
+    silently deletes the bracketed span (`[date]` vanished from install advice, printing
+    `pip install 'paw-kit'`) or, for a path-shaped tag, raises an uncaught MarkupError
+    and takes the whole command down.
+    """
+    from paw_kit.backend.mock import MockPAWBackend
+
+    adapter = tmp_path / "[v2]adapter.paw"
+    adapter.write_text(json.dumps({"backend": "mock", "spec": "s", "examples": []}))
+    suite = tmp_path / "suite.yaml"
+    suite.write_text(
+        "task_name: markup\n"
+        'spec: "Normalize a date."\n'
+        'adapter_path: "[v2]adapter.paw"\n'
+        "standard_cases:\n"
+        '  - input: "January 15, 2026"\n'
+        '    expected: "2026-01-15"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    def _boom(self, *a, **kw):
+        raise RuntimeError("cannot open [/usr/lib/libllama.so]")
+
+    monkeypatch.setattr(MockPAWBackend, "infer", _boom)
+
+    result = runner.invoke(
+        paw_test_app, ["check", "suite.yaml", "--no-auto-recompile"]
+    )
+    out = strip_ansi(result.output)
+
+    # No MarkupError escaped as a crash...
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    # ...and neither bracketed span was silently swallowed.
+    assert "[v2]adapter.paw" in out
+    assert "[/usr/lib/libllama.so]" in out

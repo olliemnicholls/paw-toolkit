@@ -577,7 +577,7 @@ def test_server_state_get_uptime_lock_free_PAW_SERVE_07() -> None:
     probe reading it can't be blocked behind get_metrics()'s percentile sort. A real
     `threading.Lock` object's methods are read-only (C-level), so the lock itself is
     swapped for a stand-in that fails the test the moment anything acquires it."""
-    state = ServerState("test.paw", "mock")
+    state = ServerState()
     state._lock = _ForbiddenLock()  # type: ignore[assignment]
     assert state.get_uptime() >= 0.0
 
@@ -589,7 +589,7 @@ def test_server_state_get_metrics_sorts_outside_lock_PAW_SERVE_07(
     snapshot — the lock protects only the O(n) copy, not the O(n log n) sort."""
     import paw_kit.serve.server as server_module
 
-    state = ServerState("test.paw", "mock")
+    state = ServerState()
     for lat in [5.0, 1.0, 3.0]:
         state.record_request(lat)
 
@@ -686,7 +686,7 @@ def test_serve_rate_limit_bucket_storage_bounded_PAW_SERVE_10() -> None:
 
 def test_server_state_metrics_calculation() -> None:
     """Verify ServerState percentile calculation across request latencies."""
-    state = ServerState("test.paw", "mock")
+    state = ServerState()
     for lat in [10.0, 20.0, 30.0, 40.0, 50.0]:
         state.record_request(lat)
 
@@ -914,7 +914,7 @@ def test_cli_serve_allow_anonymous_flag_PAW_SERVE_01(
     assert "DISABLED" in res.stdout
 
 
-def test_server_backend_label_uses_stable_vocabulary(mock_adapter: Path):
+def test_server_backend_label_uses_stable_vocabulary():
     """backend_label() is "mock"/"real", never a concrete class name.
 
     This label used to be `"real" if isinstance(b, RealPAWBackend) else "mock"`, which
@@ -945,8 +945,3 @@ def test_server_backend_label_uses_stable_vocabulary(mock_adapter: Path):
     assert label == "real"
     assert "ThirdPartyBackend" not in label
 
-    # And it is what create_app actually records.
-    from paw_kit.serve.server import create_app
-
-    app_obj = create_app(str(mock_adapter), backend=MockPAWBackend(), allow_anonymous=True)
-    assert app_obj is not None

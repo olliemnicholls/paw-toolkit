@@ -9,6 +9,7 @@ import tempfile
 import time
 from typing import Any, List, Optional
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 import typer
@@ -16,6 +17,7 @@ import typer
 from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.pathsafety import ensure_contained
+from paw_kit.serve.server import backend_label
 from paw_kit.test.active import run_active_learning_loop
 from paw_kit.test.runner import TestRunner
 from paw_kit.test.suite import load_suite
@@ -34,6 +36,28 @@ test_app.__test__ = False  # Prevent pytest from treating Typer instance as a te
 @test_app.callback()
 def test_app_main() -> None:
     """paw-test: Test runner and active-learning self-healing suite."""
+
+
+def _declared_adapter_backend(adapter_path: str) -> Optional[str]:
+    """Return the `backend` an existing .paw manifest declares, or None.
+
+    None means "no opinion": the file is absent, unreadable, not JSON, or carries no
+    `backend` key. Callers must treat that as "unknown", never as "mock" -- this is used
+    to decide whether overwriting the file is safe, so an unreadable manifest must not
+    read as permission.
+    """
+    try:
+        raw = Path(adapter_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        manifest = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    declared = manifest.get("backend")
+    return declared if isinstance(declared, str) else None
 
 
 def _resolve_cli_backend(backend_type: str) -> Any:
@@ -62,12 +86,21 @@ def _resolve_cli_backend(backend_type: str) -> Any:
         )
 
     backend = ProgramAsWeightsBackend()
-    if not backend.is_available():
+    try:
+        sdk_present = backend.is_available()
+    except Exception:
+        # find_spec can raise on a corrupted/shadowed package rather than returning
+        # False. Treat that as absent: this whole branch exists to degrade loudly.
+        sdk_present = False
+    if not sdk_present:
         console.print(
             "[bold yellow]Warning:[/bold yellow] --backend real needs the official upstream SDK.\n"
             # Escape the [ so Rich does not parse "[real]" as a markup tag and print
             # `pip install 'paw-kit'` -- wrong advice, and silently wrong.
-            "  To install: [cyan]pip install 'paw-kit\\[real]'[/cyan]\n"
+            # paw-kit is not on PyPI yet, so name the SDK directly as well: the extra
+            # only works from a source checkout today.
+            "  To install: [cyan]pip install programasweights[/cyan] "
+            "(or [cyan]uv sync --extra real[/cyan] from a source checkout)\n"
             "  Falling back to [green]MockPAWBackend[/green] -- results below come from a "
             "dictionary lookup, not a model."
         )
@@ -85,7 +118,7 @@ def _resolve_cli_backend(backend_type: str) -> Any:
     except Exception as exc:
         console.print(
             "[bold yellow]Warning:[/bold yellow] the upstream SDK is installed but could "
-            f"not be loaded: {exc}\n"
+            f"not be loaded: {escape(str(exc))}\n"
             "  Falling back to [green]MockPAWBackend[/green] -- results below come from a "
             "dictionary lookup, not a model."
         )
@@ -337,7 +370,7 @@ def check(
             console.print(
                 "[bold yellow]Note:[/bold yellow] auto-recompile is disabled for "
                 f"--backend {backend_type}. Recompiling would submit a paid upstream "
-                f"compile and overwrite [cyan]{config.adapter_path}[/cyan] in place.\n"
+                f"compile and overwrite [cyan]{escape(config.adapter_path)}[/cyan] in place.\n"
                 "  Running assertions read-only. Pass [cyan]--auto-recompile[/cyan] "
                 "explicitly to allow recompilation."
             )
@@ -352,9 +385,29 @@ def check(
                 param_hint="--auto-recompile",
             )
 
+    # The mock is NOT a safe place to recompile either, which the guard above originally
+    # claimed it was. `MockPAWBackend.compile()` writes a real file (`backend/mock.py`,
+    # atomic_write_text), so `paw-test check suite.yaml` with no flags at all -- default
+    # backend, default auto_recompile=True -- overwrites whatever `adapter_path` points at
+    # with a mock stub whose examples are cli_teacher's fabricated labels. Reproduced
+    # against a real programasweights manifest: it was replaced wholesale. Nothing about
+    # that is specific to --backend real; it is the *default* invocation.
+    if config.active_learning.auto_recompile:
+        existing_backend = _declared_adapter_backend(config.adapter_path)
+        if existing_backend is not None and existing_backend != "mock":
+            config.active_learning.auto_recompile = False
+            console.print(
+                "[bold yellow]Note:[/bold yellow] auto-recompile is disabled: "
+                f"[cyan]{escape(config.adapter_path)}[/cyan] is a "
+                f"[bold]{escape(existing_backend)}[/bold] adapter, and recompiling would "
+                "replace it with a mock stub built from this CLI's demo teacher.\n"
+                "  Running assertions read-only. Recompile it with the backend that "
+                "produced it, from code."
+            )
+
     console.print(
         f"[bold cyan]Running paw.test check on:[/bold cyan] {config.task_name} "
-        f"([dim]{config.adapter_path}[/dim]) [dim](backend: {actual_backend})[/dim]"
+        f"([dim]{escape(config.adapter_path)}[/dim]) [dim](backend: {actual_backend})[/dim]"
     )
 
     # PAW-CLI-02: adapter_path containment used to be checked here directly, but
@@ -368,16 +421,22 @@ def check(
         report = runner.run(config)
         for res in report.results:
             if res.passed:
-                console.print(f"  [green][PASS][/green] Input: {res.input[:50]!r} -> {res.output[:40]!r}")
+                console.print(
+                    f"  [green][PASS][/green] Input: {escape(repr(res.input[:50]))} -> "
+                    f"{escape(repr(res.output[:40]))}"
+                )
             else:
-                console.print(f"  [red][FAIL][/red] Input: {res.input[:50]!r} -> {res.output[:40]!r}")
+                console.print(
+                    f"  [red][FAIL][/red] Input: {escape(repr(res.input[:50]))} -> "
+                    f"{escape(repr(res.output[:40]))}"
+                )
                 for reason in res.failed_rules:
-                    console.print(f"         [dim red]{reason}[/dim red]")
+                    console.print(f"         [dim red]{escape(reason)}[/dim red]")
                 # TestRunner catches backend exceptions into "[EXECUTION_ERROR]" and stashes
                 # the message here. Without printing it, a backend that cannot run at all is
                 # indistinguishable from a model failing the user's assertions.
                 if res.execution_error:
-                    console.print(f"         [dim red]backend error: {res.execution_error}[/dim red]")
+                    console.print(f"         [dim red]backend error: {escape(res.execution_error)}[/dim red]")
 
         console.print(
             f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
@@ -388,11 +447,15 @@ def check(
         raise typer.Exit(code=0)
 
     # Demo-only stub teacher for active-learning auto-repair in CLI check. This is NOT a
-    # frontier model -- it is a two-branch lookup. The guard above guarantees it can only
-    # ever reach MockPAWBackend, whose compile() is an in-memory no-op, so its fabricated
-    # labels cannot become training signal for a paid compile or overwrite a real adapter.
+    # frontier model -- it is a two-branch lookup. The guards above keep its fabricated
+    # labels away from a paid compile (real backends never reach here) and away from any
+    # adapter that was not produced by the mock. They do NOT make it harmless: reaching
+    # here still rewrites a mock adapter file on disk with these labels folded in.
     def cli_teacher(inp: str) -> str:
-        console.print(f"  [yellow][ACTION][/yellow] Active learning: Querying frontier teacher for '{inp[:40]}'...")
+        console.print(
+            f"  [yellow][ACTION][/yellow] Active learning: Querying frontier teacher "
+            f"for '{escape(inp[:40])}'..."
+        )
         # If input was an invalid date, return canonical gold label
         if "February 30" in inp or "32" in inp:
             return "INVALID"
@@ -566,7 +629,7 @@ def serve(
         )
 
     backend = _resolve_cli_backend(backend_type)
-    actual_type = "mock" if isinstance(backend, MockPAWBackend) else backend_type.lower()
+    actual_type = backend_label(backend)
     console.print(f"[bold green]Launching PAW microservice on http://{host}:{port}[/bold green]")
     console.print(f"  [cyan]Adapter:[/cyan] {adapter_path}")
     console.print(f"  [cyan]Backend:[/cyan] {actual_type}")
