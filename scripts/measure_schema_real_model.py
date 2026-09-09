@@ -24,7 +24,8 @@ holds against a real base model -- and, for the unconstrained arm, what the fail
 looks like without it.
 
 Prerequisites:
-    uv sync --extra torch
+    uv sync --extra measure      # torch + transformers, for this script only --
+                                # NOT a backend. See pyproject.toml's comment.
     (no API key needed -- entirely local)
 
 Usage:

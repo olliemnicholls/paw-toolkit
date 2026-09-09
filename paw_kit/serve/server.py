@@ -52,7 +52,8 @@ def backend_label(backend: object) -> str:
 
     Two deliberate choices. First, the test is `isinstance(..., MockPAWBackend)` rather
     than a whitelist of known real backends: the previous form was
-    `"real" if isinstance(b, RealPAWBackend) else "mock"`, which mislabelled *every* other
+    `"real" if isinstance(b, RealPAWBackend) else "mock"` (that class was deleted in
+    Track 13), which mislabelled *every* other
     backend -- including `ProgramAsWeightsBackend`, the only one proven against a real
     model, and any third-party `AbstractPAWBackend` -- as "mock". Anything that is not the
     known test double is real.

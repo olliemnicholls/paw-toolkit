@@ -917,7 +917,8 @@ def test_cli_serve_allow_anonymous_flag_PAW_SERVE_01(
 def test_server_backend_label_uses_stable_vocabulary():
     """backend_label() is "mock"/"real", never a concrete class name.
 
-    This label used to be `"real" if isinstance(b, RealPAWBackend) else "mock"`, which
+    This label used to be `"real" if isinstance(b, RealPAWBackend) else "mock"` -- that
+    class was deleted in Track 13 -- which
     mislabelled ProgramAsWeightsBackend -- the only backend proven against a real model --
     as "mock". The fix must not swing to `type(b).__name__`: PAW-SERVE-06 deliberately
     stripped implementation detail out of the telemetry surface, and a concrete class name

@@ -719,14 +719,17 @@ def test_atomic_write_gives_recompiled_adapter_a_fresh_inode_PAW_JIT_05(tmp_path
     assert target.read_text(encoding="utf-8") == "v2"
 
 
-def test_mock_and_real_backend_compile_route_through_atomic_write_PAW_JIT_05() -> None:
-    """Structural check that both compile() implementations that write an adapter
-    file actually call the shared atomic_write_text helper, not a bare
-    open()/Path.write_text()."""
+def test_shipped_backend_compiles_route_through_atomic_write_PAW_JIT_05() -> None:
+    """Structural check that every compile() that writes an adapter file goes through
+    the shared atomic_write_text helper, not a bare open()/Path.write_text().
+
+    Track 13 swapped the second assertion from the deleted RealPAWBackend stub to
+    ProgramAsWeightsBackend -- widening this check rather than narrowing it to the test
+    double, since the upstream backend is the only one a real compile ever reaches."""
     import inspect
 
     from paw_kit.backend.mock import MockPAWBackend
-    from paw_kit.backend.real import RealPAWBackend
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 
     assert "atomic_write_text" in inspect.getsource(MockPAWBackend.compile)
-    assert "atomic_write_text" in inspect.getsource(RealPAWBackend.compile)
+    assert "atomic_write_text" in inspect.getsource(ProgramAsWeightsBackend.compile)

@@ -677,3 +677,26 @@ cluster's policy) — the actual measurement run needs to go through the batch s
 (`sbatch`), not an interactive shell. Also watch your home-directory quota if one exists;
 `pip`/`uv` caches and the downloaded base model (~600MB, one-time, in
 `~/.cache/programasweights/`) add up faster than you'd expect on a small quota.
+
+---
+
+## Note, 2026-09-09 (Track 13)
+
+`paw_kit/backend/real.py` and the `RealPAWBackend` class were **deleted**. Passages above
+that describe its behaviour — the corrected docstring, the `runtime_executor` pass-through,
+the "only place the logits processor could be applied" framing — are left exactly as
+written: they are the dated record of what was measured and when, and rewriting them would
+destroy the thing this document is for. Read any reference to `real.py` above as historical.
+
+Two consequences for anything in this file that is still load-bearing:
+
+- **No backend shipped in `paw_kit` applies grammar-constrained decoding.** That was already
+  true when these measurements were taken; deleting the stub only removes a class that never
+  applied it either. `paw.load` validates after generation and falls back on failure.
+- **The constrained-decoding results stand unchanged.** They were produced by
+  `scripts/measure_schema_real_model.py` and
+  `scripts/measure_constrained_decoding_upstream.py`, neither of which routed through
+  `RealPAWBackend`. Reproducing the first now needs `uv sync --extra measure` (renamed from
+  `--extra torch`).
+
+See `conductor/decisions.md` §3 for why an in-process runtime is out of scope by design.

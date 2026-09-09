@@ -33,7 +33,7 @@ def test_pyproject_dependencies_are_all_upper_bounded_PAW_DEPS_01() -> None:
 
     for spec in specs:
         if spec.startswith("paw-kit"):
-            # Self-reference (the `real` extra pulling in the `torch` extra) -- not
+            # Self-reference (the `real` extra pulling in the `paw` extra) -- not
             # an external supply-chain dependency.
             continue
         assert ">=" in spec, f"{spec!r} has no lower bound"

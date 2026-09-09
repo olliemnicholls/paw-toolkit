@@ -71,7 +71,6 @@ a frontier API, and who want evidence before they trust it:
 | Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **and confirmed against a real model**: 15/15 valid Pydantic parses (100%) both raw and fence-stripped, vs 0/15 raw / 11/15 (73%) fence-stripped unconstrained. **Not shipped wired into any `paw_kit` backend**, but no longer for want of a place to put it: masking has now been driven against a real upstream-compiled adapter (a bare-string adapter forced into a JSON schema it was never trained on: 4/5 structurally valid, 0.40ms/token masking — structural validity only, and the schema's `kind` field came out `"mobile"` for all four regardless of input) by injecting it into the llama.cpp sampling loop the upstream SDK already runs — see [`measurements/`](./measurements). That path reaches a *private* SDK attribute and is an experiment, not a shipped feature; the blocker to shipping it is a one-time-per-schema FSM warm-up (~1.7s per new state), not the absence of a runtime | Real generation on `Qwen2.5-0.5B-Instruct`; an initial ~13x latency-cost measurement was a caching bug in the test script (fixed) — properly measured on that model, constrained decoding is roughly on par with unconstrained once warm. That does **not** generalise to the upstream-adapter probe in the same cell, where the median constrained call was 3.2 s against 85 ms unconstrained because each new FSM state costs ~1.7 s to build; see [`measurements/`](./measurements) |
 | HTTP server, Docker export, dataset export, CLI | Implemented, unit-tested | `MockPAWBackend` |
 | `ProgramAsWeightsBackend` (official upstream SDK) | Implemented, unit-tested against a fake SDK, **and run end-to-end against the real service and a real model** | Real compile + inference on an RTX 3080 and an A100; see [`measurements/`](./measurements) |
-| `RealPAWBackend` (in-process PyTorch/PEFT) | Stub. Raises `NotImplementedError`. | Nothing |
 | `MockPAWBackend` | A dictionary lookup that returns canned strings. It is a test double, not a model. | n/a |
 
 The demo command and the three examples all run on the mock. When they print "local
@@ -88,7 +87,7 @@ Not on PyPI yet. From source:
 git clone https://github.com/olliemnicholls/paw-toolkit
 cd paw-toolkit
 uv sync --dev          # or: pip install -e .
-uv run pytest -q       # 231 tests, no GPU, no network, no API key
+uv run pytest -q       # 226 tests, no GPU, no network, no API key
 ```
 
 For a real backend, install the `real` extra and get an API key from
@@ -105,9 +104,11 @@ export PAW_API_KEY=paw_sk_...
 `programasweights==0.4.4`). No API key is required to *run* an already-compiled program;
 only to compile a new one.
 
-`paw-kit[torch]` is a separate, optional extra pulling PyTorch/transformers. It serves
-`RealPAWBackend` (a stub) and the standalone measurement scripts — it is **not** what you
-want for a working real backend, and it used to be what `[real]` installed.
+`paw-kit[measure]` is a separate, optional extra pulling PyTorch/transformers. It exists
+only to reproduce `scripts/measure_schema_real_model.py`, which backs the
+constrained-decoding numbers in [`measurements/`](./measurements). It is **not** a backend
+and buys you no inference. (It was called `[torch]`, and before that it was what `[real]`
+installed — both were misleading, so it is now named for what it actually does.)
 
 ---
 
@@ -214,8 +215,14 @@ plan around them:
    future in-process backend (llama.cpp itself supports GBNF grammars; wiring that through
    the SDK is upstream work, not something this repo can do alone).
 
-`RealPAWBackend` is the placeholder for an in-process HuggingFace/PEFT path. It raises
-`NotImplementedError` today. It exists so the interface is settled, not because it works.
+**Bringing your own runtime.** `AbstractPAWBackend` is three methods — `compile`, `infer`,
+`is_available`. Implement them and pass `backend=` to `paw.load` or `@compile_on_hit`, and
+paw-kit will drive whatever runtime you like. There is no in-process PyTorch/PEFT backend in
+this package and there is not going to be one: paw-kit is a toolkit around upstream PAW, not
+a reimplementation of it. (A `RealPAWBackend` placeholder existed through v0.1 and raised
+`NotImplementedError`; it was deleted rather than built, because shipping a class that looks
+like a working backend and is not is the exact confusion this project spent a track
+removing.)
 
 ---
 
@@ -324,12 +331,17 @@ In order, and nothing gets announced until the first item is done:
 3. ~~Wire `--backend real` in the CLI to `ProgramAsWeightsBackend`.~~ **Done** — it
    resolves to the upstream SDK, announces any fallback to the mock, and refuses to
    recompile (a paid, destructive operation) unless asked explicitly. See `paw_kit/cli.py`.
-4. Decide `RealPAWBackend`'s fate. It was the placeholder for an in-process PEFT path,
-   justified mainly as "the only place the logits processor could ever be applied" —
-   which [`measurements/`](./measurements) has since shown to be false: constrained
-   decoding reaches the real upstream adapter through llama.cpp's own sampling loop.
-   The remaining question is narrower, and is about the FSM warm-up cost and whether
-   upstream will accept a `logits_processor` passthrough, not about building a runtime.
+4. ~~Decide `RealPAWBackend`'s fate.~~ **Done — deleted.** It was the placeholder for an
+   in-process PEFT path, justified mainly as "the only place the logits processor could
+   ever be applied", which [`measurements/`](./measurements) showed to be false:
+   constrained decoding reaches the real upstream adapter through llama.cpp's own
+   sampling loop. paw-kit wraps upstream PAW rather than reimplementing it, so the
+   placeholder was removed instead of built.
+5. Ask upstream for a supported `grammar` / `logits_processor` passthrough on
+   `PawFunction.__call__`. `llama_cpp.Llama.sample()` already accepts both; the SDK's
+   decode loop already calls it. Until there is an answer, **nothing in this package
+   applies constrained decoding** — `paw.load` validates after generation and falls back
+   on failure. Whether `RegexLogitsProcessor` stays here at all depends on that answer.
 
 ## Relationship to upstream
 

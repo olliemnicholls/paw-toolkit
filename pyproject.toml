@@ -33,24 +33,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-torch = [
-    "torch>=2.2.0,<3.0.0",
-    # PAW-DEPS-01: transformers and accelerate have each already crossed a major
-    # version boundary (5.x and 1.x respectively) since their floors below were set;
-    # the ceiling here is one major version above *that* current reality, not above
-    # the old floor -- capping below the actual latest release would contradict this
-    # finding's own "researched, not guessed" instruction.
-    "transformers>=4.40.0,<6.0.0",
-    "peft>=0.10.0,<0.21.0",
-    "safetensors>=0.4.0,<0.9.0",
-    "accelerate>=0.28.0,<2.0.0",
-]
 # The official upstream SDK: the only dependency that yields a *working* real backend
 # (`paw_kit.backend.programasweights.ProgramAsWeightsBackend`). It is imported lazily by
 # that module, so paw-kit and its test suite run fine without it -- but nothing here
-# previously declared it at all, so `pip install paw-kit[real]` installed PyTorch (the
-# dependencies of `RealPAWBackend`, which raises NotImplementedError) and left the
-# backend that actually works uninstallable through package metadata.
+# previously declared it at all, so `pip install paw-kit[real]` installed PyTorch and left
+# the backend that actually works uninstallable through package metadata.
 #
 # On public PyPI, despite the `--extra-index-url https://pypi.programasweights.com/simple/`
 # in the upstream README: verified 2026-09-09 that `programasweights==0.4.4` resolves and
@@ -60,11 +47,26 @@ torch = [
 paw = [
     "programasweights>=0.4.4,<0.5.0",
 ]
-# `real` means "a backend that really runs a model". That is the upstream SDK -- not
-# torch, which only serves `RealPAWBackend` (a stub) and the standalone measurement
-# scripts. Install `paw-kit[torch]` explicitly if you want those.
+# `real` means "a backend that really runs a model", and that is the upstream SDK.
 real = [
     "paw-kit[paw]",
+]
+# Torch/transformers are NOT a backend option. Track 13 deleted `RealPAWBackend`, the
+# in-process PyTorch/PEFT placeholder these once served -- reimplementing upstream's
+# runtime is out of scope by design (see conductor `decisions.md` §3). This extra survives
+# for one reason: the sdist ships `scripts/`, and `scripts/measure_schema_real_model.py`
+# imports torch and transformers at module level to reproduce the constrained-decoding
+# measurement in `measurements/`. It buys reproducibility of this project's own evidence,
+# not inference. Renamed from `torch` so nothing reads it as a runtime choice.
+measure = [
+    "torch>=2.2.0,<3.0.0",
+    # PAW-DEPS-01: transformers and accelerate have each already crossed a major version
+    # boundary (5.x and 1.x respectively) since their floors below were set; the ceiling
+    # here is one major above *that* current reality, not above the old floor.
+    "transformers>=4.40.0,<6.0.0",
+    "peft>=0.10.0,<0.21.0",
+    "safetensors>=0.4.0,<0.9.0",
+    "accelerate>=0.28.0,<2.0.0",
 ]
 
 [dependency-groups]

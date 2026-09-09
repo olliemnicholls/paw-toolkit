@@ -3,7 +3,6 @@
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
-from paw_kit.backend.real import RealPAWBackend
 from paw_kit.jit.compiler import BackgroundCompiler
 from paw_kit.jit.db import TraceDB
 from paw_kit.jit.decorator import compile_on_hit
@@ -40,7 +39,6 @@ __all__ = [
     "PAWSchemaError",
     "PAWSyntaxError",
     "ProgramAsWeightsBackend",
-    "RealPAWBackend",
     "RegexLogitsProcessor",
     "StandardTestCase",
     "TestRunReport",

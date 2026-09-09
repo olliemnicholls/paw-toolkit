@@ -924,3 +924,30 @@ def test_no_unescaped_console_interpolations():
         "Unescaped interpolation into Rich markup (wrap in _e(), or add to the "
         "allowlist only if provably never a string):\n  " + "\n  ".join(offenders)
     )
+
+
+def test_public_api_is_importable_and_excludes_deleted_backends():
+    """Every name `paw_kit` advertises must resolve, and RealPAWBackend must not be one.
+
+    Track 13 deleted `RealPAWBackend`, the in-process PyTorch/PEFT placeholder whose
+    compile() and infer() raised NotImplementedError. paw-kit wraps the upstream SDK; it
+    does not reimplement upstream's runtime, so a real backend is either
+    `ProgramAsWeightsBackend` or a caller's own `AbstractPAWBackend` subclass (see
+    conductor decisions.md section 3). Reintroducing an in-process runtime needs a track,
+    not a patch -- this test makes that a deliberate act rather than an accidental one.
+
+    Asserting `__all__` resolves in full also catches the more common failure: deleting a
+    module and leaving its name advertised, so `from paw_kit import *` breaks at runtime
+    while every ordinary import still passes.
+    """
+    import paw_kit
+    import paw_kit.backend
+
+    for name in paw_kit.__all__:
+        assert hasattr(paw_kit, name), f"paw_kit.__all__ advertises {name!r} but it does not resolve"
+    for name in paw_kit.backend.__all__:
+        assert hasattr(paw_kit.backend, name), f"paw_kit.backend.__all__ advertises {name!r}"
+
+    assert "RealPAWBackend" not in paw_kit.__all__
+    assert "RealPAWBackend" not in paw_kit.backend.__all__
+    assert not hasattr(paw_kit, "RealPAWBackend")

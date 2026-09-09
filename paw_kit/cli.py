@@ -88,8 +88,9 @@ def _resolve_cli_backend(backend_type: str) -> Any:
 
     `real` resolves to `ProgramAsWeightsBackend` -- the official upstream SDK, and the
     only backend in paw-kit proven end to end against a real model (see
-    `measurements/`). It previously resolved to `RealPAWBackend`, whose `compile()` and
-    `infer()` raise `NotImplementedError`, so this function returned `MockPAWBackend()`
+    `measurements/`). It previously resolved to `RealPAWBackend` (an in-process PyTorch
+    placeholder, deleted in Track 13), whose `compile()` and `infer()` raised
+    `NotImplementedError`, so this function returned `MockPAWBackend()`
     on *every* path: `paw-test check --backend real` printed a "falling back" notice and
     then tested a dictionary lookup. That made the CLI structurally incapable of
     exercising a real compiled adapter, which is the one thing `paw-test` exists to do.
