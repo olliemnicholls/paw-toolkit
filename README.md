@@ -87,7 +87,7 @@ Not on PyPI yet. From source:
 git clone https://github.com/olliemnicholls/paw-toolkit
 cd paw-toolkit
 uv sync --dev          # or: pip install -e .
-uv run pytest -q       # 226 tests, no GPU, no network, no API key
+uv run pytest -q       # 230 tests, no GPU, no network, no API key
 ```
 
 For a real backend, install the `real` extra and get an API key from

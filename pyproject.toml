@@ -4,6 +4,47 @@ version = "0.1.0"
 description = "Reliability and migration harness for Program-as-Weights (PAW) neural functions (early alpha)"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "Oliver Nicholls", email = "O.Nicholls@imperial.ac.uk" },
+]
+# PEP 639: an SPDX expression plus the file, rather than the deprecated
+# `license = {text = "MIT"}` table. This is why the hatchling floor below is 1.27.0 --
+# earlier versions emit metadata 2.2 and reject the string form.
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+    "paw",
+    "program-as-weights",
+    "llm",
+    "local-inference",
+    "lora",
+    "pydantic",
+    "structured-output",
+    "fail-open",
+    "llm-testing",
+]
+# Deliberately no "License :: OSI Approved :: MIT License" classifier: PyPI rejects a
+# License classifier alongside a PEP 639 `license` expression, and the expression above
+# is the authoritative declaration.
+#
+# "Development Status :: 3 - Alpha" is the honest rating and matches the README's own
+# status box. It is not 4/Beta: the package has never been released, one of its three
+# advertised subsystems (grammar-constrained decoding) is not applied by any shipped
+# backend, and semantic correctness measured 60-90% depending on task. See
+# `measurements/README.md` before raising this.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Testing",
+]
+
 # PAW-DEPS-01: every runtime/optional/dev dependency below was previously floor-only
 # (e.g. "pydantic>=2.6"), which lets `uv sync`/a fresh install silently resolve
 # whatever major version happens to be latest on PyPI at install time -- including
@@ -31,6 +72,14 @@ dependencies = [
     "uvicorn>=0.28.0,<0.53.0",
     "httpx>=0.27.0,<0.29.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/olliemnicholls/paw-toolkit"
+Repository = "https://github.com/olliemnicholls/paw-toolkit"
+Issues = "https://github.com/olliemnicholls/paw-toolkit/issues"
+Measurements = "https://github.com/olliemnicholls/paw-toolkit/blob/main/measurements/README.md"
+"Upstream SDK" = "https://github.com/programasweights/programasweights-python"
+"Paper (arXiv:2609.04199)" = "https://arxiv.org/abs/2609.04199"
 
 [project.optional-dependencies]
 # The official upstream SDK: the only dependency that yields a *working* real backend
@@ -90,5 +139,5 @@ paw-serve = "paw_kit.cli:serve_cli"
 # compromised release under the hatchling name executes arbitrary build hooks with
 # the build runner's full privileges" vector without pinning to a single exact
 # version (which would block routine patch upgrades).
-requires = ["hatchling>=1.25.0,<2.0.0"]
+requires = ["hatchling>=1.27.0,<2.0.0"]
 build-backend = "hatchling.build"
