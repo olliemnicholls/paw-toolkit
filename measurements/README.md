@@ -661,7 +661,7 @@ the default PyPI wheel is CPU-only. Two fixes, in order of preference:
    `-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-12` to `CMAKE_ARGS`, or use CUDA 12.4+ (which
    added GCC 13 support) if that's an option on your machine.
 
-**If you've installed `paw-kit[torch]` in the same environment**: prefer the source
+**If you've installed `paw-kit[measure]` (named `[torch]` at the time) in the same environment**: prefer the source
 build over the prebuilt wheel. Hit this twice on the same machine: a working
 source-built `llama-cpp-python` was later replaced with the prebuilt cu121 wheel (as a
 shortcut), and `import llama_cpp` started crashing with `SIGILL` on GPU init — `torch`

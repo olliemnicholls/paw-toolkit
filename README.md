@@ -211,9 +211,11 @@ plan around them:
    helps is exactly the kind of question `paw-test` is for. It is not assumed.
 2. **No grammar-constrained decoding.** The SDK's callable has no grammar or logits hook, so
    the FSM logits processor in `paw.schema` cannot be applied. `paw.load` validates output
-   after generation with Pydantic and falls back on failure. The processor is kept for a
-   future in-process backend (llama.cpp itself supports GBNF grammars; wiring that through
-   the SDK is upstream work, not something this repo can do alone).
+   after generation with Pydantic and falls back on failure. Whether the processor stays in
+   this package at all is an open question, pending upstream: `llama_cpp.Llama.sample()`
+   already accepts `grammar` and `logits_processor`, and the SDK's decode loop already
+   calls it, so the ask is a passthrough rather than new machinery. See roadmap item 5.
+   It is **not** being kept for a future in-process backend — there isn't going to be one.
 
 **Bringing your own runtime.** `AbstractPAWBackend` is three methods — `compile`, `infer`,
 `is_available`. Implement them and pass `backend=` to `paw.load` or `@compile_on_hit`, and

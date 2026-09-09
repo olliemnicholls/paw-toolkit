@@ -5,7 +5,8 @@ features and the "0.0% Pydantic syntax failures" invariant in `conductor/decisio
 rests on it. Until now it had no path to a real model inside the library:
 `ProgramAsWeightsBackend.infer()` warns that it "cannot apply grammar_constraint at
 decoding time: the upstream SDK exposes no grammar/logits hook", and `RealPAWBackend`
--- the placeholder where masking was supposed to live -- raises `NotImplementedError`.
+-- the placeholder where masking was supposed to live -- raised `NotImplementedError`.
+(That class was deleted in Track 13; an in-process runtime is out of scope by design.)
 The only real-model evidence (`measure_schema_real_model.py`) drives a *separate*
 HuggingFace model, not a compiled PAW adapter.
 

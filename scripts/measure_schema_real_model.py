@@ -7,10 +7,11 @@ real model so far, see measurements/README.md) *cannot* apply it -- the upstream
 exposes no logits hook. This script drives the same two calls `paw.load()` would make
 (`pydantic_to_regex` then `RegexLogitsProcessor`) directly against Qwen2.5-0.5B-Instruct
 loaded through transformers, masking its logits at every decoding step. It does not also
-go through `RealPAWBackend`/`runtime_executor` -- that layer is a one-line pass-through
-to whatever callable you give it (see paw_kit/backend/real.py), so exercising it here
-would add indirection without adding coverage; what actually needed proving against a
-real model is the regex-compiler + FSM-masking core, which this exercises directly.
+go through any paw_kit backend: what actually needed proving against a real model is the
+regex-compiler + FSM-masking core, which this exercises directly, and routing it through a
+backend would add indirection without adding coverage. (This paragraph formerly named
+`RealPAWBackend`/`runtime_executor`; that class was deleted in Track 13 -- see conductor
+`decisions.md` section 3.)
 
 Two conditions, same model, same prompts:
   constrained:   generation runs through RegexLogitsProcessor -- every token that would
