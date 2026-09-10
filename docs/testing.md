@@ -83,10 +83,13 @@ out to sit inside the judge's own measurement noise (next section).
 
 Three things to know. `--backend real` is read-only here too: `compare` never calls
 `compile()`. Both adapters stay loaded for the whole run, two ~600 MB llama.cpp models
-under `--backend real`, and the first row's latencies include that cold load. And a case
+under `--backend real`, and the first row's latencies include that cold load. A case
 on which an adapter could not run at all is reported as an execution error, counted in
 the summary and reflected in a non-zero exit, never as agreement between two adapters
-that both failed.
+that both failed. And "identical" is byte-level; the summary also reports how many
+outputs are equivalent after parsing both as JSON (or normalising whitespace), and lists
+whitespace-only differences under their own heading, because a real run found 37 of 60
+outputs differing only in `json.dumps` spacing.
 
 ## `paw-test judge`
 
@@ -108,7 +111,9 @@ three things a single pass rate would hide: cases where the judge disagrees with
 suite's own assertions (listed by case id), verdicts the judge phrased in a way that could
 not be parsed, and calls that failed outright. A failed call is recorded and the run
 continues, so a rate limit late in a long run does not discard the verdicts already paid
-for.
+for. If every case errors the command exits non-zero and says the judge itself is
+failing, so a broken SDK cannot read as an adapter failing every case. The reference judge
+needs `pip install 'paw-kit[judge]'`.
 
 ## `paw-kit lint-spec`
 
