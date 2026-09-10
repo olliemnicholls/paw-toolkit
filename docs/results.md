@@ -43,7 +43,8 @@ zero and `paw-test judge --diff` shows whether that held.
 | Question | Result |
 |---|---|
 | Folding traced examples into the spec | Fixed format failures outright on one task, 0% to 92.5% structural. Did nothing for unicode-handling failures. Introduced verbatim memorisation of an example on out-of-distribution input |
-| The finetune compiler versus the fast one | 132 of 134 outputs byte-identical. The two differences: it stopped copying an example verbatim, and it fabricated a phone number where the fast compiler declined |
+| The finetune compiler versus the fast one, easy task (phone extraction) | 132 of 134 outputs byte-identical. The two differences: it stopped copying an example verbatim, and it fabricated a phone number where the fast compiler declined |
+| The finetune compiler versus the fast one, hard task (ticket triage, 60 tickets, teacher ceiling 91.7%) | Fast with no examples 38.3%; fast with 8 examples 53.3%; finetune with the same 8 examples 60.0%, at 223 s to compile against 5 s. It closed about a sixth of the gap: it recovered the three critical tickets that folding had cost, and it is the only arm willing to say "low", but it lost 6.7 points on department. On a task the fast compiler fails, the finetune compiler also fails |
 | The active-learning repair loop on the 11 date failures | 0 repaired, correctly: every teacher label failed the suite's own rules, so the loop refused to train on them. The gap was in the suite, which now has `abstain_value` |
 | Grammar-constrained decoding on a real model | 15 of 15 valid outputs versus 0 of 15 unconstrained, no latency cost once warm. The official runtime cannot apply it yet |
 
@@ -64,7 +65,8 @@ the audit window needs sizing for the drift you care about.
 
 ## Limitations
 
-One machine, one run each. One task for the finetune-compiler comparison, and an easy
-one; the compiler's advantages may appear on harder tasks. The shadow-mode run used a
+One machine, one run each. The finetune-compiler comparison covers two tasks; the hard
+one used 48 teacher-generated tickets alongside 20 real ones, and its adapter scores sit
+within a few points of the teacher's own run-to-run variation. The shadow-mode run used a
 replay of recorded Claude answers, so it exercised the gate arithmetic, not fresh
 traffic. Judge-scored numbers carry the judge's own ±2-point noise.
