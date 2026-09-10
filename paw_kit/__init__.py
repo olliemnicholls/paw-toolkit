@@ -3,6 +3,7 @@
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+from paw_kit.jit.agreement import default_agreement_fn, field_tolerance_agreement
 from paw_kit.jit.compiler import BackgroundCompiler
 from paw_kit.jit.db import TraceDB
 from paw_kit.jit.decorator import compile_on_hit
@@ -49,8 +50,10 @@ __all__ = [
     "TraceDB",
     "compile_on_hit",
     "create_app",
+    "default_agreement_fn",
     "evaluate_assertion",
     "export_docker_scaffold",
+    "field_tolerance_agreement",
     "lint_spec",
     "load",
     "load_suite",
