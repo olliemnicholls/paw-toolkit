@@ -112,12 +112,26 @@ class TestRunReport(BaseModel):
         ]
 
 
-def evaluate_assertion(output: str, rule: AssertionRule) -> Tuple[bool, str]:
+def evaluate_assertion(
+    output: str, rule: AssertionRule, abstain_value: Optional[str] = None
+) -> Tuple[bool, str]:
     """Evaluate an assertion rule against an adapter output.
+
+    Args:
+        output: The candidate output being checked.
+        rule: The assertion rule to evaluate.
+        abstain_value: When set and `output` equals it exactly, the assertion passes
+            unconditionally, regardless of `rule`. This is the suite-level "I don't
+            know" escape hatch (`TestSuiteConfig.abstain_value`) -- see its docstring
+            for why: a model shouldn't be forced to hallucinate a shaped-but-wrong
+            answer just to satisfy an assertion when the input has no legal answer.
 
     Returns:
         (passed, error_message)
     """
+    if abstain_value is not None and output == abstain_value:
+        return True, ""
+
     name = rule.rule
 
     if name == "regex_match":
@@ -209,7 +223,7 @@ class TestRunner:
             failed_rules: List[str] = []
             failed_rule_names: List[str] = []
             for rule in config.assertions:
-                passed, reason = evaluate_assertion(out, rule)
+                passed, reason = evaluate_assertion(out, rule, abstain_value=config.abstain_value)
                 if not passed:
                     failed_rules.append(f"{rule.rule}: {reason}")
                     failed_rule_names.append(rule.rule)

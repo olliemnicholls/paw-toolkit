@@ -146,6 +146,15 @@ class TestSuiteConfig(BaseModel):
     assertions: List[AssertionRule] = Field(default_factory=list)
     fuzzing: FuzzingConfig = Field(default_factory=FuzzingConfig)
     active_learning: ActiveLearningConfig = Field(default_factory=ActiveLearningConfig)
+    # Track "Active-learning stuck signal" (conductor/deferred/index.md): the real
+    # 2026-09-08 run's 11 failures were all whitespace/control-character garbage with no
+    # legal ISO-date answer, so every teacher label was correctly rejected by the suite's
+    # own date-shaped assertions -- there was no valid target to train toward. Setting
+    # abstain_value gives a suite an explicit "I don't know" escape hatch: any assertion
+    # (regardless of rule) passes automatically when the output equals this value exactly,
+    # so a model can be trained to abstain on genuinely unanswerable input instead of
+    # being forced to hallucinate a plausible-looking answer just to satisfy the suite.
+    abstain_value: Optional[str] = None
 
 
 def load_suite(path_or_yaml: Union[str, Path]) -> TestSuiteConfig:

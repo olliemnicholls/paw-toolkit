@@ -304,6 +304,19 @@ backend (the default) it recompiles freely, but that is **not** harmless either:
 `paw-test check` therefore refuses to recompile any adapter that does not identify itself
 as a mock manifest, so a real compiled adapter cannot be destroyed by a stray run.
 
+`ActiveLearningReport.stuck_reason` tells you *why* a repair iteration made no progress,
+instead of leaving `is_success=False, repaired_edge_cases=0` to mean either "the model is
+hopeless" or "the harness correctly refused every teacher label" -- it's one of
+`"all_labels_rejected"` (the teacher answered, but every answer failed the suite's own
+assertions), `"teacher_errors"` (the teacher call itself raised or returned nothing), or
+`"no_failures"` (there was nothing to query, e.g. an empty suite), and the report's
+`rejected_labels` lists each rejected input with the teacher's (truncated) output and
+which rules it failed. Sometimes `all_labels_rejected` means the suite, not the model, is
+wrong -- if every failing input has no legal answer (e.g. whitespace-only garbage with no
+valid date), set a suite-level `abstain_value`: any assertion then passes automatically
+when the output matches it exactly, so the loop can teach the model to admit "I don't
+know" instead of being forced to hallucinate a shaped-but-wrong answer.
+
 **`paw-test compare A.paw B.paw suite.yaml`** runs every case in a suite through two
 compiled adapters and diffs the results per case -- differences first, then a one-line
 summary (`--json out.json` for the full report). This is not a nice-to-have: the

@@ -32,6 +32,11 @@ fuzzing:
     - "2026年09月05日"
     - "2026—12—31"
 
+# abstain_value: "UNPARSEABLE"  # Uncomment to let a repaired model admit "no valid ISO
+#   date exists" instead of being forced to invent one -- the real 2026-09-08 run's 11
+#   unrepaired failures were all whitespace-only garbage inputs this suite gives no
+#   legal date-shaped answer for, so every teacher label was (correctly) rejected.
+
 active_learning:
   auto_recompile: true
   teacher_model: "claude-3-5-sonnet-20241022"

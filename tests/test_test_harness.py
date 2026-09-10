@@ -2,7 +2,7 @@
 
 from pathlib import Path
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 import pytest
 
 from paw_kit import (
@@ -353,7 +353,15 @@ def test_active_learning_iteration_limit(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert report.is_success is False
     assert report.iterations_run == 2
-    assert report.recompiled is True
+    # Every teacher label is rejected (never matches TARGET), so no iteration ever adds
+    # a new example -- recompilation is now skipped rather than firing unconditionally
+    # on a dataset that hasn't changed (see the "recompiles_skipped" fix).
+    assert report.recompiled is False
+    assert report.recompiles_performed == 0
+    assert report.recompiles_skipped >= 1
+    assert report.stuck_reason == "all_labels_rejected"
+    assert report.rejected_labels_count >= 1
+    assert all(rl.failed_rule_names == ["exact_match"] for rl in report.rejected_labels)
 
 
 def test_active_learning_frames_teacher_query_and_rejects_bad_labels_PAW_TEST_05(
@@ -407,16 +415,77 @@ def test_active_learning_frames_teacher_query_and_rejects_bad_labels_PAW_TEST_05
 
 
 def test_query_teacher_safely_rejects_label_violating_assertions_PAW_TEST_05() -> None:
-    """Direct unit test: a gold label violating an assertion is rejected (returns None)."""
+    """Direct unit test: a gold label violating an assertion is rejected (structured result,
+    gold_label is None) with the failing rule names recorded."""
     from paw_kit.test.active import _query_teacher_safely
 
     assertions = [AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$")]
 
     rejected = _query_teacher_safely(lambda q: "not-a-date", "spec", "some input", assertions)
-    assert rejected is None
+    assert rejected.gold_label is None
+    assert rejected.teacher_output == "not-a-date"
+    assert rejected.failed_rule_names == ["regex_match"]
+    assert rejected.teacher_error is None
 
     accepted = _query_teacher_safely(lambda q: "2026-01-01", "spec", "some input", assertions)
-    assert accepted == "2026-01-01"
+    assert accepted.gold_label == "2026-01-01"
+    assert accepted.failed_rule_names == []
+
+
+def test_query_teacher_safely_records_teacher_exception_PAW_TEST_05() -> None:
+    """A teacher_provider that raises is recorded as teacher_error, not a crash."""
+    from paw_kit.test.active import _query_teacher_safely
+
+    def exploding_teacher(q: str) -> str:
+        raise RuntimeError("upstream teacher API failure")
+
+    result = _query_teacher_safely(exploding_teacher, "spec", "some input", [])
+    assert result.gold_label is None
+    assert result.teacher_error == "upstream teacher API failure"
+
+
+def test_query_teacher_safely_records_empty_response_as_teacher_error_PAW_TEST_05() -> None:
+    """A teacher_provider that returns nothing (None/empty string) is also a teacher_error,
+    distinct from a response that was rejected for failing an assertion."""
+    from paw_kit.test.active import _query_teacher_safely
+
+    result = _query_teacher_safely(lambda q: "", "spec", "some input", [])
+    assert result.gold_label is None
+    assert result.teacher_error is not None
+
+
+def test_query_teacher_safely_wires_teacher_model_when_provider_accepts_it() -> None:
+    """teacher_model is forwarded as a `model=` keyword only when the provider's own
+    signature declares one (checked via inspect.signature, not assumed)."""
+    from paw_kit.test.active import _query_teacher_safely
+
+    seen_models: List[Optional[str]] = []
+
+    def model_aware_teacher(prompt: str, model: Optional[str] = None) -> str:
+        seen_models.append(model)
+        return "2026-01-01"
+
+    _query_teacher_safely(model_aware_teacher, "spec", "x", [], teacher_model="claude-haiku")
+    assert seen_models == ["claude-haiku"]
+
+    # A provider with no `model` parameter must not be called with an unexpected kwarg.
+    def plain_teacher(prompt: str) -> str:
+        return "2026-01-01"
+
+    result = _query_teacher_safely(plain_teacher, "spec", "x", [], teacher_model="claude-haiku")
+    assert result.gold_label == "2026-01-01"
+
+
+def test_query_teacher_safely_respects_abstain_value() -> None:
+    """An abstain_value response passes assertions it would otherwise fail, so the loop
+    can accept an explicit 'no legal answer' label instead of rejecting it."""
+    from paw_kit.test.active import _query_teacher_safely
+
+    assertions = [AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    result = _query_teacher_safely(
+        lambda q: "UNPARSEABLE", "spec", "   ", assertions, abstain_value="UNPARSEABLE"
+    )
+    assert result.gold_label == "UNPARSEABLE"
 
 
 def test_query_teacher_safely_frames_the_input_PAW_TEST_05() -> None:
@@ -452,6 +521,215 @@ def test_active_learning_missing_teacher_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="requires a valid teacher_provider"):
         run_active_learning_loop(config=config, backend=backend, teacher_provider=None)
+
+
+# --- Active-learning stuck signal (conductor/deferred/index.md) -------------------
+
+
+class _CountingCompileBackend(MockPAWBackend):
+    """MockPAWBackend that counts .compile() calls, to verify a no-progress iteration
+    doesn't trigger a wasted recompile."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.compile_calls = 0
+
+    def compile(self, spec: str, examples: List[Dict[str, str]], output_path: str) -> str:
+        self.compile_calls += 1
+        return super().compile(spec=spec, examples=examples, output_path=output_path)
+
+
+def test_active_learning_records_rejected_labels_with_rule_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every teacher label that fails the suite's own assertions is counted and listed
+    on the report, with the specific rule names it failed -- not collapsed into an
+    undifferentiated is_success=False, repaired_edge_cases=0."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "stuck.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Spec", examples=[], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="rejected_labels_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="garbage")],
+        assertions=[
+            AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+            AssertionRule(rule="max_length", value=3),
+        ],
+        fuzzing=FuzzingConfig(),
+    )
+    config.active_learning.max_iterations = 2
+
+    def declining_teacher(prompt: str) -> str:
+        return "I cannot determine a date"  # fails both regex_match and max_length
+
+    report = run_active_learning_loop(config=config, backend=backend, teacher_provider=declining_teacher)
+
+    assert report.is_success is False
+    assert report.rejected_labels_count == 1
+    assert len(report.rejected_labels) == 1
+    rejected = report.rejected_labels[0]
+    assert rejected.input == "garbage"
+    assert rejected.teacher_output == "I cannot determine a date"
+    assert set(rejected.failed_rule_names) == {"regex_match", "max_length"}
+    assert rejected.teacher_error is None
+    assert report.stuck_reason == "all_labels_rejected"
+
+
+def test_active_learning_teacher_exception_recorded_as_teacher_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A teacher_provider that raises on every call is a distinct stuck_reason
+    ("teacher_errors") from a teacher that answered but was wrong ("all_labels_rejected")."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "exploding_teacher.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Spec", examples=[], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="teacher_error_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="x")],
+        assertions=[AssertionRule(rule="exact_match", value="TARGET")],
+        fuzzing=FuzzingConfig(),
+    )
+    config.active_learning.max_iterations = 2
+
+    def exploding_teacher(prompt: str) -> str:
+        raise RuntimeError("teacher API down")
+
+    report = run_active_learning_loop(config=config, backend=backend, teacher_provider=exploding_teacher)
+
+    assert report.stuck_reason == "teacher_errors"
+    assert report.rejected_labels_count == 1
+    assert report.rejected_labels[0].teacher_error == "teacher API down"
+    assert report.rejected_labels[0].failed_rule_names == []
+    assert report.recompiled is False
+
+
+def test_active_learning_skips_recompile_when_zero_new_examples(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A no-progress iteration must not trigger a wasted recompile -- measured
+    2026-09-08 (measurements/README.md): a real run recompiled every non-final
+    iteration even when newly_repaired == 0, and the resulting program ID came back
+    byte-identical to the previous one both times."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "no_progress.paw")
+    backend = _CountingCompileBackend()
+    backend.compile(spec="Spec", examples=[], output_path=adapter_path)
+    assert backend.compile_calls == 1  # the setup call above
+
+    config = TestSuiteConfig(
+        task_name="skip_recompile_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="x")],
+        assertions=[AssertionRule(rule="exact_match", value="TARGET")],
+        fuzzing=FuzzingConfig(),
+    )
+    config.active_learning.max_iterations = 3
+
+    def always_wrong_teacher(prompt: str) -> str:
+        return "NOT_TARGET"
+
+    report = run_active_learning_loop(config=config, backend=backend, teacher_provider=always_wrong_teacher)
+
+    # No iteration ever adds an example, so .compile() must never be called again past
+    # the setup call above.
+    assert backend.compile_calls == 1
+    assert report.recompiles_performed == 0
+    assert report.recompiles_skipped >= 1
+    assert report.recompiled is False
+
+
+def test_active_learning_stuck_reason_no_failures_on_empty_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An iteration with nothing to test (no standard cases, no fuzzing) is a distinct
+    stuck_reason ("no_failures") from a teacher that was queried and failed."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "empty_suite.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Spec", examples=[], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="empty_suite_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=[],
+        assertions=[AssertionRule(rule="exact_match", value="TARGET")],
+        fuzzing=FuzzingConfig(),
+    )
+    config.active_learning.max_iterations = 2
+
+    def never_called_teacher(prompt: str) -> str:
+        raise AssertionError("teacher must not be queried when there are no failing cases")
+
+    report = run_active_learning_loop(config=config, backend=backend, teacher_provider=never_called_teacher)
+
+    assert report.stuck_reason == "no_failures"
+    assert report.rejected_labels_count == 0
+    assert report.recompiled is False
+
+
+def test_active_learning_abstain_value_accepted_as_gold_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """abstain_value makes an otherwise-failing teacher response pass the suite's own
+    assertions, both directly in the loop and end-to-end (the case actually repairs)."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "abstain.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Spec", examples=[], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="abstain_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="   ")],
+        assertions=[AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$")],
+        fuzzing=FuzzingConfig(),
+        abstain_value="UNPARSEABLE",
+    )
+    config.active_learning.max_iterations = 2
+
+    def abstaining_teacher(prompt: str) -> str:
+        return "UNPARSEABLE"  # would otherwise fail regex_match outright
+
+    report = run_active_learning_loop(config=config, backend=backend, teacher_provider=abstaining_teacher)
+
+    assert report.is_success is True
+    assert report.rejected_labels_count == 0
+    assert report.repaired_edge_cases == 1
+
+
+def test_runner_abstain_value_passes_otherwise_failing_output(tmp_path: Path) -> None:
+    """TestRunner (not just the active-learning loop) must also honor abstain_value:
+    an output equal to it passes every assertion regardless of shape."""
+    adapter_path = str(tmp_path / "abstain_runner.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Spec", examples=[{"input": "   ", "output": "UNPARSEABLE"}], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="abstain_runner_test",
+        spec="Spec",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="   ")],
+        assertions=[
+            AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+            AssertionRule(rule="max_length", value=3),
+        ],
+        fuzzing=FuzzingConfig(),
+        abstain_value="UNPARSEABLE",
+    )
+
+    report = TestRunner(backend=backend).run(config)
+    assert report.is_success is True
+    assert report.results[0].passed is True
+    assert report.results[0].failed_rule_names == []
 
 
 # --- PAW-TEST-03: bounded regex_match (length caps primary, timeout backstop) -----
