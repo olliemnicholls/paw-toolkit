@@ -1,0 +1,2709 @@
+{
+  "task_name": "fiscal_week",
+  "adapter_path": "measurements/finetune_fiscal_B-paw-4b-qwen3-0.6b.paw",
+  "total_cases": 300,
+  "passed_cases": 300,
+  "failed_cases": 0,
+  "results": [
+    {
+      "input": "2027-03-31",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 1894.9441590812057,
+      "execution_error": null
+    },
+    {
+      "input": "February 23, 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 57.42076016031206,
+      "execution_error": null
+    },
+    {
+      "input": "8 Feb 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.479911087080836,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 23 November 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.72271107323468,
+      "execution_error": null
+    },
+    {
+      "input": "2025-09-08",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.201045168563724,
+      "execution_error": null
+    },
+    {
+      "input": "August 1, 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.41911318525672,
+      "execution_error": null
+    },
+    {
+      "input": "15 Dec 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.202509043738246,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 29 January 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.426690865308046,
+      "execution_error": null
+    },
+    {
+      "input": "2024-02-13",
+      "output": "FY2024-W09",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.94428302720189,
+      "execution_error": null
+    },
+    {
+      "input": "February 23, 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.44816695712507,
+      "execution_error": null
+    },
+    {
+      "input": "25 Jan 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.51683593168855,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 28 January 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.33217096328735,
+      "execution_error": null
+    },
+    {
+      "input": "2027-11-14",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.81860686652362,
+      "execution_error": null
+    },
+    {
+      "input": "April 19, 2026",
+      "output": "FY2026-W40",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.04375407285988,
+      "execution_error": null
+    },
+    {
+      "input": "12 Apr 2027",
+      "output": "FY2027-W40",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.61394118517637,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 22 October 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.35247519239783,
+      "execution_error": null
+    },
+    {
+      "input": "2026-11-30",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.423649191856384,
+      "execution_error": null
+    },
+    {
+      "input": "September 5, 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.37061805464327,
+      "execution_error": null
+    },
+    {
+      "input": "12 Dec 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.40887701883912,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 28 July 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.123299825936556,
+      "execution_error": null
+    },
+    {
+      "input": "2027-12-26",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.52086783386767,
+      "execution_error": null
+    },
+    {
+      "input": "November 18, 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.1225901581347,
+      "execution_error": null
+    },
+    {
+      "input": "3 Nov 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.84032088518143,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 4 February 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.96647411584854,
+      "execution_error": null
+    },
+    {
+      "input": "2024-12-23",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.958753149956465,
+      "execution_error": null
+    },
+    {
+      "input": "September 11, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.39572301879525,
+      "execution_error": null
+    },
+    {
+      "input": "29 Jun 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.2934139482677,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 1 February 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.80036681890488,
+      "execution_error": null
+    },
+    {
+      "input": "2024-02-09",
+      "output": "FY2024-W09",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.287877028808,
+      "execution_error": null
+    },
+    {
+      "input": "October 29, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.181243155151606,
+      "execution_error": null
+    },
+    {
+      "input": "29 Nov 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.271407986059785,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 22 September 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.06723320670426,
+      "execution_error": null
+    },
+    {
+      "input": "2026-07-22",
+      "output": "FY2026-W40",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.59265986084938,
+      "execution_error": null
+    },
+    {
+      "input": "November 16, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.15237119793892,
+      "execution_error": null
+    },
+    {
+      "input": "29 Jan 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.459922946989536,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 25 June 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7019729167223,
+      "execution_error": null
+    },
+    {
+      "input": "2026-11-04",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7998470030725,
+      "execution_error": null
+    },
+    {
+      "input": "December 23, 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.07141414657235,
+      "execution_error": null
+    },
+    {
+      "input": "25 Jan 2025",
+      "output": "FY2025-W49",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.139323860406876,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 7 April 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.89686084911227,
+      "execution_error": null
+    },
+    {
+      "input": "2024-09-13",
+      "output": "FY2024-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.32899792119861,
+      "execution_error": null
+    },
+    {
+      "input": "February 21, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.037684040144086,
+      "execution_error": null
+    },
+    {
+      "input": "12 Jun 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.614717934280634,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 3 February 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.96179701387882,
+      "execution_error": null
+    },
+    {
+      "input": "2024-04-08",
+      "output": "FY2024-W30",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.22010794468224,
+      "execution_error": null
+    },
+    {
+      "input": "April 14, 2026",
+      "output": "FY2026-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.03090790100396,
+      "execution_error": null
+    },
+    {
+      "input": "2 Jan 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.138110088184476,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 16 May 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.68221993558109,
+      "execution_error": null
+    },
+    {
+      "input": "2027-02-07",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7042108848691,
+      "execution_error": null
+    },
+    {
+      "input": "February 11, 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.639693047851324,
+      "execution_error": null
+    },
+    {
+      "input": "13 Jul 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.18607811629772,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 19 July 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.145968148484826,
+      "execution_error": null
+    },
+    {
+      "input": "2027-02-13",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.012845899909735,
+      "execution_error": null
+    },
+    {
+      "input": "May 18, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.8578101657331,
+      "execution_error": null
+    },
+    {
+      "input": "26 Jan 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.79881283827126,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 5 January 2024",
+      "output": "FY2024-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.810318095609546,
+      "execution_error": null
+    },
+    {
+      "input": "2027-06-20",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.26121792010963,
+      "execution_error": null
+    },
+    {
+      "input": "December 20, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.28356500528753,
+      "execution_error": null
+    },
+    {
+      "input": "26 Feb 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.841780034825206,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 28 January 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.273643996566534,
+      "execution_error": null
+    },
+    {
+      "input": "2025-01-14",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.23379393666983,
+      "execution_error": null
+    },
+    {
+      "input": "October 3, 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.69350183941424,
+      "execution_error": null
+    },
+    {
+      "input": "10 Feb 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.20523099787533,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 27 March 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.1976779717952,
+      "execution_error": null
+    },
+    {
+      "input": "2025-05-12",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.125628063455224,
+      "execution_error": null
+    },
+    {
+      "input": "February 15, 2024",
+      "output": "FY2023-W52",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.74024794623256,
+      "execution_error": null
+    },
+    {
+      "input": "26 Jun 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.23766893707216,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 7 November 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.802458034828305,
+      "execution_error": null
+    },
+    {
+      "input": "2027-11-15",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.09648395329714,
+      "execution_error": null
+    },
+    {
+      "input": "November 27, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.76373706571758,
+      "execution_error": null
+    },
+    {
+      "input": "9 Dec 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.70184695534408,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 24 July 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.10180809162557,
+      "execution_error": null
+    },
+    {
+      "input": "2026-10-11",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.87627303227782,
+      "execution_error": null
+    },
+    {
+      "input": "September 11, 2026",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.94455587863922,
+      "execution_error": null
+    },
+    {
+      "input": "6 Jun 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.598858976736665,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 22 March 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.72557791694999,
+      "execution_error": null
+    },
+    {
+      "input": "2025-07-18",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.62747619114816,
+      "execution_error": null
+    },
+    {
+      "input": "July 19, 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.80889014527202,
+      "execution_error": null
+    },
+    {
+      "input": "8 Jan 2027",
+      "output": "FY2027-W49",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.75150407478213,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 21 December 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.67843799851835,
+      "execution_error": null
+    },
+    {
+      "input": "2025-01-04",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.12549602240324,
+      "execution_error": null
+    },
+    {
+      "input": "March 5, 2027",
+      "output": "FY2027-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.420786909759045,
+      "execution_error": null
+    },
+    {
+      "input": "22 Sep 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.67979090847075,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 29 October 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.85206812247634,
+      "execution_error": null
+    },
+    {
+      "input": "2024-02-12",
+      "output": "FY2024-W09",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.627587949857116,
+      "execution_error": null
+    },
+    {
+      "input": "October 22, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7075971737504,
+      "execution_error": null
+    },
+    {
+      "input": "1 Jan 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.9516851529479,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 6 February 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.72486689500511,
+      "execution_error": null
+    },
+    {
+      "input": "2027-02-06",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.631587048992515,
+      "execution_error": null
+    },
+    {
+      "input": "November 6, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.71362795308232,
+      "execution_error": null
+    },
+    {
+      "input": "7 Feb 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.647752014920115,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 2 April 2026",
+      "output": "FY2026-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.173701072111726,
+      "execution_error": null
+    },
+    {
+      "input": "2025-12-12",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.469140177592635,
+      "execution_error": null
+    },
+    {
+      "input": "January 26, 2024",
+      "output": "FY2023-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.94626206159592,
+      "execution_error": null
+    },
+    {
+      "input": "17 Jan 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.39149385690689,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 28 September 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.85491098463535,
+      "execution_error": null
+    },
+    {
+      "input": "2025-07-17",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.44832504913211,
+      "execution_error": null
+    },
+    {
+      "input": "October 4, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.74749014340341,
+      "execution_error": null
+    },
+    {
+      "input": "30 Dec 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7203518692404,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 18 December 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.16039493866265,
+      "execution_error": null
+    },
+    {
+      "input": "2027-02-10",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.693695994094014,
+      "execution_error": null
+    },
+    {
+      "input": "February 26, 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.737403988838196,
+      "execution_error": null
+    },
+    {
+      "input": "19 Apr 2027",
+      "output": "FY2027-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.918305879458785,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 20 September 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.72737497277558,
+      "execution_error": null
+    },
+    {
+      "input": "2024-02-02",
+      "output": "FY2024-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.0669070109725,
+      "execution_error": null
+    },
+    {
+      "input": "January 23, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.655257077887654,
+      "execution_error": null
+    },
+    {
+      "input": "23 Jan 2027",
+      "output": "FY2027-W49",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.954158978536725,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 8 October 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.526232950389385,
+      "execution_error": null
+    },
+    {
+      "input": "2024-08-27",
+      "output": "FY2024-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.65275903791189,
+      "execution_error": null
+    },
+    {
+      "input": "February 1, 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.04872200638056,
+      "execution_error": null
+    },
+    {
+      "input": "26 Mar 2026",
+      "output": "FY2026-W05",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.810570949688554,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 10 March 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.87593209929764,
+      "execution_error": null
+    },
+    {
+      "input": "2027-01-04",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.870818043127656,
+      "execution_error": null
+    },
+    {
+      "input": "February 6, 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.94408416375518,
+      "execution_error": null
+    },
+    {
+      "input": "24 Jan 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.41706790588796,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 9 August 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.74738187715411,
+      "execution_error": null
+    },
+    {
+      "input": "2025-02-15",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.65930996090174,
+      "execution_error": null
+    },
+    {
+      "input": "January 1, 2027",
+      "output": "FY2027-W49",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.67821115255356,
+      "execution_error": null
+    },
+    {
+      "input": "22 Nov 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.77449291013181,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 30 October 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.28198794834316,
+      "execution_error": null
+    },
+    {
+      "input": "2027-12-16",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.70931008271873,
+      "execution_error": null
+    },
+    {
+      "input": "August 20, 2026",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.30814710073173,
+      "execution_error": null
+    },
+    {
+      "input": "25 Dec 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.98814086988568,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 25 January 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.779970018193126,
+      "execution_error": null
+    },
+    {
+      "input": "2026-02-07",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.6733647827059,
+      "execution_error": null
+    },
+    {
+      "input": "September 16, 2026",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.715927854180336,
+      "execution_error": null
+    },
+    {
+      "input": "31 Dec 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.77547403238714,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 24 November 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.11253101192415,
+      "execution_error": null
+    },
+    {
+      "input": "2025-01-31",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.645570158958435,
+      "execution_error": null
+    },
+    {
+      "input": "February 15, 2026",
+      "output": "FY2026-W05",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.75418099761009,
+      "execution_error": null
+    },
+    {
+      "input": "8 Feb 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.60105387121439,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 15 October 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.700804106891155,
+      "execution_error": null
+    },
+    {
+      "input": "2027-02-22",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.902581963688135,
+      "execution_error": null
+    },
+    {
+      "input": "February 12, 2025",
+      "output": "FY2025-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.83732712268829,
+      "execution_error": null
+    },
+    {
+      "input": "24 Mar 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.93421899154782,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 18 May 2027",
+      "output": "FY2027-W40",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.69511209614575,
+      "execution_error": null
+    },
+    {
+      "input": "2026-10-07",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.768026039004326,
+      "execution_error": null
+    },
+    {
+      "input": "September 18, 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.71812600828707,
+      "execution_error": null
+    },
+    {
+      "input": "30 Jun 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.72795192711055,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 2 September 2026",
+      "output": "FY2026-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.14685211144388,
+      "execution_error": null
+    },
+    {
+      "input": "2024-11-21",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.12169203534722,
+      "execution_error": null
+    },
+    {
+      "input": "March 24, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.61393778771162,
+      "execution_error": null
+    },
+    {
+      "input": "11 Jun 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.90556585229933,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 6 March 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.69478194229305,
+      "execution_error": null
+    },
+    {
+      "input": "2025-02-01",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.65953487530351,
+      "execution_error": null
+    },
+    {
+      "input": "January 22, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.954559007659554,
+      "execution_error": null
+    },
+    {
+      "input": "3 Feb 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.72528110072017,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 12 February 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.11955195106566,
+      "execution_error": null
+    },
+    {
+      "input": "2026-05-06",
+      "output": "FY2026-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.748964892700315,
+      "execution_error": null
+    },
+    {
+      "input": "January 31, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.63427391462028,
+      "execution_error": null
+    },
+    {
+      "input": "27 Jan 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.963487131521106,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 13 October 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.03949096985161,
+      "execution_error": null
+    },
+    {
+      "input": "2025-05-19",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.147847859188914,
+      "execution_error": null
+    },
+    {
+      "input": "April 29, 2027",
+      "output": "FY2027-W40",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.87240585312247,
+      "execution_error": null
+    },
+    {
+      "input": "8 Nov 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.59040792286396,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 10 February 2024",
+      "output": "FY2024-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.95074500888586,
+      "execution_error": null
+    },
+    {
+      "input": "2027-10-06",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.88579596951604,
+      "execution_error": null
+    },
+    {
+      "input": "May 26, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.71127496659756,
+      "execution_error": null
+    },
+    {
+      "input": "7 Feb 2024",
+      "output": "FY2024-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.59300188906491,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 25 February 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.26755012013018,
+      "execution_error": null
+    },
+    {
+      "input": "2026-01-24",
+      "output": "FY2025-W51",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.85004689358175,
+      "execution_error": null
+    },
+    {
+      "input": "March 23, 2026",
+      "output": "FY2026-W09",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.29263110272586,
+      "execution_error": null
+    },
+    {
+      "input": "22 Nov 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.794548941776156,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 18 August 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.16955109871924,
+      "execution_error": null
+    },
+    {
+      "input": "2026-12-27",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.71810505352914,
+      "execution_error": null
+    },
+    {
+      "input": "January 29, 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.86369405500591,
+      "execution_error": null
+    },
+    {
+      "input": "11 Feb 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.86419694311917,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 14 September 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.03649208508432,
+      "execution_error": null
+    },
+    {
+      "input": "2025-10-18",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.15460895933211,
+      "execution_error": null
+    },
+    {
+      "input": "October 27, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.780776008963585,
+      "execution_error": null
+    },
+    {
+      "input": "11 Sep 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.2838229816407,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 18 May 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.288264924660325,
+      "execution_error": null
+    },
+    {
+      "input": "2026-09-30",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.06687005981803,
+      "execution_error": null
+    },
+    {
+      "input": "January 26, 2027",
+      "output": "FY2027-W49",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.811707835644484,
+      "execution_error": null
+    },
+    {
+      "input": "2 Mar 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.73416002839804,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 24 September 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.735598085448146,
+      "execution_error": null
+    },
+    {
+      "input": "2025-09-09",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.77512993477285,
+      "execution_error": null
+    },
+    {
+      "input": "June 29, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.70741300471127,
+      "execution_error": null
+    },
+    {
+      "input": "13 Sep 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.872729048132896,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 30 January 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.220142075791955,
+      "execution_error": null
+    },
+    {
+      "input": "2026-01-11",
+      "output": "FY2025-W51",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.91922902688384,
+      "execution_error": null
+    },
+    {
+      "input": "October 28, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.948328994214535,
+      "execution_error": null
+    },
+    {
+      "input": "13 Feb 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.06409115716815,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 24 August 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.891967145726085,
+      "execution_error": null
+    },
+    {
+      "input": "2025-02-04",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.81205408088863,
+      "execution_error": null
+    },
+    {
+      "input": "January 30, 2027",
+      "output": "FY2027-W49",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.079770904034376,
+      "execution_error": null
+    },
+    {
+      "input": "4 May 2025",
+      "output": "FY2025-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.13934991136193,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 5 February 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.022780153900385,
+      "execution_error": null
+    },
+    {
+      "input": "2024-07-28",
+      "output": "FY2024-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.05004704557359,
+      "execution_error": null
+    },
+    {
+      "input": "February 10, 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.791548918932676,
+      "execution_error": null
+    },
+    {
+      "input": "2 May 2027",
+      "output": "FY2027-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.647681932896376,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 30 January 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.81882898695767,
+      "execution_error": null
+    },
+    {
+      "input": "2025-06-07",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.13148684985936,
+      "execution_error": null
+    },
+    {
+      "input": "March 18, 2027",
+      "output": "FY2027-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.811607951298356,
+      "execution_error": null
+    },
+    {
+      "input": "25 Apr 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.92818495258689,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 27 September 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.85520900785923,
+      "execution_error": null
+    },
+    {
+      "input": "2026-02-25",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.87629391811788,
+      "execution_error": null
+    },
+    {
+      "input": "October 25, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.809220066294074,
+      "execution_error": null
+    },
+    {
+      "input": "29 Mar 2026",
+      "output": "FY2026-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.78403105027974,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 14 July 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.12750504910946,
+      "execution_error": null
+    },
+    {
+      "input": "2025-09-01",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.058458026498556,
+      "execution_error": null
+    },
+    {
+      "input": "March 23, 2025",
+      "output": "FY2025-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.10570404678583,
+      "execution_error": null
+    },
+    {
+      "input": "20 Jan 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.69558194838464,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 28 February 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.742797907441854,
+      "execution_error": null
+    },
+    {
+      "input": "2025-06-01",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.93473999761045,
+      "execution_error": null
+    },
+    {
+      "input": "December 31, 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.101696100085974,
+      "execution_error": null
+    },
+    {
+      "input": "2 Jun 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.747189067304134,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 5 February 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.414690006524324,
+      "execution_error": null
+    },
+    {
+      "input": "2025-08-31",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.75434607453644,
+      "execution_error": null
+    },
+    {
+      "input": "December 7, 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.64330890774727,
+      "execution_error": null
+    },
+    {
+      "input": "16 Jun 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.70759414695203,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 2 February 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.720756063237786,
+      "execution_error": null
+    },
+    {
+      "input": "2026-07-25",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.82486309483647,
+      "execution_error": null
+    },
+    {
+      "input": "February 11, 2024",
+      "output": "FY2024-W52",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.888073958456516,
+      "execution_error": null
+    },
+    {
+      "input": "1 Feb 2024",
+      "output": "FY2024-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.358052952215075,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 3 February 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.837322026491165,
+      "execution_error": null
+    },
+    {
+      "input": "2026-01-31",
+      "output": "FY2025-W51",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.80515111796558,
+      "execution_error": null
+    },
+    {
+      "input": "April 29, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.02749600075185,
+      "execution_error": null
+    },
+    {
+      "input": "20 Nov 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.92811806127429,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 8 February 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.2449071072042,
+      "execution_error": null
+    },
+    {
+      "input": "2027-12-04",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.754571825265884,
+      "execution_error": null
+    },
+    {
+      "input": "May 31, 2026",
+      "output": "FY2026-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.626058019697666,
+      "execution_error": null
+    },
+    {
+      "input": "23 Jan 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.079616071656346,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 20 January 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.026298087090254,
+      "execution_error": null
+    },
+    {
+      "input": "2026-12-12",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.729318875819445,
+      "execution_error": null
+    },
+    {
+      "input": "June 22, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.844219168648124,
+      "execution_error": null
+    },
+    {
+      "input": "14 Oct 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.793352864682674,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 23 April 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.00208004377782,
+      "execution_error": null
+    },
+    {
+      "input": "2024-02-06",
+      "output": "FY2024-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.66734494641423,
+      "execution_error": null
+    },
+    {
+      "input": "February 2, 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.61581696383655,
+      "execution_error": null
+    },
+    {
+      "input": "12 Oct 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.138587882742286,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 8 July 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.24253093264997,
+      "execution_error": null
+    },
+    {
+      "input": "2027-05-30",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.07901613600552,
+      "execution_error": null
+    },
+    {
+      "input": "February 3, 2024",
+      "output": "FY2023-W52",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.11022396199405,
+      "execution_error": null
+    },
+    {
+      "input": "2 Sep 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.964428931474686,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 31 August 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7570920791477,
+      "execution_error": null
+    },
+    {
+      "input": "2024-05-21",
+      "output": "FY2024-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.0941060539335,
+      "execution_error": null
+    },
+    {
+      "input": "November 29, 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.756506975740194,
+      "execution_error": null
+    },
+    {
+      "input": "27 Oct 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.34187092073262,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 7 April 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.160111118108034,
+      "execution_error": null
+    },
+    {
+      "input": "2027-02-09",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.895980887115,
+      "execution_error": null
+    },
+    {
+      "input": "August 30, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.01625780016184,
+      "execution_error": null
+    },
+    {
+      "input": "9 Feb 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7670381385833,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 10 May 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.060445960611105,
+      "execution_error": null
+    },
+    {
+      "input": "2026-02-09",
+      "output": "FY2026-W04",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.729798041284084,
+      "execution_error": null
+    },
+    {
+      "input": "February 14, 2026",
+      "output": "FY2026-W05",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.73743605054915,
+      "execution_error": null
+    },
+    {
+      "input": "31 Jan 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.04090306162834,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 27 January 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.39540191926062,
+      "execution_error": null
+    },
+    {
+      "input": "2025-11-15",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.68862380459905,
+      "execution_error": null
+    },
+    {
+      "input": "July 10, 2024",
+      "output": "FY2024-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.667691165581346,
+      "execution_error": null
+    },
+    {
+      "input": "22 Jan 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.73682812973857,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 23 April 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.82529911771417,
+      "execution_error": null
+    },
+    {
+      "input": "2024-02-14",
+      "output": "FY2024-W09",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.03859301097691,
+      "execution_error": null
+    },
+    {
+      "input": "September 6, 2025",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.76699992828071,
+      "execution_error": null
+    },
+    {
+      "input": "8 Feb 2024",
+      "output": "FY2024-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.58958097733557,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 1 December 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.60629109479487,
+      "execution_error": null
+    },
+    {
+      "input": "2027-06-03",
+      "output": "FY2027-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.28650705330074,
+      "execution_error": null
+    },
+    {
+      "input": "December 29, 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.42881989479065,
+      "execution_error": null
+    },
+    {
+      "input": "27 Jan 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.10631708987057,
+      "execution_error": null
+    },
+    {
+      "input": "Tuesday 27 January 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.52796507254243,
+      "execution_error": null
+    },
+    {
+      "input": "2024-05-30",
+      "output": "FY2024-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.2073259819299,
+      "execution_error": null
+    },
+    {
+      "input": "November 17, 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.748617043718696,
+      "execution_error": null
+    },
+    {
+      "input": "20 Dec 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.62720587477088,
+      "execution_error": null
+    },
+    {
+      "input": "Wednesday 1 January 2025",
+      "output": "FY2025-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.737825809046626,
+      "execution_error": null
+    },
+    {
+      "input": "2025-05-14",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.7902290020138,
+      "execution_error": null
+    },
+    {
+      "input": "February 5, 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.25066184438765,
+      "execution_error": null
+    },
+    {
+      "input": "9 Oct 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.972638979554176,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 7 October 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.12762495689094,
+      "execution_error": null
+    },
+    {
+      "input": "2025-01-24",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.882090935483575,
+      "execution_error": null
+    },
+    {
+      "input": "August 3, 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.924869142472744,
+      "execution_error": null
+    },
+    {
+      "input": "28 Apr 2026",
+      "output": "FY2026-W09",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.00830493494868,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 10 July 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 56.163030909374356,
+      "execution_error": null
+    },
+    {
+      "input": "2024-07-27",
+      "output": "FY2024-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.22860097698867,
+      "execution_error": null
+    },
+    {
+      "input": "July 21, 2027",
+      "output": "FY2027-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.97432001680136,
+      "execution_error": null
+    },
+    {
+      "input": "4 Jun 2027",
+      "output": "FY2027-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.88918395712972,
+      "execution_error": null
+    },
+    {
+      "input": "Saturday 8 May 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.75557495467365,
+      "execution_error": null
+    },
+    {
+      "input": "2026-01-30",
+      "output": "FY2025-W51",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.99079094827175,
+      "execution_error": null
+    },
+    {
+      "input": "January 26, 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.97926490008831,
+      "execution_error": null
+    },
+    {
+      "input": "11 Feb 2026",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.8593668974936,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 4 February 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.133228957653046,
+      "execution_error": null
+    },
+    {
+      "input": "2026-02-27",
+      "output": "FY2026-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 53.62596991471946,
+      "execution_error": null
+    },
+    {
+      "input": "March 7, 2026",
+      "output": "FY2026-W06",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.640090024098754,
+      "execution_error": null
+    },
+    {
+      "input": "8 Aug 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.69059099070728,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 22 June 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.83224515430629,
+      "execution_error": null
+    },
+    {
+      "input": "2027-09-14",
+      "output": "FY2027-W40",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.705160135403275,
+      "execution_error": null
+    },
+    {
+      "input": "February 18, 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.748121812939644,
+      "execution_error": null
+    },
+    {
+      "input": "22 May 2027",
+      "output": "FY2027-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.919626934453845,
+      "execution_error": null
+    },
+    {
+      "input": "Thursday 23 April 2026",
+      "output": "FY2026-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.68757194466889,
+      "execution_error": null
+    },
+    {
+      "input": "2025-07-05",
+      "output": "FY2025-W42",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.71156390942633,
+      "execution_error": null
+    },
+    {
+      "input": "January 28, 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.916034150868654,
+      "execution_error": null
+    },
+    {
+      "input": "8 May 2025",
+      "output": "FY2025-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.8667981531471,
+      "execution_error": null
+    },
+    {
+      "input": "Sunday 22 December 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.958307813853025,
+      "execution_error": null
+    },
+    {
+      "input": "2026-07-07",
+      "output": "FY2026-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.04470621235669,
+      "execution_error": null
+    },
+    {
+      "input": "August 26, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 52.924987161532044,
+      "execution_error": null
+    },
+    {
+      "input": "1 Aug 2027",
+      "output": "FY2027-W01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.58060901239514,
+      "execution_error": null
+    },
+    {
+      "input": "Monday 29 January 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.975789902731776,
+      "execution_error": null
+    },
+    {
+      "input": "2026-04-04",
+      "output": "FY2026-W20",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.764714954420924,
+      "execution_error": null
+    },
+    {
+      "input": "April 12, 2024",
+      "output": "FY2024-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.829196004197,
+      "execution_error": null
+    },
+    {
+      "input": "28 Jan 2025",
+      "output": "FY2025-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 55.717522045597434,
+      "execution_error": null
+    },
+    {
+      "input": "Friday 1 October 2027",
+      "output": "FY2027-W43",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "latency_ms": 54.30894810706377,
+      "execution_error": null
+    }
+  ]
+}

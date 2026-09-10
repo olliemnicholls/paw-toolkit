@@ -1,0 +1,636 @@
+task_name: fiscal_week
+spec: 'Label a calendar date with the fiscal week it falls in.
+
+
+  The fiscal calendar works like this. A fiscal year begins on the first Monday of February and ends on the Sunday before the next fiscal year begins. The fiscal year is named after the calendar year its February start falls in: the fiscal year that begins on the first Monday of February 2026 is fiscal year 2026. Weeks are numbered starting from 1: the seven days beginning on that first Monday of February are week 1, the next seven days are week 2, and so on. Because the fiscal year runs from February to February, a date that falls in January, or in February before that year''s first Monday, belongs to the PREVIOUS fiscal year, and its week number continues that previous year''s count -- so those dates land in the high forties or low fifties. A fiscal year has 52 weeks, or 53 when the extra day pushes it over, so the last week of a fiscal year is week 52 or week 53.
+
+
+  Note that this is NOT the ISO 8601 week number, which counts from January. A fiscal week number is always the number of whole weeks since the first Monday of February, plus one.
+
+
+  The input is a single date, written in any of these forms: 2026-03-03, March 3, 2026, 3 Mar 2026, or Tuesday 3 March 2026.
+
+
+  Output exactly one label and nothing else, in the form FY<year>-W<nn>, where <year> is the four-digit fiscal year and <nn> is the two-digit week number, zero-padded below ten.
+
+
+  Worked example one. The date is 3 Mar 2026. The first Monday of February 2026 is 2 February 2026, so fiscal year 2026 began that day. 3 March 2026 is 29 days after 2 February 2026. 29 divided by 7 is 4 whole weeks with 1 day left over, so it is in week 4 + 1 = 5. The label is FY2026-W05.
+
+
+  Worked example two. The date is 2026-01-20. That is in January, so it belongs to the previous fiscal year, 2025. Fiscal year 2025 began on the first Monday of February 2025, which is 3 February 2025. 20 January 2026 is 351 days after 3 February 2025. 351 divided by 7 is 50 whole weeks with 1 day left over, so it is in week 50 + 1 = 51. The label is FY2025-W51.
+
+  '
+adapter_path: measurements/finetune_fiscal_A-paw-4b-qwen3-0.6b.paw
+standard_cases:
+- input: '2027-03-31'
+  expected: FY2027-W09
+- input: February 23, 2025
+  expected: FY2025-W03
+- input: 8 Feb 2026
+  expected: FY2026-W01
+- input: Monday 23 November 2026
+  expected: FY2026-W43
+- input: '2025-09-08'
+  expected: FY2025-W32
+- input: August 1, 2025
+  expected: FY2025-W26
+- input: 15 Dec 2025
+  expected: FY2025-W46
+- input: Wednesday 29 January 2025
+  expected: FY2024-W52
+- input: '2024-02-13'
+  expected: FY2024-W02
+- input: February 23, 2026
+  expected: FY2026-W04
+- input: 25 Jan 2027
+  expected: FY2026-W52
+- input: Wednesday 28 January 2026
+  expected: FY2025-W52
+- input: '2027-11-14'
+  expected: FY2027-W41
+- input: April 19, 2026
+  expected: FY2026-W11
+- input: 12 Apr 2027
+  expected: FY2027-W11
+- input: Friday 22 October 2027
+  expected: FY2027-W38
+- input: '2026-11-30'
+  expected: FY2026-W44
+- input: September 5, 2027
+  expected: FY2027-W31
+- input: 12 Dec 2027
+  expected: FY2027-W45
+- input: Monday 28 July 2025
+  expected: FY2025-W26
+- input: '2027-12-26'
+  expected: FY2027-W47
+- input: November 18, 2027
+  expected: FY2027-W42
+- input: 3 Nov 2025
+  expected: FY2025-W40
+- input: Wednesday 4 February 2026
+  expected: FY2026-W01
+- input: '2024-12-23'
+  expected: FY2024-W47
+- input: September 11, 2025
+  expected: FY2025-W32
+- input: 29 Jun 2024
+  expected: FY2024-W21
+- input: Sunday 1 February 2026
+  expected: FY2025-W52
+- input: '2024-02-09'
+  expected: FY2024-W01
+- input: October 29, 2024
+  expected: FY2024-W39
+- input: 29 Nov 2024
+  expected: FY2024-W43
+- input: Sunday 22 September 2024
+  expected: FY2024-W33
+- input: '2026-07-22'
+  expected: FY2026-W25
+- input: November 16, 2024
+  expected: FY2024-W41
+- input: 29 Jan 2026
+  expected: FY2025-W52
+- input: Thursday 25 June 2026
+  expected: FY2026-W21
+- input: '2026-11-04'
+  expected: FY2026-W40
+- input: December 23, 2027
+  expected: FY2027-W47
+- input: 25 Jan 2025
+  expected: FY2024-W51
+- input: Monday 7 April 2025
+  expected: FY2025-W10
+- input: '2024-09-13'
+  expected: FY2024-W32
+- input: February 21, 2024
+  expected: FY2024-W03
+- input: 12 Jun 2027
+  expected: FY2027-W19
+- input: Tuesday 3 February 2026
+  expected: FY2026-W01
+- input: '2024-04-08'
+  expected: FY2024-W10
+- input: April 14, 2026
+  expected: FY2026-W11
+- input: 2 Jan 2026
+  expected: FY2025-W48
+- input: Friday 16 May 2025
+  expected: FY2025-W15
+- input: '2027-02-07'
+  expected: FY2027-W01
+- input: February 11, 2027
+  expected: FY2027-W02
+- input: 13 Jul 2025
+  expected: FY2025-W23
+- input: Friday 19 July 2024
+  expected: FY2024-W24
+- input: '2027-02-13'
+  expected: FY2027-W02
+- input: May 18, 2024
+  expected: FY2024-W15
+- input: 26 Jan 2026
+  expected: FY2025-W52
+- input: Friday 5 January 2024
+  expected: FY2023-W48
+- input: '2027-06-20'
+  expected: FY2027-W20
+- input: December 20, 2024
+  expected: FY2024-W46
+- input: 26 Feb 2026
+  expected: FY2026-W04
+- input: Sunday 28 January 2024
+  expected: FY2023-W51
+- input: '2025-01-14'
+  expected: FY2024-W50
+- input: October 3, 2026
+  expected: FY2026-W35
+- input: 10 Feb 2026
+  expected: FY2026-W02
+- input: Thursday 27 March 2025
+  expected: FY2025-W08
+- input: '2025-05-12'
+  expected: FY2025-W15
+- input: February 15, 2024
+  expected: FY2024-W02
+- input: 26 Jun 2024
+  expected: FY2024-W21
+- input: Saturday 7 November 2026
+  expected: FY2026-W40
+- input: '2027-11-15'
+  expected: FY2027-W42
+- input: November 27, 2025
+  expected: FY2025-W43
+- input: 9 Dec 2025
+  expected: FY2025-W45
+- input: Saturday 24 July 2027
+  expected: FY2027-W25
+- input: '2026-10-11'
+  expected: FY2026-W36
+- input: September 11, 2026
+  expected: FY2026-W32
+- input: 6 Jun 2024
+  expected: FY2024-W18
+- input: Friday 22 March 2024
+  expected: FY2024-W07
+- input: '2025-07-18'
+  expected: FY2025-W24
+- input: July 19, 2027
+  expected: FY2027-W25
+- input: 8 Jan 2027
+  expected: FY2026-W49
+- input: Saturday 21 December 2024
+  expected: FY2024-W46
+- input: '2025-01-04'
+  expected: FY2024-W48
+- input: March 5, 2027
+  expected: FY2027-W05
+- input: 22 Sep 2027
+  expected: FY2027-W34
+- input: Wednesday 29 October 2025
+  expected: FY2025-W39
+- input: '2024-02-12'
+  expected: FY2024-W02
+- input: October 22, 2024
+  expected: FY2024-W38
+- input: 1 Jan 2024
+  expected: FY2023-W48
+- input: Friday 6 February 2026
+  expected: FY2026-W01
+- input: '2027-02-06'
+  expected: FY2027-W01
+- input: November 6, 2024
+  expected: FY2024-W40
+- input: 7 Feb 2025
+  expected: FY2025-W01
+- input: Thursday 2 April 2026
+  expected: FY2026-W09
+- input: '2025-12-12'
+  expected: FY2025-W45
+- input: January 26, 2024
+  expected: FY2023-W51
+- input: 17 Jan 2024
+  expected: FY2023-W50
+- input: Tuesday 28 September 2027
+  expected: FY2027-W35
+- input: '2025-07-17'
+  expected: FY2025-W24
+- input: October 4, 2024
+  expected: FY2024-W35
+- input: 30 Dec 2027
+  expected: FY2027-W48
+- input: Friday 18 December 2026
+  expected: FY2026-W46
+- input: '2027-02-10'
+  expected: FY2027-W02
+- input: February 26, 2027
+  expected: FY2027-W04
+- input: 19 Apr 2027
+  expected: FY2027-W12
+- input: Friday 20 September 2024
+  expected: FY2024-W33
+- input: '2024-02-02'
+  expected: FY2023-W52
+- input: January 23, 2024
+  expected: FY2023-W51
+- input: 23 Jan 2027
+  expected: FY2026-W51
+- input: Tuesday 8 October 2024
+  expected: FY2024-W36
+- input: '2024-08-27'
+  expected: FY2024-W30
+- input: February 1, 2027
+  expected: FY2027-W01
+- input: 26 Mar 2026
+  expected: FY2026-W08
+- input: Wednesday 10 March 2027
+  expected: FY2027-W06
+- input: '2027-01-04'
+  expected: FY2026-W49
+- input: February 6, 2025
+  expected: FY2025-W01
+- input: 24 Jan 2027
+  expected: FY2026-W51
+- input: Saturday 9 August 2025
+  expected: FY2025-W27
+- input: '2025-02-15'
+  expected: FY2025-W02
+- input: January 1, 2027
+  expected: FY2026-W48
+- input: 22 Nov 2027
+  expected: FY2027-W43
+- input: Wednesday 30 October 2024
+  expected: FY2024-W39
+- input: '2027-12-16'
+  expected: FY2027-W46
+- input: August 20, 2026
+  expected: FY2026-W29
+- input: 25 Dec 2024
+  expected: FY2024-W47
+- input: Sunday 25 January 2026
+  expected: FY2025-W51
+- input: '2026-02-07'
+  expected: FY2026-W01
+- input: September 16, 2026
+  expected: FY2026-W33
+- input: 31 Dec 2027
+  expected: FY2027-W48
+- input: Monday 24 November 2025
+  expected: FY2025-W43
+- input: '2025-01-31'
+  expected: FY2024-W52
+- input: February 15, 2026
+  expected: FY2026-W02
+- input: 8 Feb 2025
+  expected: FY2025-W01
+- input: Friday 15 October 2027
+  expected: FY2027-W37
+- input: '2027-02-22'
+  expected: FY2027-W04
+- input: February 12, 2025
+  expected: FY2025-W02
+- input: 24 Mar 2027
+  expected: FY2027-W08
+- input: Tuesday 18 May 2027
+  expected: FY2027-W16
+- input: '2026-10-07'
+  expected: FY2026-W36
+- input: September 18, 2027
+  expected: FY2027-W33
+- input: 30 Jun 2024
+  expected: FY2024-W21
+- input: Wednesday 2 September 2026
+  expected: FY2026-W31
+- input: '2024-11-21'
+  expected: FY2024-W42
+- input: March 24, 2024
+  expected: FY2024-W07
+- input: 11 Jun 2025
+  expected: FY2025-W19
+- input: Saturday 6 March 2027
+  expected: FY2027-W05
+- input: '2025-02-01'
+  expected: FY2024-W52
+- input: January 22, 2025
+  expected: FY2024-W51
+- input: 3 Feb 2027
+  expected: FY2027-W01
+- input: Thursday 12 February 2026
+  expected: FY2026-W02
+- input: '2026-05-06'
+  expected: FY2026-W14
+- input: January 31, 2024
+  expected: FY2023-W52
+- input: 27 Jan 2024
+  expected: FY2023-W51
+- input: Sunday 13 October 2024
+  expected: FY2024-W36
+- input: '2025-05-19'
+  expected: FY2025-W16
+- input: April 29, 2027
+  expected: FY2027-W13
+- input: 8 Nov 2026
+  expected: FY2026-W40
+- input: Saturday 10 February 2024
+  expected: FY2024-W01
+- input: '2027-10-06'
+  expected: FY2027-W36
+- input: May 26, 2024
+  expected: FY2024-W16
+- input: 7 Feb 2024
+  expected: FY2024-W01
+- input: Thursday 25 February 2027
+  expected: FY2027-W04
+- input: '2026-01-24'
+  expected: FY2025-W51
+- input: March 23, 2026
+  expected: FY2026-W08
+- input: 22 Nov 2025
+  expected: FY2025-W42
+- input: Wednesday 18 August 2027
+  expected: FY2027-W29
+- input: '2026-12-27'
+  expected: FY2026-W47
+- input: January 29, 2027
+  expected: FY2026-W52
+- input: 11 Feb 2025
+  expected: FY2025-W02
+- input: Sunday 14 September 2025
+  expected: FY2025-W32
+- input: '2025-10-18'
+  expected: FY2025-W37
+- input: October 27, 2024
+  expected: FY2024-W38
+- input: 11 Sep 2027
+  expected: FY2027-W32
+- input: Sunday 18 May 2025
+  expected: FY2025-W15
+- input: '2026-09-30'
+  expected: FY2026-W35
+- input: January 26, 2027
+  expected: FY2026-W52
+- input: 2 Mar 2025
+  expected: FY2025-W04
+- input: Tuesday 24 September 2024
+  expected: FY2024-W34
+- input: '2025-09-09'
+  expected: FY2025-W32
+- input: June 29, 2025
+  expected: FY2025-W21
+- input: 13 Sep 2026
+  expected: FY2026-W32
+- input: Tuesday 30 January 2024
+  expected: FY2023-W52
+- input: '2026-01-11'
+  expected: FY2025-W49
+- input: October 28, 2025
+  expected: FY2025-W39
+- input: 13 Feb 2025
+  expected: FY2025-W02
+- input: Tuesday 24 August 2027
+  expected: FY2027-W30
+- input: '2025-02-04'
+  expected: FY2025-W01
+- input: January 30, 2027
+  expected: FY2026-W52
+- input: 4 May 2025
+  expected: FY2025-W13
+- input: Wednesday 5 February 2025
+  expected: FY2025-W01
+- input: '2024-07-28'
+  expected: FY2024-W25
+- input: February 10, 2025
+  expected: FY2025-W02
+- input: 2 May 2027
+  expected: FY2027-W13
+- input: Thursday 30 January 2025
+  expected: FY2024-W52
+- input: '2025-06-07'
+  expected: FY2025-W18
+- input: March 18, 2027
+  expected: FY2027-W07
+- input: 25 Apr 2024
+  expected: FY2024-W12
+- input: Saturday 27 September 2025
+  expected: FY2025-W34
+- input: '2026-02-25'
+  expected: FY2026-W04
+- input: October 25, 2025
+  expected: FY2025-W38
+- input: 29 Mar 2026
+  expected: FY2026-W08
+- input: Tuesday 14 July 2026
+  expected: FY2026-W24
+- input: '2025-09-01'
+  expected: FY2025-W31
+- input: March 23, 2025
+  expected: FY2025-W07
+- input: 20 Jan 2024
+  expected: FY2023-W50
+- input: Friday 28 February 2025
+  expected: FY2025-W04
+- input: '2025-06-01'
+  expected: FY2025-W17
+- input: December 31, 2025
+  expected: FY2025-W48
+- input: 2 Jun 2024
+  expected: FY2024-W17
+- input: Friday 5 February 2027
+  expected: FY2027-W01
+- input: '2025-08-31'
+  expected: FY2025-W30
+- input: December 7, 2025
+  expected: FY2025-W44
+- input: 16 Jun 2025
+  expected: FY2025-W20
+- input: Sunday 2 February 2025
+  expected: FY2024-W52
+- input: '2026-07-25'
+  expected: FY2026-W25
+- input: February 11, 2024
+  expected: FY2024-W01
+- input: 1 Feb 2024
+  expected: FY2023-W52
+- input: Monday 3 February 2025
+  expected: FY2025-W01
+- input: '2026-01-31'
+  expected: FY2025-W52
+- input: April 29, 2024
+  expected: FY2024-W13
+- input: 20 Nov 2024
+  expected: FY2024-W42
+- input: Monday 8 February 2027
+  expected: FY2027-W02
+- input: '2027-12-04'
+  expected: FY2027-W44
+- input: May 31, 2026
+  expected: FY2026-W17
+- input: 23 Jan 2026
+  expected: FY2025-W51
+- input: Tuesday 20 January 2026
+  expected: FY2025-W51
+- input: '2026-12-12'
+  expected: FY2026-W45
+- input: June 22, 2025
+  expected: FY2025-W20
+- input: 14 Oct 2027
+  expected: FY2027-W37
+- input: Friday 23 April 2027
+  expected: FY2027-W12
+- input: '2024-02-06'
+  expected: FY2024-W01
+- input: February 2, 2027
+  expected: FY2027-W01
+- input: 12 Oct 2024
+  expected: FY2024-W36
+- input: Thursday 8 July 2027
+  expected: FY2027-W23
+- input: '2027-05-30'
+  expected: FY2027-W17
+- input: February 3, 2024
+  expected: FY2023-W52
+- input: 2 Sep 2024
+  expected: FY2024-W31
+- input: Saturday 31 August 2024
+  expected: FY2024-W30
+- input: '2024-05-21'
+  expected: FY2024-W16
+- input: November 29, 2026
+  expected: FY2026-W43
+- input: 27 Oct 2025
+  expected: FY2025-W39
+- input: Wednesday 7 April 2027
+  expected: FY2027-W10
+- input: '2027-02-09'
+  expected: FY2027-W02
+- input: August 30, 2025
+  expected: FY2025-W30
+- input: 9 Feb 2025
+  expected: FY2025-W01
+- input: Friday 10 May 2024
+  expected: FY2024-W14
+- input: '2026-02-09'
+  expected: FY2026-W02
+- input: February 14, 2026
+  expected: FY2026-W02
+- input: 31 Jan 2027
+  expected: FY2026-W52
+- input: Wednesday 27 January 2027
+  expected: FY2026-W52
+- input: '2025-11-15'
+  expected: FY2025-W41
+- input: July 10, 2024
+  expected: FY2024-W23
+- input: 22 Jan 2027
+  expected: FY2026-W51
+- input: Wednesday 23 April 2025
+  expected: FY2025-W12
+- input: '2024-02-14'
+  expected: FY2024-W02
+- input: September 6, 2025
+  expected: FY2025-W31
+- input: 8 Feb 2024
+  expected: FY2024-W01
+- input: Tuesday 1 December 2026
+  expected: FY2026-W44
+- input: '2027-06-03'
+  expected: FY2027-W18
+- input: December 29, 2025
+  expected: FY2025-W48
+- input: 27 Jan 2025
+  expected: FY2024-W52
+- input: Tuesday 27 January 2026
+  expected: FY2025-W52
+- input: '2024-05-30'
+  expected: FY2024-W17
+- input: November 17, 2026
+  expected: FY2026-W42
+- input: 20 Dec 2025
+  expected: FY2025-W46
+- input: Wednesday 1 January 2025
+  expected: FY2024-W48
+- input: '2025-05-14'
+  expected: FY2025-W15
+- input: February 5, 2026
+  expected: FY2026-W01
+- input: 9 Oct 2024
+  expected: FY2024-W36
+- input: Thursday 7 October 2027
+  expected: FY2027-W36
+- input: '2025-01-24'
+  expected: FY2024-W51
+- input: August 3, 2026
+  expected: FY2026-W27
+- input: 28 Apr 2026
+  expected: FY2026-W13
+- input: Saturday 10 July 2027
+  expected: FY2027-W23
+- input: '2024-07-27'
+  expected: FY2024-W25
+- input: July 21, 2027
+  expected: FY2027-W25
+- input: 4 Jun 2027
+  expected: FY2027-W18
+- input: Saturday 8 May 2027
+  expected: FY2027-W14
+- input: '2026-01-30'
+  expected: FY2025-W52
+- input: January 26, 2025
+  expected: FY2024-W51
+- input: 11 Feb 2026
+  expected: FY2026-W02
+- input: Thursday 4 February 2027
+  expected: FY2027-W01
+- input: '2026-02-27'
+  expected: FY2026-W04
+- input: March 7, 2026
+  expected: FY2026-W05
+- input: 8 Aug 2026
+  expected: FY2026-W27
+- input: Monday 22 June 2026
+  expected: FY2026-W21
+- input: '2027-09-14'
+  expected: FY2027-W33
+- input: February 18, 2027
+  expected: FY2027-W03
+- input: 22 May 2027
+  expected: FY2027-W16
+- input: Thursday 23 April 2026
+  expected: FY2026-W12
+- input: '2025-07-05'
+  expected: FY2025-W22
+- input: January 28, 2027
+  expected: FY2026-W52
+- input: 8 May 2025
+  expected: FY2025-W14
+- input: Sunday 22 December 2024
+  expected: FY2024-W46
+- input: '2026-07-07'
+  expected: FY2026-W23
+- input: August 26, 2024
+  expected: FY2024-W30
+- input: 1 Aug 2027
+  expected: FY2027-W26
+- input: Monday 29 January 2024
+  expected: FY2023-W52
+- input: '2026-04-04'
+  expected: FY2026-W09
+- input: April 12, 2024
+  expected: FY2024-W10
+- input: 28 Jan 2025
+  expected: FY2024-W52
+- input: Friday 1 October 2027
+  expected: FY2027-W35
+assertions:
+- rule: regex_match
+  pattern: FY\d{4}-W\d{2}
+- rule: max_length
+  value: 200
+- rule: not_contains
+  value: ERROR
+fuzzing:
+  inject_unicode: false
+  empty_inputs: false
+  whitespace_flood: false
+  payload_extremes: false

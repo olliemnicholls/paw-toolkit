@@ -944,6 +944,386 @@ fix for a task the fast compiler gets wrong.
   generally more robust to example skew, or happened to be on these eight, is not
   established by one pool.
 
+## Finetune compiler on a rule the base model does not know (fiscal weeks): the first task it can do and the fast compiler cannot
+
+The two sections above end on the same note. Phone extraction: 132 of 134 outputs
+byte-identical between the two compilers. Ticket triage: 60.0% vs 53.3% against a 91.7%
+ceiling, "on a task the finetune compiler fails, the fast compiler also fails, somewhat
+worse ... a task the finetune compiler can do and the fast one cannot is the next thing to
+look for." **This is that task.** `paw-ft-bs48` scores 49.0% exact against the fast
+compiler's 11.3% and 10.3% — a 4.3x lift, on ground truth computed by code — and gets the
+fiscal year right on 298 of 300 dates where the fast compiler gets it right on 256.
+
+It is still not a usable adapter. A frontier model given the same spec text and no compile
+at all scores 85.7%, and the exact answer is computable in three lines of Python. Read
+this as "the finetune compiler learns a rule the fast compiler cannot represent", not as
+"the finetune compiler solves this".
+
+### The rule
+
+Fiscal-week labelling. In, a calendar date; out, `FY<year>-W<nn>`.
+
+- A fiscal year begins on the **first Monday of February** and is named for that calendar
+  year. FY2026 begins 2026-02-02.
+- Weeks are numbered from 1 starting that Monday. The seven days from the epoch are W01.
+- A date in January, or in February before that year's first Monday, belongs to the
+  **previous** fiscal year and continues its week count. 2026-01-20 is FY2025-W51.
+- A fiscal year has 52 weeks, or 53. In this range only FY2027 has 53 (2027-02-01 →
+  2028-02-06); its W53 falls in 2028 and so outside the evaluation window, which is stated
+  rather than hidden — **no evaluation case is labelled W53** and the highest reachable
+  week is W52.
+
+The task was chosen for three properties, all of which it has and the two prior tasks did
+not. The rule is **arbitrary**: no pretrained model knows this particular fiscal calendar,
+and the thing it does know — ISO 8601 week numbers, anchored to January — gives a
+systematically different answer. The ground truth is **computable**, so there is no judge,
+no teacher, no label noise and no ceiling below 100%; every number below is exact and the
+evaluation was free. And it needs **real multi-step arithmetic** (locate a weekday-anchored
+epoch, subtract, divide, handle the wrap into the previous fiscal year), not
+pattern-matching on the input.
+
+Ground truth lives in `scripts/measure_finetune_fiscal.py:fiscal_label` and is unit-tested
+in `tests/test_fiscal_week.py` (18 tests): the first Monday of February for 2023–2028
+against a calendar, all three days around each of the four in-range boundaries, the whole
+of W01, a hand-worked date in each fiscal year, both worked examples that appear inside the
+spec text, the FY2027 53-week year including 2028-01-31 → `FY2027-W53` and 2028-02-07 →
+`FY2028-W01`, and an exhaustive sweep asserting every date in range yields a well-formed
+label with a week inside its year's length.
+
+### The data
+
+```
+300 evaluation dates, seed 20260910, 2024-01-01 .. 2027-12-31
+  81 of them are within +/-10 days of a fiscal-year start (the full window for all four
+     in-range boundaries, oversampled deliberately); 219 drawn uniformly from the rest
+  formatted round-robin, 75 each:
+     ISO                2026-03-03
+     long               March 3, 2026
+     day-first          3 Mar 2026
+     weekday-prefixed   Tuesday 3 March 2026
+  no numeric-only forms: 03/04/2026 is ambiguous and an ambiguous input is not a fair test
+  54 of the 300 are dates whose fiscal year differs from their calendar year -- the cases
+     the February anchor exists to handle
+8 folding examples, disjoint from the evaluation set by construction (their dates are
+  removed from the pool before it is drawn), two per format, three of them boundary cases
+  including the epoch itself and the Sunday before it
+```
+
+Committed as `measurements/finetune-fiscal-dates.json`. It is rebuilt deterministically and
+costs nothing to regenerate — no model is involved in producing it.
+
+**The weekday-prefixed format hands the model the weekday for free**, which is exactly the
+fact the rule turns on. That is deliberate and the per-format scoring below is there to
+show whether any arm exploits it. None does, to any useful degree.
+
+### The commands
+
+```bash
+# Fixture is built on first run. Three compiles, one arm at a time, public=False.
+uv run python scripts/measure_finetune_fiscal.py --label 3080 --no-run --arms A
+uv run python scripts/measure_finetune_fiscal.py --label 3080 --no-run --arms B
+uv run python scripts/measure_finetune_fiscal.py --label 3080 --no-run --arms C
+
+# 300 dates x 3 adapters on the 3080 at temperature 0, plus 300 Haiku calls for arm D.
+uv run python scripts/measure_finetune_fiscal.py --label 3080 --skip-compile --arms A,B,C,D
+
+# paw-kit's own tools, read-only, on the same 300 cases.
+uv run paw-test check measurements/finetune-fiscal-suite-A.yaml --backend real \
+    --json measurements/finetune-fiscal-check-A.json          # and -B, -C
+
+uv run paw-test compare \
+    measurements/finetune_fiscal_A-paw-4b-qwen3-0.6b.paw \
+    measurements/finetune_fiscal_C-paw-ft-bs48.paw \
+    measurements/finetune-fiscal-suite.yaml \
+    --backend real --no-fuzz --json measurements/finetune-fiscal-compare-AC.json
+
+uv run paw-test compare \
+    measurements/finetune_fiscal_B-paw-4b-qwen3-0.6b.paw \
+    measurements/finetune_fiscal_C-paw-ft-bs48.paw \
+    measurements/finetune-fiscal-suite.yaml \
+    --backend real --no-fuzz --json measurements/finetune-fiscal-compare-BC.json
+```
+
+Run artifact: `measurements/finetune-fiscal-3080-20260910-190137.json` (every per-case row
+— input, raw output, parsed label, latency — plus each arm's manifest fields mirrored in,
+since the `.paw` files are gitignored).
+
+**Compile calls made: three.** Arms A, B and C, one each, all `cache_hit: false`, all
+`public=False`. The inference run reports `compiles_made_this_run: 0` because it ran under
+`--skip-compile`; `paw-test check` and `paw-test compare` load existing manifests and
+compile nothing. Arm D compiles nothing by construction.
+
+### The arms
+
+| Arm | Compiler | Snapshot | Examples | Program id | `full_spec_sha256` | Compile wall |
+|---|---|---|---|---|---|---|
+| A | `paw-4b-qwen3-0.6b` | `paw-4b-qwen3-0.6b-20260407` | 0 | `a5b5abea4b2f342fb825` | `1b01c29438cbc16a…` | 4.06 s |
+| B | `paw-4b-qwen3-0.6b` | `paw-4b-qwen3-0.6b-20260407` | 8 folded | `f42233aa6a4538b5d9b9` | `f745103912be7a2c…` | 4.19 s |
+| C | `paw-ft-bs48` | `paw-ft-bs48-20260530` | 8 folded | `547679d668122427359b` | `f745103912be7a2c…` | **133.07 s** |
+| D | `claude-haiku-4-5-20251001` | n/a | 0 (spec text only) | n/a | n/a | none |
+
+B and C share `full_spec_sha256` exactly, so **those two arms differ in the compiler and in
+nothing else**. A differs only in having no folded examples (its `spec_sha256` and
+`full_spec_sha256` are equal, as they must be). No `redis_unavailable` warning and no
+refusal this time: health was `{"status":"healthy","queue_depth":0,"warnings":[]}` before
+the run and all three compiles went through first attempt. C's 133.07 s is a real,
+uncached finetune compile — 32x arm B's, and faster than the 180.8 s and 223.3 s the two
+earlier sections recorded.
+
+### Results
+
+All 300 cases, all arms, temperature 0. Ground truth is exact, so 100% is the ceiling and
+every column is a real accuracy, not an agreement rate.
+
+| Arm | Exact | Fiscal year correct | Week correct | Week off by exactly 1 | Parses `FY\d{4}-W\d{2}` | Whole output is just the label | Latency/call (median) |
+|---|---|---|---|---|---|---|---|
+| A — fast, 0 examples | 11.3% (34/300) | 85.3% (256/300) | 11.7% (35/300) | 12.7% (38/300) | 100% (300/300) | 100% | 55.8 ms |
+| B — fast, 8 examples | 10.3% (31/300) | 85.0% (255/300) | 10.7% (32/300) | 10.3% (31/300) | 100% (300/300) | 100% | 55.7 ms |
+| C — finetune, 8 examples | **49.0% (147/300)** | **99.3% (298/300)** | **49.0% (147/300)** | 35.7% (107/300) | 100% (300/300) | 100% | 55.9 ms |
+| D — Haiku 4.5, no compile | **85.7% (257/300)** | 86.7% (260/300) | 86.0% (258/300) | 1.0% (3/300) | 87.0% (261/300) | **0.3% (1/300)** | 3199 ms |
+
+By input format (exact match), and boundary dates versus the rest:
+
+| Arm | ISO | long | day-first | weekday-prefixed | Boundary (81) | Non-boundary (219) | FY ≠ calendar year (54) |
+|---|---|---|---|---|---|---|---|
+| A | 14.7% | 8.0% | 12.0% | 10.7% | 35.8% (29/81) | 2.3% (5/219) | 7.4% (4/54) |
+| B | 8.0% | 8.0% | 12.0% | 13.3% | 30.9% (25/81) | 2.7% (6/219) | 3.7% (2/54) |
+| C | 50.7% | 44.0% | 48.0% | 53.3% | 70.4% (57/81) | 41.1% (90/219) | **63.0% (34/54)** |
+| D | 82.7% | 89.3% | 88.0% | 82.7% | 87.7% (71/81) | 84.9% (186/219) | 77.8% (42/54) |
+
+**No arm fails on one input format.** The spread across the four formats is 6.7 points for
+A, 5.3 for B, 9.3 for C and 6.6 for D — noise at this sample size, and the
+weekday-prefixed form (which gives the weekday away) is not reliably the best for anyone.
+The task's difficulty is arithmetic, not parsing.
+
+**The boundary oversampling did its job in reverse for the fast compiler.** A and B look
+three-and-a-half times better on boundary dates (35.8%, 30.9%) than off them (2.3%, 2.7%) —
+but that is not competence. Near a boundary the correct answer is `W01` or `W52`, and both
+arms emit `W01` constantly (84 times for A, 61 for B); they collect boundary hits by
+standing still. Off the boundary, where the week number has to be computed, arm A is right
+**5 times in 219** and arm B **6 times in 219**.
+
+### Error patterns
+
+**1. The fast compiler emits a small fixed vocabulary of week numbers and ignores the
+date.** This is the whole story for arms A and B, and it is stark: across 300 distinct
+dates, arm A produces **43 distinct labels** and arm B **31**, against arm C's 130 and
+Haiku's 142. Arm A uses week 40 ninety-four times and week 1 eighty-four times; those two
+values cover 59% of its output. Arm B is worse — week 43 alone, **129 times out of 300**:
+
+| Input | Expected | B |
+|---|---|---|
+| `29 Jun 2024` | `FY2024-W21` | `FY2024-W43` |
+| `October 4, 2024` | `FY2024-W35` | `FY2024-W43` |
+| `2027-03-31` | `FY2027-W09` | `FY2027-W43` |
+| `Friday 19 July 2024` | `FY2024-W24` | `FY2024-W43` |
+| `February 21, 2024` | `FY2024-W03` | `FY2024-W43` |
+
+**W43 and W42 are the folded examples' answers.** The folding pool contains
+`December 1, 2024 → FY2024-W43` and `2025-11-20 → FY2025-W42`; arm B's two most common
+outputs are W43 (129) and W42 (61), together 63% of its 300 answers. This is the
+example-regurgitation failure the folded-examples section above documents for the fast
+compiler, reproduced here in its purest form — and it is *why folding made arm B worse than
+arm A* (10.3% vs 11.3%). Arm A, with no examples to copy, falls back on W40/W01 instead;
+neither is a computation.
+
+**2. The fast compiler ignores the February start; the finetune compiler does not.** Of
+the 54 dates whose fiscal year differs from their calendar year, arm A gets the year right
+on **10** and arm B on **11**. Arm C gets **53 of 54**. Put the other way: 246 of the 300
+dates have fiscal year == calendar year, so a program that ignored the rule entirely and
+echoed the calendar year would score 246/300 on the fiscal-year column. Arm A scores 256
+and arm B 255 — **the fast compiler's 85% fiscal-year accuracy is almost entirely the
+trivial baseline**, worth 10 and 9 dates more than doing nothing. Arm C scores 298. The failure is uniform and mechanical:
+
+| Input | Expected | A | B | C | D |
+|---|---|---|---|---|---|
+| `Wednesday 29 January 2025` | `FY2024-W52` | `FY2025-W01` | `FY2025-W43` | **`FY2024-W52`** | **`FY2024-W52`** |
+| `25 Jan 2027` | `FY2026-W52` | `FY2027-W01` | `FY2027-W01` | **`FY2026-W52`** | *(no label)* |
+| `Sunday 1 February 2026` | `FY2025-W52` | `FY2026-W01` | `FY2026-W01` | **`FY2025-W52`** | *(no label)* |
+| `29 Jan 2026` | `FY2025-W52` | `FY2026-W01` | `FY2026-W01` | **`FY2025-W52`** | **`FY2025-W52`** |
+
+A's answer for a late-January date is always `FY<calendar year>-W01`: it has read "fiscal
+year" as "calendar year" and "January" as "the start". That is the single fact the spec
+spends a paragraph and a worked example on, and neither fast-compiler arm picked it up from
+prose or from three boundary examples in the folding pool. **Arm C picked it up from both
+and applies it to dates it has never seen.** Its `fy_delta` histogram is 298 zeros, one −1
+and one +1.
+
+**3. Arm C's residual error is arithmetic, and it is nearly all off-by-one.** C's week
+delta distribution: 147 exact, 62 at +1, 45 at −1, 15 at +2, 14 at −2, and a long tail of
+16 everything-else. **254 of 300 (84.7%) are within one week of correct, with the fiscal
+year also right.** Compare arm A: 73/300 (24.3%) within one week.
+
+| Input | Expected | C |
+|---|---|---|
+| `February 23, 2025` | `FY2025-W03` | `FY2025-W04` |
+| `15 Dec 2025` | `FY2025-W46` | `FY2025-W47` |
+| `2026-11-30` | `FY2026-W44` | `FY2026-W43` |
+| `3 Nov 2025` | `FY2025-W40` | `FY2025-W39` |
+
+The shape is a slight positive bias (+1 occurs 62 times, −1 45 times), consistent with an
+inclusive/exclusive slip in the day count rather than a misunderstanding of the rule. C's
+only two fiscal-year errors are the two hardest days in the whole set — the epoch and the
+day the epoch is not:
+
+| Input | Expected | C |
+|---|---|---|
+| `2025-02-04` (Tue, 1 day after the FY2025 epoch) | `FY2025-W01` | `FY2024-W52` |
+| `February 3, 2024` (Sat, 2 days before the FY2024 epoch) | `FY2023-W52` | `FY2024-W01` |
+
+**4. Nobody outputs the ISO week.** The hypothesis's named alternative failure — that an
+arm would fall back on ISO 8601 week numbers — did not happen. Output week equals the ISO
+week on 19/300 for arm A, 8/300 for B, **0/300 for C and 0/300 for D**. The fast compiler
+is not computing the wrong week number; it is not computing one at all.
+
+**5. Arm D is a different failure entirely: it is right when it answers and it often does
+not answer.** Haiku 4.5 gets the arithmetic right — 258/300 week numbers correct, and of
+the 261 cases where it emitted a label at all, **257 were exactly right (98.5%)**. But
+**39 of 300 outputs contain no label**, because it reasons its way past `max_tokens=400`:
+
+```
+input '25 Jan 2027'  expect FY2026-W52
+raw (tail): "...December 2026 = 31 days\n  - January 1-25, 2027 = 25 days\n
+             - Total: 25+31+30+31+30+31+31+30+31+30+31+25 = 356 days\n\n
+             Total days from Feb 3, 2025 to Jan "
+
+input '2027-11-14'   expect FY2027-W41
+raw (tail): "...Total: 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 14 = 287 days\n\n
+             Wait, let me recalculate more carefully. From Feb 1 to Nov 14: ..."
+```
+
+Truncated outputs average 1052 characters against 748 for ones that finish. And **the spec
+says "Output exactly one label and nothing else"; arm D obeys that on 1 case out of 300
+(0.3%)**, against 300/300 for every compiled adapter. That is worth stating plainly because
+it cuts the other way: on the one axis paw-kit's assertions actually measure — output
+shape — the 55 ms adapters beat the 3.2 s frontier model 300–1. Arm D's four wrong-when-
+answered cases are `2025-09-08 → FY2025-W31` (expected W32), `26 Jan 2026 → FY2025-W51`
+(expected W52), `Thursday 30 January 2025 → FY2024-W51` (expected W52) and
+`January 31, 2024 → FY2024-W52` (expected `FY2023-W52`, the only time it missed the
+February anchor).
+
+### Using paw-kit's own tools, and what got in the way
+
+`paw-test compare` is the number that settles whether this is a different compile.
+**On phone extraction the two compilers agreed byte-for-byte on 132 of 134 outputs. Here
+they agree on 31 of 300.**
+
+```
+A vs C: 300 cases, 30 identical (byte-for-byte), 30 equivalent, errored 0/300
+B vs C: 300 cases, 31 identical (byte-for-byte), 31 equivalent, errored 0/300
+```
+
+10.0% and 10.3% agreement, against 98.5% on the earlier task. Whatever `paw-ft-bs48` is doing, on this
+spec it is not the fast compiler's program on a slower path.
+
+Three things about the tools, recorded and not fixed:
+
+1. **`paw-test check` reports 100% pass for every arm, including the one that is 10%
+   correct.** All three adapters score `Pass rate: 100.0% (300/300)`, exit 0. The suite
+   carries the exact ground-truth answer in each case's `expected` field — and the runner
+   never reads it. `expected` on a `standard_case` is consumed only by
+   `paw_kit/test/active.py:189` to build an active-learning dataset; `paw_kit/test/runner.py`
+   evaluates assertions and nothing else (the `exact_match` *rule* at `runner.py:173`
+   compares against `rule.value`, a single suite-wide literal, which is useless when every
+   case has a different answer). So a suite can contain a complete, correct answer key and
+   `paw-test check` will still pass an adapter that is wrong 267 times out of 300. The
+   triage section above made the weaker version of this complaint — that the assertion
+   vocabulary cannot express the contract. This is the stronger version: **the information
+   was present in the suite file and the tool did not use it.**
+2. **`paw-test check` has no way to point a suite at a different adapter.** The adapter is
+   `adapter_path` inside the YAML and there is no `--adapter` flag, so checking three arms
+   on one case set means writing three near-identical suite files
+   (`finetune-fiscal-suite-A.yaml`, `-B`, `-C`) that differ in one line. `paw-test compare`
+   takes both adapters as arguments and ignores the suite's `adapter_path` entirely, so the
+   two subcommands disagree about where an adapter comes from.
+3. **`paw-kit doctor`'s service check warned again and was again not predictive.** It
+   reported `WARN — 200 OK but gpu_services is empty`, with the note that the fast compiler
+   has been observed to compile anyway. All three compiles then succeeded, including the
+   finetune one. That is now three sections in a row where `gpu_services: {}` did not
+   predict anything; the check's own remediation text says as much.
+
+A fourth, about this script rather than the tools: `--skip-compile` with a missing manifest
+raises rather than compiling, copied from `scripts/measure_finetune_triage.py`'s guard for
+the reason that section gives — `.paw` files are gitignored, and a run that reports itself
+as `--skip-compile` while quietly compiling a different adapter is worse than one that
+stops.
+
+### What the hypothesis predicted, and what happened
+
+The hypothesis: *the fast compiler is a single forward pass from spec text to adapter
+weights and can only produce adapters of a kind its training covered, while the finetune
+compiler generates examples from the spec with a teacher and trains on them, so it should
+win on an explicit, arbitrary procedure stated in the spec that the base model does not
+already know.*
+
+**Confirmed, on the part that matters, and by a wide margin.** 49.0% vs 11.3%/10.3% exact;
+99.3% vs 85.3%/85.0% on the fiscal year; 84.7% vs 24.3% within one week; 130 distinct
+labels vs 43 and 31; 31/300 byte-identical outputs against the 132/134 that made the
+phone-extraction comparison inconclusive. On a rule the base model does not know, the
+finetune compiler learns it and the fast compiler does not represent it at all.
+
+Two predictions inside the hypothesis were wrong. **No arm fell back on ISO week numbers**
+(0/300 for C and D, 19/300 and 8/300 for A and B, at chance). And **folding examples into
+the spec did not help the fast compiler even slightly** — arm B is 1.0 point *worse* than
+arm A and collapses onto the folded examples' own answers 63% of the time. The eight
+examples that taught arm C the February anchor taught arm B a constant.
+
+### Conclusion
+
+**On a task defined by a rule the base model does not know, the finetune compiler does
+something the fast compiler cannot do at all — and the result is still not a usable
+adapter.** `paw-ft-bs48` scores 49.0% exact (147/300) against the fast compiler's 11.3%
+and 10.3%, a 4.3x lift on ground truth computed by code with no judge and no label noise.
+The difference is not a few points traded between fields, as it was on ticket triage: it
+is categorical. Arm C locates the fiscal year on 298 of 300 dates and on 53 of the 54 dates
+where the February anchor actually bites, where arms A and B manage 10 and 11 of 54 and
+answer `FY<calendar year>-W01` for every late-January date. Arm C produces 130 distinct
+labels for 300 distinct dates; arm A produces 43 and arm B produces 31, of which W43 alone
+— the answer to one of the eight folded examples — accounts for 129. Arm C's remaining
+error is arithmetic and small: 84.7% of its answers are within one week, against 24.3% for
+arm A. And unlike phone extraction, where 132 of 134 outputs were byte-identical between
+the two compilers, here 31 of 300 are — this is demonstrably a different program, not a
+slower path to the same one. Against that: 49.0% exact is a coin flip, `claude-haiku-4-5`
+given the identical spec and no compile at all reaches 85.7% (98.5% of the times it
+manages to answer within its token budget), and the true answer is three lines of Python.
+Nobody should ship a 49%-accurate date labeller. The finding is not "use `paw-ft-bs48` for
+this"; it is that **the finetune compiler's 133 s of compile buys a genuine capability
+difference — learning an arbitrary stated procedure — that the fast compiler's 4 s does
+not buy at any example count, and this is the first measurement in this document that
+separates them.** Per-call latency is unchanged at 55.9 ms vs 55.7 ms, as in both earlier
+sections: everything `paw-ft-bs48` costs, it costs once, at compile.
+
+### Limitations
+
+- **One task, one run, one seed, one machine** (RTX 3080), one compile per arm. The
+  A-vs-C gap (38 points) is far too large to be a sampling artefact at n=300, but the
+  precise figures are one run's.
+- **The task was designed to separate the compilers**, after two tasks that did not. That
+  is the honest framing: this is evidence that a separating task *exists* and what it looks
+  like, not evidence about how often real work has this shape. A task whose whole content is
+  an arbitrary stated procedure is the best case for a compiler that trains on
+  spec-generated examples.
+- **W53 is never tested.** FY2027 is a 53-week year but its W53 falls in 2028, outside the
+  evaluation range, so no arm was asked for a `W53` label and the "52 or 53" clause of the
+  rule is exercised only by the unit tests. Arm A emitted `W53` three times anyway, always
+  wrongly — `December 23, 2027 -> FY2027-W53` where the answer is `FY2027-W47`, and twice in
+  December 2026 where FY2026 has only 52 weeks.
+- **Arm D is a reference, not a ceiling.** Ground truth is exact, so the ceiling is 100%.
+  Arm D's 85.7% is depressed by a `max_tokens=400` budget it exceeds on 39 cases; a larger
+  budget, or an explicit "answer only" instruction, would raise it. It is included to show
+  the rule is hard, not to bound anything.
+- **The comparison between arm D and the adapters is not like-for-like** in cost or in
+  shape. D is a 3.2 s API call per input that emits a paragraph of arithmetic; A, B and C
+  are 56 ms local calls that emit exactly the label. On output conformance the adapters win
+  300–1.
+- **Adapter temperature is 0 by inheritance, not by choice**, exactly as in the two
+  sections above: `programasweights`' `PawFunction` defaults to `temperature=0.0` and
+  `ProgramAsWeightsBackend.infer` accepts no temperature or seed argument.
+- **The folding pool is the same 8 examples for B and C.** How much of C's advantage comes
+  from those particular eight (three of which are boundary cases) rather than from the
+  compiler is not separable by one pool — though C's 41.1% on the 219 non-boundary dates,
+  against B's 2.7%, is hard to attribute to three boundary examples.
+
 ## Constrained decoding against the real upstream adapter: the hook wasn't missing
 
 Every claim in this project about grammar-constrained decoding has carried the same
