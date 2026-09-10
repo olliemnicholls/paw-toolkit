@@ -146,12 +146,12 @@ def compare_adapters(
 
         failed_a = []
         for rule in suite.assertions:
-            ok, reason = evaluate_assertion(out_a, rule, abstain_value=suite.abstain_value)
+            ok, reason = evaluate_assertion(out_a, rule)
             if not ok:
                 failed_a.append(f"{rule.rule}: {reason}")
         failed_b = []
         for rule in suite.assertions:
-            ok, reason = evaluate_assertion(out_b, rule, abstain_value=suite.abstain_value)
+            ok, reason = evaluate_assertion(out_b, rule)
             if not ok:
                 failed_b.append(f"{rule.rule}: {reason}")
 
