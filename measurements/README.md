@@ -178,8 +178,9 @@ in this script, not in the shipped library; `real.py`'s docstring now says so.
 > `@compile_on_hit` now has [shadow mode](../docs/shadow-mode.md): a compiled adapter is
 > promoted only after a window of live comparisons clears a threshold, and with the shipped
 > defaults this adapter would not have promoted. The measurement scripts are pinned to
-> `shadow_window=0` so the runs recorded here stay reproducible. Measuring shadow mode
-> itself is a follow-up.
+> `shadow_window=0` so the runs recorded here stay reproducible. Shadow mode itself is
+> now measured below, in "Shadow mode, for real": at the shipped defaults this adapter
+> does not promote, and stalls after five windows.
 
 Every test above this line checks *shape*: does the output match a regex, parse as JSON,
 hit a length bound. None of them ask whether the output is actually a correct answer.
@@ -623,6 +624,210 @@ the output *shaped*; it cannot make it *answerable*.
 structural validity only — no semantic judging was run on the constrained outputs, so
 "4/5 parse" says nothing about whether `kind: "mobile"` is the right classification.
 
+## Shadow mode, for real: the gate holds, the audit window is noisier than the design says
+
+`docs/shadow-mode.md` makes four claims that had never been run on hardware: a
+60%-agreement adapter never promotes at the shipped defaults and stalls after five
+windows; `audit_rate=0.05` costs one teacher call per twenty served calls (~400 served
+calls per audit window) and `audit_rate=0.0` costs none; "nothing in shadow mode ...
+adds latency to [the caller]"; and shadow mode creates no new file.
+`scripts/measure_shadow_mode.py` measures all four in one run
+(`measurements/shadow-mode-3080-20260910-124735.json`, 160 s wall, RTX 3080 + CUDA).
+
+**Setup, and what is real in it.** The adapter is the *same* compiled adapter that scored
+60% in the section above — `measurements/triage_semantic_agreement-paw-4b-qwen3-0.6b.paw`,
+run live through `ProgramAsWeightsBackend` on the GPU, ~113 ms per call. The teacher is a
+**replay teacher**: a pure function returning the recorded live-Claude answer for each of
+the 20 recorded tickets in `measurements/triage-semantic-agreement-3080-20260909-002033.json`.
+No teacher API call is made and no money is spent, but the labels are real teacher labels.
+Agreement uses the shipped recipe for that measurement's own scoring rule,
+`field_tolerance_agreement({"urgency_score": 1})`. **Zero compiles**: the adapter already
+exists, so each task is put into `shadow` by calling `TraceDB.set_shadow_started` with the
+existing manifest and `threshold=10**9` makes the compile path unreachable;
+`backend.compile` is wrapped in a counter for the whole run and the JSON records
+`"compile_calls": 0`. As a check that replaying the teacher does not quietly change what is
+being compared, the live adapter's answer was compared with the recorded one on all 20
+tickets: **20/20 identical**, so the live agreement rate is exactly the recorded 12/20.
+
+### 1. Does the 60% adapter promote at the shipped defaults? No, and it stalls on schedule
+
+200 calls, `shadow_window=20`, `shadow_threshold=0.8`, `audit_rate=0.0`, one comparison
+drained to completion per call so nothing is dropped.
+
+| Window | Cyclic inputs | Random draw (seed 0) | State after window |
+|---|---|---|---|
+| 1 (calls 1-20) | 0.60 (12/20) | 0.60 | `shadow` |
+| 2 (calls 21-40) | 0.60 | 0.65 | `shadow` |
+| 3 (calls 41-60) | 0.60 | 0.65 | `shadow` |
+| 4 (calls 61-80) | 0.60 | 0.55 | `shadow` |
+| 5 (calls 81-100) | 0.60 | 0.60 | `shadow` |
+| stall warning | call 101 | call 101 | `shadow (stalled)` |
+
+Never promoted, in either draw. The stall WARNING fired on call 101 in both — exactly
+`5 × shadow_window` comparisons — and `get_agreement()["stalled"]` and the `(stalled)`
+marker in `paw-kit report` both flipped to true. Fail-opens: 0. Dropped: 0. This is the
+design working as documented.
+
+Two things the design's own text gets wrong, though, and neither is visible without
+running it:
+
+- **The residual is ~9x larger than the doc states.** `docs/shadow-mode.md:66` says a
+  genuinely random 60% adapter "has roughly a 2.5% chance of producing one 16-of-20 window"
+  within the first five windows. The exact binomial (in the JSON as `binomial_residual`) is
+  **5.10% per window and 23.0% across five windows**. 2.5% is roughly what you get for a
+  *coin-flip* adapter (p=0.5 gives 0.59% per window, 2.9% over five), which looks like the
+  number that was actually computed. The mitigation the doc offers — raise `shadow_window`
+  — is still the right one, but a reader budgeting risk off "2.5%" is off by an order of
+  magnitude. This is arithmetic, not a measurement; anyone can check it.
+- **A stalled task's reported agreement is not a window rate.** After the stall the runner
+  keeps only one comparison in `shadow_window`; here 94 of the 100 post-stall comparisons
+  were dropped by that subsample, and `get_agreement()["rate"]` then read **0.55** (and
+  0.75 in the random-draw run) because its trailing 20 countable rows straddle the dense
+  pre-stall and sparse post-stall samples. Every completed window was 0.60. The rate
+  `paw-kit report` shows after `(stalled)` is a sparse estimate with a much wider error bar
+  than the `(11/20)` next to it implies.
+
+One structural caveat on this experiment specifically: with 20 recorded tickets cycled
+against a `shadow_window` of 20, every window contains exactly the same inputs, so the
+per-window rate is 0.60 by construction and the binomial residual above is *zero* — that
+run cannot promote by luck. The random-draw variant is the one where luck is in play, and
+it moved between 0.55 and 0.65 without coming near 16/20.
+
+### 2. What the audit path costs, and what it can actually detect
+
+This adapter cannot reach `ready` at the shipped `shadow_threshold=0.8` — that is section 1
+— so to measure the served path at all, **`shadow_threshold` was lowered to 0.5** (and
+`demote_threshold` to 0.4, which the validator requires to stay strictly below it). That is
+a knob turned to make promotion reachable, not a recommendation. It promoted on the first
+window at 0.60, after 20 calls.
+
+| | `audit_rate=0.05` | `audit_rate=0.0` |
+|---|---|---|
+| Served calls after promotion | 621 | 200 |
+| Teacher calls on those | **20** | **0** |
+| Teacher calls per served call | 0.032 | 0.000 |
+| Served calls to complete one 20-sample audit window | **621** | never (0 audit rows) |
+| `traces` rows written while `ready` | 0 | 0 |
+| Caller p50 / p95 (ms) | 112.8 / 114.0 | 113.2 / 114.0 |
+
+`audit_rate=0.0` really is free: zero teacher invocations across 200 served calls, zero
+`shadow_pairs` rows, and demotion is unreachable, exactly as documented. The `traces` row
+count confirms the other storage claim — a promoted task persists no input text on the
+served path.
+
+The doc's "about 400 served calls per completed audit window" is the right expectation
+(20 ÷ 0.05) but a wide one: the number of served calls needed to collect 20 Bernoulli(0.05)
+samples has mean 400 and standard deviation ~87, and **this run needed 621** (two earlier
+trial runs of the same script, not recorded here, needed 363 and 368). Budget the audit
+window as "a few hundred to a thousand served calls", not 400.
+
+**The finding that contradicts the design: at `audit_window=20`, the audit is not a drift
+detector.** A 20-sample window drawn from an adapter whose true agreement is 0.60 reads
+anywhere between 0.40 and 0.80 in 90% of draws. The audit windows actually observed on this
+adapter, whose true rate is exactly 0.60: **0.75** (this run, experiment 2), **0.65** (this
+run, experiment 2c), 0.55 and 0.48 in the two trial runs. Two consequences:
+
+- The shipped `demote_threshold=0.6` fires on a strict `<`, so an adapter sitting at exactly
+  0.60 is on the boundary and demotes only when the window happens to read low — P = 40.4%
+  per completed audit window. Experiment 2c forced a promotion (leaving
+  `shadow_threshold` at the shipped 0.8), set `demote_threshold=0.61` so the mechanism
+  *should* fire, and ran `audit_rate=0.5`: 20 audit comparisons over 29 served calls, window
+  read **0.65**, **no demotion**. The demotion path is reachable — an earlier trial run of
+  the identical code demoted at 0.48 — but at this window size whether it fires on a given
+  window is close to a coin flip.
+- Combined with the several-hundred served calls a window costs, a real regression would be
+  detected slowly and unreliably. `docs/shadow-mode.md` describes `audit_window` only as
+  "comparisons per audit window after promotion" and offers no guidance on sizing it; on
+  this evidence, a drift signal you would act on needs a window several times larger than
+  the shipped 20, and the doc should say so.
+
+### 3. Caller-path latency: the claim holds, but the cost lands somewhere else
+
+Per-call wall time of the wrapped function, 200 calls per state, caller looping flat out
+with the shadow worker running (`audit_rate=0.0`, so `ready` is the bare served path):
+
+| State | p50 (ms) | p95 (ms) | Comparisons queued | Dropped |
+|---|---|---|---|---|
+| `tracing` | 3.64 | 3.80 | n/a | n/a |
+| `shadow` | 0.93 | 3.01 | 200 | **190** |
+| `ready` | 113.07 | 114.02 | 0 | 0 |
+
+`ready` is 113 ms because that is what the adapter's own GPU inference costs; it is not
+shadow-mode overhead. The interesting row is `shadow` coming out **four times faster than
+`tracing`**, which is impossible as a description of the code — a wrapper in `shadow` does
+everything the `tracing` wrapper does plus one `put_nowait`. Experiment 3b is the control:
+the same wrapper, in `tracing`, measured twice, with an artificial background thread running
+adapter inferences during the second block and nothing else changed.
+
+| Same wrapper, same `tracing` state | p50 (ms) | p95 (ms) |
+|---|---|---|
+| Idle machine | 3.68 | 3.82 |
+| Background GPU load | 0.92 | 3.07 |
+
+That reproduces the whole effect (0.92 vs the 0.93 measured in `shadow`). The machine's CPU
+governor is `powersave`: the caller's ~3.7 ms is a SQLite trace write on a down-clocked
+CPU, and any background work — the shadow worker included — clocks the CPU up and the same
+write costs ~0.9 ms. **Read the result as: shadow mode's caller cost is a bounded
+`put_nowait`, below this measurement's noise floor, and the wrapped call's cost in both
+`tracing` and `shadow` is dominated by the trace write and by CPU clock state.** The claim
+"adds no caller latency" survives; the specific numbers say more about `powersave` than
+about `paw_kit`.
+
+**What the no-latency design actually costs is samples.** The queue is bounded at
+`shadow_queue_size=8` and drops the newest job when full. With a replay teacher (~0 ms) and
+a 113 ms adapter, the caller outruns the worker immediately: the queue-full WARNING fired on
+call **10**, and **190 of 200** comparisons were dropped — 10 recorded, 9 still pending at
+the end of the phase. A dropped comparison is not a disagreement, it is simply not sampled,
+so nothing is corrupted; but a window of 20 then needs ~400 calls rather than 20, and this
+is invisible from `paw-kit report`, which has no dropped column (only the in-process
+`get_agreement()["dropped"]` shows it). The real ratio is friendlier than this test — a live
+Claude teacher is ~11x *slower* than this adapter (see the JIT section above), so the worker
+keeps up easily — but any task whose teacher is faster than its adapter (a cache hit, a
+local model, a cheap API) will silently sample only a few percent of its calls.
+
+### 4. Sanity: `paw-kit report`, file modes, and files created
+
+`paw-kit report --db <cache>/traces.db` on the stalled experiment-1 database, verbatim from
+the JSON:
+
+```
+                                          paw-kit task report
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┓
+┃ Task            ┃ State            ┃ Calls ┃ Agreement              ┃ Fail-open ┃ Promoted ┃ Demoted ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━┩
+│ 62a33b58c0e0... │ shadow (stalled) │   200 │ 0.55 (11/20) shadow/20 │         0 │ -        │ -       │
+└─────────────────┴──────────────────┴───────┴────────────────────────┴───────────┴──────────┴─────────┘
+```
+
+(the promoted experiment-2 database renders `ready`, `0.75 (15/20) audit/20`, with a
+`Promoted` timestamp — note its `Calls` column reads **20**, not the 641 calls that task
+actually took: `Calls` is the traced-call count, and a promoted task records no traces, so
+the column freezes at whatever it read on promotion.) Every one of the seven per-experiment cache directories came out
+identical: mode `0700`, containing `traces.db`, `traces.db-wal` and `traces.db-shm`, **all
+three mode `0600`**. The `-wal`/`-shm` pair is SQLite's WAL journal, present before shadow
+mode existed; shadow mode itself added **no file**, as documented — its two tables live
+inside `traces.db`. `paw-kit report` exited 0 on all seven and created nothing.
+
+### Limitations
+
+- **Replay teacher.** The teacher's answers are the recorded ones from the 2026-09-09 run,
+  not fresh calls. Real teacher-side inconsistency — which the 60% figure itself warns
+  about — is invisible here, and so is any drift over time.
+- **Repeated inputs.** The same 20 tickets are cycled (experiments 1, 2, 3) or resampled
+  with replacement (1b). The adapter is deterministic at temperature 0, so per-input
+  agreement is fixed: what these numbers exercise is the **window arithmetic**, not fresh
+  traffic. With cyclic inputs and `shadow_window=20` the windows are perfectly correlated,
+  which is why experiment 1's five windows are identical to two decimal places.
+- **The replay teacher is instantaneous and free**, which inverts the real latency ratio and
+  is what drives the 190/200 drop rate in experiment 3.
+- **Promotion had to be bought.** Experiment 2 lowered `shadow_threshold` to 0.5; experiment
+  2c and experiment 3's `ready` phase called `TraceDB.try_promote` directly. All three are
+  stated in the JSON (`shadow_threshold_used`, `promotion_forced`) and none of them is the
+  shipped behaviour.
+- One machine (RTX 3080, CUDA, `powersave` governor), one run, one adapter, one spec, one
+  process. Every rate here is a single draw from a distribution with a standard deviation of
+  about 0.11.
+
 ## Reproducing
 
 ```bash
@@ -642,6 +847,11 @@ uv run python scripts/measure_triage_semantic_agreement.py --label your-machine-
 # constrained decoding against a real compiled adapter (needs no PAW_API_KEY --
 # runs offline against an already-cached program)
 uv run python scripts/measure_constrained_decoding_upstream.py --label your-machine-name
+
+# shadow mode: promotion, stalling, audit cost and caller latency, against the recorded
+# 60%-agreement triage adapter and a replay teacher (makes zero compile calls and zero
+# teacher API calls; needs the program already in the SDK cache)
+uv run python scripts/measure_shadow_mode.py --label your-machine-name
 ```
 
 **A note on cost, because we went looking and found nothing to report**: the upstream
