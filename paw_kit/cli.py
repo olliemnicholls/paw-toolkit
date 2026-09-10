@@ -1535,6 +1535,141 @@ def export_dataset_cmd(
         raise typer.Exit(code=1)
 
 
+
+
+def _short_timestamp(value: Optional[str]) -> str:
+    """Trim an ISO timestamp to seconds for the report table, or em-dash if absent."""
+    if not value:
+        return "-"
+    return str(value)[:19].replace("T", " ")
+
+
+def _format_agreement(agreement: dict) -> str:
+    """`0.85 (17/20)` or `-` when nothing has been compared yet."""
+    if agreement.get("rate") is None:
+        return "-"
+    return f"{agreement['rate']:.2f} ({agreement['agree']}/{agreement['samples']})"
+
+
+def _render_report_table(reports: List[dict]) -> Table:
+    """Build the one-row-per-task report table. Factored out so it is unit-testable."""
+    table = Table(title="paw-kit task report")
+    table.add_column("Task", style="dim", no_wrap=True)
+    table.add_column("State")
+    table.add_column("Calls", justify="right")
+    table.add_column("Agreement")
+    table.add_column("Fail-open", justify="right")
+    table.add_column("Promoted")
+    table.add_column("Demoted")
+
+    state_styles = {"ready": "green", "shadow": "yellow", "failed": "red", "compiling": "cyan"}
+    for report in reports:
+        agreement = report.get("agreement") or {}
+        style = state_styles.get(report.get("status", ""), "white")
+        window = agreement.get("window") or 0
+        phase = agreement.get("phase")
+        agreement_cell = _format_agreement(agreement)
+        if phase and window:
+            agreement_cell = f"{agreement_cell} {phase}/{window}"
+        table.add_row(
+            _e(str(report.get("task_id", ""))[:12] + "..."),
+            f"[{style}]{_e(report.get('status', 'tracing'))}[/{style}]",
+            str(report.get("call_count", 0)),
+            _e(agreement_cell),
+            str(report.get("fail_open_count", 0)),
+            _e(_short_timestamp(report.get("promoted_at"))),
+            _e(_short_timestamp(report.get("demoted_at"))),
+        )
+    return table
+
+
+@app.command(name="report")
+def report_cmd(
+    db_path: Path = typer.Option(Path("./.paw/traces.db"), "--db", help="Path to SQLite trace database"),
+    task: Optional[str] = typer.Option(None, "--task", help="Show only this task_id"),
+    limit: int = typer.Option(5, "--disagreements", "-n", help="Disagreements to show per task"),
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable JSON instead of a table"),
+) -> None:
+    """Report @compile_on_hit task state, shadow-mode agreement and recent disagreements.
+
+    NOTE: this command OPENS the trace database with the library's own TraceDB, which
+    migrates a pre-v2 file to the current schema in place. It therefore *writes*. That
+    is deliberate: the alternative is a hand-rolled read-only connection duplicating
+    schema knowledge that would rot.
+    """
+    import sqlite3
+
+    from paw_kit.jit.db import TraceDB
+
+    if not db_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Trace database '{_e(db_path)}' does not exist.")
+        raise typer.Exit(code=1)
+
+    db = None
+    try:
+        db = TraceDB(db_path=str(db_path))
+        task_ids = [task] if task else db.list_task_ids()
+        reports = [db.get_task_report(task_id) for task_id in task_ids]
+        for report in reports:
+            report["last_disagreements"] = db.get_recent_disagreements(report["task_id"], limit)
+    except sqlite3.OperationalError as exc:
+        # A read-only filesystem or a locked database: the schema migration above (and
+        # its PRAGMA user_version write) cannot run.
+        console.print(
+            f"[bold red]Error reading trace database:[/bold red] {_e(exc)}\n"
+            "[dim]`paw-kit report` opens the database for writing, because opening it "
+            "migrates it to the current schema.[/dim]"
+        )
+        raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"[bold red]Error reading trace database:[/bold red] {_e(exc)}")
+        raise typer.Exit(code=1)
+    finally:
+        if db is not None:
+            db.close()
+
+    if json_out:
+        typer.echo(json.dumps({"db": str(db_path), "tasks": reports}, indent=2, default=str))
+        return
+
+    if not reports:
+        console.print(f"[yellow]No tasks recorded in {_e(db_path)}.[/yellow]")
+        return
+
+    console.print(_render_report_table(reports))
+
+    for report in reports:
+        disagreements = report.get("last_disagreements") or []
+        if not disagreements:
+            continue
+        lines = []
+        for entry in disagreements:
+            verdict = entry.get("verdict")
+            detail = f" ({entry.get('error_type')})" if entry.get("error_type") else ""
+            lines.append(
+                f"[bold]{_e(verdict)}{_e(detail)}[/bold] [dim]{_e(entry.get('phase'))} "
+                f"{_e(_short_timestamp(entry.get('timestamp')))}[/dim]\n"
+                f"  in:      {_e(_truncate(entry.get('input_payload')))}\n"
+                f"  teacher: {_e(_truncate(entry.get('teacher_output')))}\n"
+                f"  adapter: {_e(_truncate(entry.get('adapter_output')))}"
+            )
+        console.print(
+            Panel(
+                "\n\n".join(lines),
+                title=f"Last disagreements: {_e(str(report['task_id'])[:12])}...",
+                border_style="yellow",
+            )
+        )
+
+
+def _truncate(value: Optional[str], length: int = 120) -> str:
+    """Clip persisted (possibly redacted) text for display."""
+    if value is None:
+        return "-"
+    text = str(value)
+    return text if len(text) <= length else text[:length] + "..."
+
+
 def inspect_cli() -> None:
     """Direct entrypoint for paw-inspect command."""
     typer.run(inspect)
