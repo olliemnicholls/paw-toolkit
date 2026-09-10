@@ -299,6 +299,26 @@ backend (the default) it recompiles freely, but that is **not** harmless either:
 `paw-test check` therefore refuses to recompile any adapter that does not identify itself
 as a mock manifest, so a real compiled adapter cannot be destroyed by a stray run.
 
+**`paw-test compare A.paw B.paw suite.yaml`** runs every case in a suite through two
+compiled adapters and diffs the results per case -- differences first, then a one-line
+summary (`--json out.json` for the full report). This is not a nice-to-have: the
+project's own real A/B comparison between the fast and finetune compilers
+(`measurements/README.md`, "Finetune compiler") was decided by exactly this diff --
+132 of 134 outputs were byte-identical, and the two that weren't were adversarial
+probes -- not by the aggregate pass-rate percentages, which turned out to sit inside the
+judge's own measurement noise (next paragraph). `--backend real` is read-only here too:
+`compare` never calls `compile()`.
+
+**`paw-test judge report.json --spec "..."`** scores a `compare`/`check` report's
+outputs with an independent LLM judge and persists a per-case verdict + reason, keyed by
+a stable hash of (input, output) so two runs can be diffed later
+(`paw-test judge --diff old.json new.json`). This exists because the judge itself is
+noisy: at the API's default sampling temperature, re-judging byte-identical
+input/output pairs flipped the YES/NO verdict **4.5% of the time (6/134)**, run to run.
+`anthropic_judge` (the shipped reference judge) therefore pins `temperature=0.0` --
+that alone does not guarantee bit-identical judging, but it is the cheapest available
+fix, and `--diff` is how you check whether it held for your own prompt and judge model.
+
 ---
 
 ## Serve over HTTP
@@ -323,6 +343,8 @@ uv run paw-kit export dataset --db ./.paw/traces.db --out traces.jsonl
 ```
 paw-kit demo [--scenario pii]         mock-backend walkthroughs
 paw-test check suite.yaml             run a suite (--backend real runs the upstream SDK, read-only)
+paw-test compare A.paw B.paw suite.yaml   diff two adapters' outputs, per case
+paw-test judge report.json --spec ".."    score a compare/check report with an LLM judge
 paw-inspect adapter.paw               show an adapter manifest
 paw-kit history adapter.paw           show every past compile of an adapter, oldest first
 paw-clean [--dry-run]                 remove cached adapters and trace DB

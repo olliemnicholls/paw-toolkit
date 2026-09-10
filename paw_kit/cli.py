@@ -8,7 +8,7 @@ import re
 import sys
 import tempfile
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -21,6 +21,14 @@ from paw_kit.pathsafety import ensure_contained
 from paw_kit.serve.server import backend_label
 from paw_kit.speclint import Finding, lint_spec
 from paw_kit.test.active import run_active_learning_loop
+from paw_kit.test.compare import CompareReport, compare_adapters, read_adapter_manifest
+from paw_kit.test.judge import (
+    JudgeInputRow,
+    JudgeReport,
+    anthropic_judge,
+    diff_verdicts,
+    judge_outputs,
+)
 from paw_kit.test.runner import TestRunner
 from paw_kit.test.suite import load_suite
 
@@ -355,6 +363,16 @@ def demo_cmd(
         raise typer.Exit(code=1)
 
 
+def _write_json_report(json_out: Optional[Path], data: dict) -> None:
+    """Shared `--json PATH` writer for `check`/`compare`: a plain `json.dumps`, not
+    routed through Rich -- machine-readable output must not be subject to Rich's
+    markup parsing or terminal-width line wrapping."""
+    if json_out is None:
+        return
+    json_out.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    console.print(f"[dim]Wrote JSON report to {_e(json_out)}[/dim]")
+
+
 @test_app.command(name="check")
 @app.command(name="check")
 def check(
@@ -362,6 +380,9 @@ def check(
     backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
     auto_recompile: Optional[bool] = typer.Option(
         None, "--auto-recompile/--no-auto-recompile", help="Enable active learning (overrides suite.yaml if set)"
+    ),
+    json_out: Optional[Path] = typer.Option(
+        None, "--json", help="Write the run's TestRunReport as JSON to this path (input for `paw-test judge`)"
     ),
 ) -> None:
     """Run test suite assertions and active-learning self-healing loop on a .paw adapter."""
@@ -480,6 +501,7 @@ def check(
             f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
             f"({report.passed_cases}/{report.total_cases}) [dim](backend: {_e(actual_backend)})[/dim]"
         )
+        _write_json_report(json_out, report.model_dump())
         if not report.is_success:
             raise typer.Exit(code=1)
         raise typer.Exit(code=0)
@@ -510,6 +532,12 @@ def check(
         if not rep.is_success and i < len(al_report.iteration_reports):
             console.print("  [cyan][ACTION][/cyan] Recompiling adapter with augmented edge-case pairs...")
 
+    # PAW-CLI-09: `--json` always writes the *last* iteration's plain `TestRunReport`
+    # (not the ActiveLearningReport wrapper), whichever code path got here -- so a
+    # consumer like `paw-test judge` sees the same {task_name, results: [...]} shape
+    # regardless of whether auto-recompile ran.
+    _write_json_report(json_out, al_report.iteration_reports[-1].model_dump())
+
     if al_report.is_success:
         console.print(f"\n[bold green][SUCCESS][/bold green] All assertions passed! (Iterations: {al_report.iterations_run})")
         if al_report.recompiled:
@@ -519,6 +547,262 @@ def check(
         console.print(f"\n[bold red][FAIL][/bold red] Assertions failed after {al_report.iterations_run} iteration(s).")
         raise typer.Exit(code=1)
 
+
+@test_app.command(name="compare")
+def compare_cmd(
+    adapter_a: Path = typer.Argument(..., help="First compiled .paw adapter"),
+    adapter_b: Path = typer.Argument(..., help="Second compiled .paw adapter"),
+    suite_path: Path = typer.Argument(..., help="Path to declarative suite.yaml specification"),
+    backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
+    fuzz: bool = typer.Option(
+        False,
+        "--fuzz/--no-fuzz",
+        help="Also run the suite's fuzz cases (not just standard_cases) through both adapters",
+    ),
+    json_out: Optional[Path] = typer.Option(
+        None, "--json", help="Write the full CompareReport as JSON to this path"
+    ),
+) -> None:
+    """Run every suite case through two compiled adapters and diff the results, per case.
+
+    Read-only against both adapters: `--backend real` never compiles. A per-case diff is
+    the point -- this is the technique that actually decided whether `paw-ft-bs48` was a
+    different compile from `paw-4b-qwen3-0.6b` (132/134 byte-identical outputs, see
+    `measurements/README.md`'s "Finetune compiler" section), where the aggregate pass-rate
+    delta alone sat inside the LLM judge's own measured run-to-run noise.
+    """
+    for label, adapter_path_arg in (("A", adapter_a), ("B", adapter_b)):
+        if not adapter_path_arg.exists():
+            console.print(f"[bold red]Error:[/bold red] Adapter {_e(label)} '{_e(adapter_path_arg)}' does not exist.")
+            raise typer.Exit(code=1)
+    if not suite_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Suite file '{_e(suite_path)}' does not exist.")
+        raise typer.Exit(code=1)
+
+    try:
+        suite = load_suite(str(suite_path))
+    except Exception as exc:
+        console.print(f"[bold red]Error parsing suite:[/bold red] {_e(exc)}")
+        raise typer.Exit(code=1)
+
+    for label, adapter_path_arg in (("A", adapter_a), ("B", adapter_b)):
+        if not read_adapter_manifest(str(adapter_path_arg)):
+            console.print(
+                f"[bold red]Error:[/bold red] Could not read a manifest from adapter {_e(label)} "
+                f"'{_e(adapter_path_arg)}' -- not JSON, or not the expected shape. Refusing to compare."
+            )
+            raise typer.Exit(code=1)
+
+    backend = _resolve_cli_backend(backend_type)
+    report: CompareReport = compare_adapters(
+        str(adapter_a), str(adapter_b), suite, backend, include_fuzz=fuzz
+    )
+
+    differing = report.differing_rows
+    if differing:
+        console.print(f"[bold]Differences ({_e(len(differing))}/{_e(report.total_cases)}):[/bold]\n")
+        for row in differing:
+            console.print(f"  [bold]Input:[/bold] {_e(row.input[:80])}")
+            console.print(f"    A -> {_e(row.output_a[:80])}")
+            console.print(f"    B -> {_e(row.output_b[:80])}")
+            if row.pass_a != row.pass_b:
+                console.print(f"    [yellow]pass differs:[/yellow] A={_e(row.pass_a)} B={_e(row.pass_b)}")
+    else:
+        console.print("[bold green]No differences[/bold green] -- identical output and pass status on every case.")
+
+    console.print(
+        f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output, "
+        f"A pass {_e(report.a_pass_count)}/{_e(report.total_cases)}, "
+        f"B pass {_e(report.b_pass_count)}/{_e(report.total_cases)}, "
+        f"only-A-pass {_e(report.only_a_pass_count)}, only-B-pass {_e(report.only_b_pass_count)}"
+    )
+
+    _write_json_report(json_out, report.model_dump())
+    raise typer.Exit(code=0)
+
+
+@test_app.command(name="judge")
+def judge_cmd(
+    report: Optional[Path] = typer.Argument(
+        None, help="A `compare --json` or `check --json` report to judge (omit when using --diff)"
+    ),
+    spec: Optional[str] = typer.Option(None, "--spec", help="Task spec to show the judge"),
+    suite_path: Optional[Path] = typer.Option(
+        None, "--suite", help="suite.yaml to read the spec from, instead of --spec"
+    ),
+    judge_name: str = typer.Option(
+        "anthropic:claude-haiku-4-5",
+        "--judge",
+        help="provider:model for the judge, e.g. anthropic:claude-haiku-4-5",
+    ),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write verdicts JSON to this path"),
+    diff: Optional[Tuple[Path, Path]] = typer.Option(
+        None, "--diff", help="Diff two verdicts JSON files (OLD NEW) instead of judging a report"
+    ),
+) -> None:
+    """Score a `compare`/`check` report's outputs with an LLM judge, or diff two prior
+    verdict runs to check reproducibility.
+
+    Temperature is pinned to 0 (see `paw_kit.test.judge.anthropic_judge`): a
+    default-temperature judge call flipped its YES/NO verdict on byte-identical
+    input/output 4.5% of the time (6/134), measured in `measurements/README.md`'s
+    "Finetune compiler" section. `--diff` is how to check whether that is still true for a
+    given judge and prompt.
+    """
+    if diff is not None:
+        old_path, new_path = diff
+        for diff_path in (old_path, new_path):
+            if not diff_path.exists():
+                console.print(f"[bold red]Error:[/bold red] Verdicts file '{_e(diff_path)}' does not exist.")
+                raise typer.Exit(code=1)
+        try:
+            old_report = JudgeReport.model_validate_json(old_path.read_text(encoding="utf-8"))
+            new_report = JudgeReport.model_validate_json(new_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            console.print(f"[bold red]Error reading verdicts:[/bold red] {_e(exc)}")
+            raise typer.Exit(code=1)
+
+        diff_report = diff_verdicts(old_report, new_report)
+        if diff_report.flips:
+            console.print(
+                f"[bold]Flipped verdicts ({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)}):[/bold]\n"
+            )
+            for flip in diff_report.flips:
+                console.print(f"  [bold]Input:[/bold] {_e(flip.input[:80])}")
+                console.print(f"    Output: {_e(flip.output[:80])}")
+                console.print(
+                    f"    {_e(old_report.judge_id)}: {_e(flip.old_verdict)} ({_e(flip.old_reason)})  ->  "
+                    f"{_e(new_report.judge_id)}: {_e(flip.new_verdict)} ({_e(flip.new_reason)})"
+                )
+        else:
+            console.print("[bold green]No flips[/bold green] -- every comparable verdict matched.")
+        console.print(
+            f"\n[bold]Flip rate:[/bold] {_e(round(diff_report.flip_rate, 1))}% "
+            f"({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)})"
+        )
+        raise typer.Exit(code=0)
+
+    if report is None:
+        console.print("[bold red]Error:[/bold red] REPORT is required unless --diff is given.")
+        raise typer.Exit(code=1)
+    if not report.exists():
+        console.print(f"[bold red]Error:[/bold red] Report file '{_e(report)}' does not exist.")
+        raise typer.Exit(code=1)
+
+    resolved_spec = spec
+    if resolved_spec is None and suite_path is not None:
+        if not suite_path.exists():
+            console.print(f"[bold red]Error:[/bold red] Suite file '{_e(suite_path)}' does not exist.")
+            raise typer.Exit(code=1)
+        try:
+            resolved_spec = load_suite(str(suite_path)).spec
+        except Exception as exc:
+            console.print(f"[bold red]Error parsing suite:[/bold red] {_e(exc)}")
+            raise typer.Exit(code=1)
+    if resolved_spec is None:
+        console.print("[bold red]Error:[/bold red] --spec or --suite is required to judge a report.")
+        raise typer.Exit(code=1)
+
+    try:
+        report_data = json.loads(report.read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"[bold red]Error reading report:[/bold red] {_e(exc)}")
+        raise typer.Exit(code=1)
+
+    provider, _sep, model = judge_name.partition(":")
+    model = model or "claude-haiku-4-5"
+    if provider != "anthropic":
+        console.print(
+            f"[bold red]Error:[/bold red] Unknown judge provider {_e(provider)!r}; only 'anthropic' is built in."
+        )
+        raise typer.Exit(code=2)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        console.print(
+            "[bold red]Error:[/bold red] No judge is configured: ANTHROPIC_API_KEY is not set. "
+            "Set it, or pass a different --judge. Refusing to silently skip judging."
+        )
+        raise typer.Exit(code=2)
+    try:
+        judge_fn = anthropic_judge(model=model)
+    except ImportError as exc:
+        console.print(f"[bold red]Error:[/bold red] {_e(exc)}")
+        raise typer.Exit(code=2)
+
+    temperature_note = (
+        "temperature=0.0 -- default-temperature judging measured a 4.5% (6/134) "
+        "verdict-flip rate on byte-identical input/output (measurements/README.md, "
+        "'Finetune compiler')."
+    )
+    # "/" separators, not ":" -- Rich's emoji shortcode syntax (":word:") can match
+    # across an f-string's literal ": " and a colon-separated id sitting next to it
+    # (verified: "anthropic:x:temperature=0.0:A" prints with a stray emoji in place of
+    # ":x:"). `_e()`/`escape()` only guards Rich's `[markup]` brackets, not this, so the
+    # id itself stays colon-free rather than relying on escaping to catch it.
+    judge_id = f"anthropic/{model}/temperature=0.0"
+
+    if "rows" in report_data and "adapter_a" in report_data:
+        rows_a = [JudgeInputRow(input=r["input"], output=r["output_a"]) for r in report_data["rows"]]
+        rows_b = [JudgeInputRow(input=r["input"], output=r["output_b"]) for r in report_data["rows"]]
+        report_a = judge_outputs(
+            rows_a, judge_fn, spec=resolved_spec, temperature_note=temperature_note, judge_id=f"{judge_id}/A"
+        )
+        report_b = judge_outputs(
+            rows_b, judge_fn, spec=resolved_spec, temperature_note=temperature_note, judge_id=f"{judge_id}/B"
+        )
+
+        diffs = [(va, vb) for va, vb in zip(report_a.verdicts, report_b.verdicts) if va.verdict != vb.verdict]
+        if diffs:
+            console.print(
+                f"[bold]Verdict differs between A and B ({_e(len(diffs))}/{_e(report_a.total_cases)}):[/bold]\n"
+            )
+            for va, vb in diffs:
+                console.print(f"  [bold]Input:[/bold] {_e(va.input[:80])}")
+                console.print(f"    A: {_e(va.output[:80])} -> {_e(va.verdict)} ({_e(va.reason)})")
+                console.print(f"    B: {_e(vb.output[:80])} -> {_e(vb.verdict)} ({_e(vb.reason)})")
+        else:
+            console.print("[bold green]No verdict differences[/bold green] between A and B.")
+        console.print(
+            f"\n[bold]Summary:[/bold] A pass rate {_e(round(report_a.pass_rate, 1))}% "
+            f"({_e(report_a.pass_count)}/{_e(report_a.total_cases)}), "
+            f"B pass rate {_e(round(report_b.pass_rate, 1))}% "
+            f"({_e(report_b.pass_count)}/{_e(report_b.total_cases)})"
+        )
+        if out is not None:
+            out.write_text(
+                json.dumps({"adapter_a": report_a.model_dump(), "adapter_b": report_b.model_dump()}, indent=2),
+                encoding="utf-8",
+            )
+            console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
+        raise typer.Exit(code=0)
+
+    if "results" in report_data:
+        rows = [JudgeInputRow(input=r["input"], output=r["output"]) for r in report_data["results"]]
+        jreport = judge_outputs(
+            rows, judge_fn, spec=resolved_spec, temperature_note=temperature_note, judge_id=judge_id
+        )
+        failing = [v for v in jreport.verdicts if not v.verdict]
+        if failing:
+            console.print(f"[bold]Judge said NO ({_e(len(failing))}/{_e(jreport.total_cases)}):[/bold]\n")
+            for v in failing:
+                console.print(f"  [bold]Input:[/bold] {_e(v.input[:80])}")
+                console.print(f"    Output: {_e(v.output[:80])}")
+                console.print(f"    [red]Reason:[/red] {_e(v.reason)}")
+        else:
+            console.print("[bold green]Judge said YES on every case.[/bold green]")
+        console.print(
+            f"\n[bold]Pass rate:[/bold] {_e(round(jreport.pass_rate, 1))}% "
+            f"({_e(jreport.pass_count)}/{_e(jreport.total_cases)})"
+        )
+        if out is not None:
+            out.write_text(jreport.model_dump_json(indent=2), encoding="utf-8")
+            console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
+        raise typer.Exit(code=0)
+
+    console.print(
+        "[bold red]Error:[/bold red] Unrecognized report shape; expected a `paw-test compare --json` "
+        "or `paw-test check --json` report."
+    )
+    raise typer.Exit(code=1)
 
 # Preferred, stable ordering for manifest fields `inspect()` prints -- covers every
 # key either backend's compile() writes (manifest_version 1 and 2, both

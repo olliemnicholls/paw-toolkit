@@ -1,6 +1,8 @@
 """Semantic-correctness measurement: does the compiled adapter's output actually mean
 the right thing, not just have the right shape?
 
+# This script's judging logic is now also a shipped command: see paw_kit.test.judge / `paw-test judge`.
+
 Every prior real test in this repo (measure_real_backend.py, measure_schema_real_model.py,
 measure_jit_speedup.py) checks *structural* validity: does the output match a regex, parse
 as JSON, hit a length bound. None of them ask an independent judge whether the output is

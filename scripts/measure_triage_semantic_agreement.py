@@ -2,6 +2,8 @@
 follow-up): are the compiled adapter's classifications actually right, or merely fast and
 schema-shaped?
 
+# The A-vs-B diff/judge pattern here is now shipped: see paw_kit.test.compare/judge (`paw-test compare`/`judge`).
+
 `measurements/jit-speedup-3080-*.json` already showed calls 7-20 returning
 medium/technical/3 nine times out of fourteen -- worth checking isn't near-degenerate output
 before quoting the JIT speedup as a like-for-like win. This script checks it directly: compile
