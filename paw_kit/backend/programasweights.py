@@ -26,6 +26,19 @@ Two honest limitations, both inherited from the upstream API as of September 202
    one-time warning). Schema safety for this backend comes from `paw_kit.schema.load`'s
    *post-hoc* Pydantic validation plus fail-open fallback, not from constrained decoding.
 
+Privacy: upstream's `paw.compile`/`paw.compile_async` default to `public=True`, which
+lists the compiled program on programasweights.com with its full spec text readable by
+anyone, no login required. That spec is not just what the caller wrote -- `compile()`
+in this module folds up to `max_spec_examples` traced production input/output pairs into
+it first (see `_render_spec_with_examples`), so a public compile publishes a sample of
+real traffic. `ProgramAsWeightsBackend` therefore defaults to `public=False`, opposite to
+upstream; pass `public=True` explicitly to opt into hub listing. One caveat `public=False`
+cannot fix: upstream's compile cache is keyed on spec text alone and ignores `public` on a
+hit, so recompiling a spec that was previously compiled public returns that same public
+program unchanged, regardless of what `public` is passed this time (`compile()` best-effort
+checks for this via `precheck_compile` and warns; it cannot change the existing program's
+visibility).
+
 Nothing in this module is imported at package import time except the standard library
 and paw-kit's own helpers; `programasweights` is imported lazily so the rest of paw-kit
 keeps working (and its test suite keeps running) without it installed.
@@ -98,6 +111,12 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         max_spec_examples: How many traced/gold examples to fold into the spec text at
             compile time (see module docstring, limitation 1). `0` disables it.
         poll_interval_s / compile_timeout_s: Polling cadence and ceiling for async compiles.
+        public: Whether compiled programs are listed on the public programasweights.com
+            hub with their full spec text (including any folded traced examples) readable
+            by anyone, unauthenticated. Upstream defaults this to `True`; paw-kit defaults
+            it to `False` (see module docstring, Privacy). Pass `True` to opt in.
+        ephemeral: Forwarded to upstream `compile`/`compile_async` as-is; see the SDK's
+            own documentation for its effect.
         sdk: Test seam. Any object exposing `compile`, `compile_async`,
             `get_compile_status` and `function` with the upstream signatures. Defaults to
             the real `programasweights` module, imported lazily on first use.
@@ -114,6 +133,8 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         max_spec_examples: int = 16,
         poll_interval_s: float = 5.0,
         compile_timeout_s: float = 3600.0,
+        public: bool = False,
+        ephemeral: bool = False,
         sdk: Any = None,
     ) -> None:
         self.compiler = compiler
@@ -124,6 +145,8 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         self.max_spec_examples = max_spec_examples
         self.poll_interval_s = poll_interval_s
         self.compile_timeout_s = compile_timeout_s
+        self.public = public
+        self.ephemeral = ephemeral
         self._sdk = sdk
         self._functions: "OrderedDict[str, Callable[..., str]]" = OrderedDict()
         self._lock = threading.Lock()
@@ -162,12 +185,54 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             )
 
         full_spec = _render_spec_with_examples(spec, examples, self.max_spec_examples)
+        folded_count = min(len(examples), self.max_spec_examples)
+
+        if self.public and folded_count > 0:
+            warnings.warn(
+                f"ProgramAsWeightsBackend.compile() is about to publish this spec, "
+                f"including {folded_count} traced example(s), publicly on "
+                "programasweights.com: public=True lists the full spec text, readable "
+                "without login. Pass public=False (the default), or add "
+                "redact_trace=True to the @compile_on_hit decorator, if that traffic "
+                "should stay private.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Upstream's compile cache is keyed on spec text alone and ignores `public` on a
+        # hit: compiling an already-cached spec with public=False can still return an
+        # existing *public* program, unchanged. Best-effort check; never let a precheck
+        # failure block the compile itself.
+        cache_hit: Optional[bool] = None
+        if not self.public:
+            try:
+                precheck = paw.precheck_compile(full_spec, compiler=self.compiler)
+                cache_hit = bool(precheck.get("cached")) if isinstance(precheck, dict) else bool(
+                    getattr(precheck, "cached", False)
+                )
+            except Exception:
+                cache_hit = None
+            if cache_hit:
+                warnings.warn(
+                    "ProgramAsWeights already has a compiled program for this exact spec "
+                    "and will return it instead of compiling a new one. paw-kit cannot "
+                    "change that existing program's public/private visibility -- if it was "
+                    "compiled public, it stays public regardless of public=False here. "
+                    "Rephrase the spec (or its folded examples) if you need a fresh, "
+                    "private compile.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         if self.compiler == FINETUNE_COMPILER:
-            job = paw.compile_async(full_spec, compiler=self.compiler)
+            job = paw.compile_async(
+                full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral
+            )
             program_id, slug, status = self._wait_for_job(paw, job)
         else:
-            program = paw.compile(full_spec, compiler=self.compiler)
+            program = paw.compile(
+                full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral
+            )
             program_id = getattr(program, "id", None) or (program.get("id") if isinstance(program, dict) else None)
             slug = getattr(program, "slug", None) or (program.get("slug") if isinstance(program, dict) else None)
             status = getattr(program, "status", None) or (program.get("status") if isinstance(program, dict) else None)
@@ -182,8 +247,11 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             "compiler": self.compiler,
             "status": status,
             "spec": spec,
-            "examples_folded_into_spec": min(len(examples), self.max_spec_examples),
+            "examples_folded_into_spec": folded_count,
             "examples_count": len(examples),
+            "public": self.public,
+            "ephemeral": self.ephemeral,
+            "cache_hit": cache_hit,
             "compiled_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         atomic_write_text(output_path, json.dumps(manifest, indent=2))

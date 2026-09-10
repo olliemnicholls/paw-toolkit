@@ -1,6 +1,7 @@
 """Tests for ProgramAsWeightsBackend against a fake SDK (no network, no model)."""
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -23,19 +24,36 @@ class _Program:
 class FakeSDK:
     """Duck-types the subset of `programasweights` the backend uses."""
 
-    def __init__(self, statuses: List[str] | None = None):
+    def __init__(
+        self,
+        statuses: List[str] | None = None,
+        precheck_cached: bool = False,
+        precheck_raises: bool = False,
+    ):
         self.compile_calls: List[Dict[str, Any]] = []
         self.function_calls: List[Dict[str, Any]] = []
+        self.precheck_calls: List[Dict[str, Any]] = []
         self._statuses = list(statuses or ["queued", "running", "completed"])
         self._polls = 0
+        self._precheck_cached = precheck_cached
+        self._precheck_raises = precheck_raises
 
     def compile(self, spec: str, compiler: str | None = None, **kw):
-        self.compile_calls.append({"spec": spec, "compiler": compiler})
+        self.compile_calls.append({"spec": spec, "compiler": compiler, **kw})
         return _Program(id="prog-fast", slug="fast-slug")
 
     def compile_async(self, spec: str, compiler: str, **kw):
-        self.compile_calls.append({"spec": spec, "compiler": compiler, "async": True})
+        self.compile_calls.append({"spec": spec, "compiler": compiler, "async": True, **kw})
         return {"job_id": "job-1", "status": "queued", "program_id": None}
+
+    def precheck_compile(self, spec: str, compiler: str | None = None):
+        self.precheck_calls.append({"spec": spec, "compiler": compiler})
+        if self._precheck_raises:
+            raise RuntimeError("precheck unavailable")
+        return {
+            "cached": self._precheck_cached,
+            "program_id": "prog-cached" if self._precheck_cached else None,
+        }
 
     def get_compile_status(self, job_id: str):
         status = self._statuses[min(self._polls, len(self._statuses) - 1)]
@@ -184,3 +202,102 @@ def test_render_spec_with_examples() -> None:
     assert _render_spec_with_examples("S", [{"input": "a", "output": "b"}], 0) == "S"
     rendered = _render_spec_with_examples("S", [{"input": "a", "output": "b"}, {"bad": 1}], 5)
     assert rendered.startswith("S\n\nExamples of correct behaviour:\nInput: a\nOutput: b")
+
+
+# ---------------------------------------------------------------- public / ephemeral
+
+
+def test_compile_forwards_public_false_and_ephemeral_false_by_default(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    backend.compile("spec", [], str(tmp_path / "a.paw"))
+    sent = sdk.compile_calls[0]
+    assert sent["public"] is False
+    assert sent["ephemeral"] is False
+
+
+def test_compile_forwards_public_true(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=True, ephemeral=True)
+    backend.compile("spec", [], str(tmp_path / "a.paw"))
+    sent = sdk.compile_calls[0]
+    assert sent["public"] is True
+    assert sent["ephemeral"] is True
+    # public=True skips the cache-hit precheck entirely.
+    assert sdk.precheck_calls == []
+
+
+def test_finetune_compile_forwards_public_and_ephemeral(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK(statuses=["completed"])
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0, public=True, ephemeral=True
+    )
+    backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    sent = sdk.compile_calls[0]
+    assert sent["public"] is True
+    assert sent["ephemeral"] is True
+
+
+def test_public_compile_warns_when_examples_folded(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=True, max_spec_examples=5)
+    examples = [{"input": "a", "output": "b"}]
+    with pytest.warns(UserWarning, match="publicly"):
+        backend.compile("Classify.", examples, str(tmp_path / "a.paw"))
+
+
+def test_private_compile_does_not_warn(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False, max_spec_examples=5)
+    examples = [{"input": "a", "output": "b"}]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        backend.compile("Classify.", examples, str(tmp_path / "a.paw"))
+
+
+def test_public_compile_with_no_examples_folded_does_not_warn(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=True, max_spec_examples=0)
+    examples = [{"input": "a", "output": "b"}]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        backend.compile("Classify.", examples, str(tmp_path / "a.paw"))
+
+
+def test_manifest_records_public_and_ephemeral(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=True, ephemeral=True)
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["public"] is True
+    assert manifest["ephemeral"] is True
+
+
+# ---------------------------------------------------------------- cache-hit precheck
+
+
+def test_cache_hit_warns_when_public_false(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK(precheck_cached=True)
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    with pytest.warns(UserWarning, match="already has a compiled program"):
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+
+
+def test_no_cache_hit_warning_when_not_cached(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK(precheck_cached=False)
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+
+
+def test_precheck_failure_is_swallowed_and_manifest_records_null(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK(precheck_raises=True)
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    out = tmp_path / "a.paw"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["cache_hit"] is None

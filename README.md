@@ -192,6 +192,20 @@ def triage_ticket(body: str) -> Triage:
     return call_your_llm(body)      # traced until threshold, then compiled and replaced
 ```
 
+**Compiles are private by default.** Upstream `paw.compile`/`paw.compile_async` default to
+`public=True`, which lists the compiled program on programasweights.com with its full spec
+text readable by anyone, no login required. `ProgramAsWeightsBackend` passes `public=False`
+unless you opt in. The spec that gets uploaded is not just what you wrote in `spec=` --
+it has up to `max_spec_examples` traced input/output pairs folded into it, so a public
+compile publishes a sample of real production traffic; think about `redact_trace=True`
+on the decorator if you do set `public=True`. Note also that upstream's compile cache is
+keyed on the spec text and ignores `public` on a cache hit, so recompiling a spec that was
+previously compiled public will return that same public program regardless of what you pass
+this time -- `compile()` warns when it detects this via `precheck_compile`, but it can't
+change the existing program's visibility. Versions of paw-kit before this change compiled
+publicly by default; if you compiled anything with an earlier version, check
+programasweights.com for it.
+
 What to expect, from the runs in [`measurements/`](./measurements) (one machine each, one
 run each — indicative, not a benchmark):
 
