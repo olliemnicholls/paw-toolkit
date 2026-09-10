@@ -1,0 +1,1106 @@
+{
+  "adapter_a": {
+    "judge_id": "anthropic/claude-haiku-4-5/temperature=0.0/A",
+    "spec": "Classify a customer support ticket into priority (low, medium, high, or critical), department (billing, technical, sales, or general), and urgency_score (integer 1-5).",
+    "temperature_note": "temperature=0.0 -- default-temperature judging measured a 4.5% (6/134) verdict-flip rate on byte-identical input/output (measurements/README.md, 'Finetune compiler').",
+    "total_cases": 60,
+    "pass_count": 40,
+    "pass_rate": 66.66666666666666,
+    "unparseable_count": 0,
+    "error_count": 0,
+    "verdicts": [
+      {
+        "case_id": "90ce870c7d7b59e38a455cdd1f4855808cfb92ad8fb011bd2d9037395b0db68b",
+        "input": "I was charged twice on my credit card for invoice #INV-9821. Please refund immediately!",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Duplicate charge is billing issue, high priority, urgency score 4 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "2a624fbd3a33823228744e895898d590e8dc5d15a31b344f5aa13aeae50deb5d",
+        "input": "Our production API gateway is throwing 502 Bad Gateway errors across all regions!",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Production API outage across all regions warrants \"critical\" priority, not \"high\"",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "218171f6c5bb2e4df829be14b41b5457911ee721948d1f93b891d0669c139e66",
+        "input": "We are interested in an enterprise annual contract for 250 seats. Who can we talk to?",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Enterprise contract inquiry correctly routed to sales with appropriate medium priority",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f5da65f0ebeda767f96017158b35478f04c11f20ec8c82821ae29802b7fc5b1a",
+        "input": "How do I update my profile picture in the settings page? I can't find the upload button.",
+        "output": "{\"priority\": \"low\", \"department\": \"technical\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Profile picture upload is a minor settings issue, low priority and technical support fit well",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "a4464ff320ec9705385102eb7a49cc8c5ad3ae0b91cebeb55230875cc9b87fa3",
+        "input": "Database replication lag is exceeding 45 minutes on our primary PostgreSQL cluster.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Database replication lag of 45+ minutes is critical infrastructure failure, warrants high/critical priority",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f5c5b75d94fe3c5b9e44a1a32cfaea57a20a47b4186fa3906078140f5becda88",
+        "input": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Should be \"billing\" department for compliance/audit documentation request, not \"general\"",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "b7e3e6b1d984e16c42e26122ef95ffd65d937b0dc9f30dfb27c70d34aff9ed1a",
+        "input": "My password reset email is never arriving in my inbox or spam folder.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Password reset access issue is technical problem; medium priority and urgency_score 3 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "c24ae0a4b635e060b44266133bd7d671d3c091b2d822a66e465293f32986c892",
+        "input": "We need to add 5 more team members to our billing subscription plan.",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Billing department, medium priority for subscription scaling request, reasonable urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "fee8ac14be59f7a329428807ba86e373898c67a1737e4f244fa5978b47c40531",
+        "input": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "App crash on beta OS should be high priority, not medium. Score underweights severity",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "20155a710929c5c24748111d98e631e2905de6d78287a30ae8529740eb31d601",
+        "input": "Thank you for the quick support yesterday, everything is working smoothly now!",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback ticket correctly classified as low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "e5660969666fb4897efff5bfed0d31eb5f915fe45488ba7a498382cb4450f8d4",
+        "input": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "403 error blocking API endpoint since morning warrants high priority, not medium",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f8db4214e40a2886be2ef0813b807cd3ef81b22fc3b65d1bbaef2247a1bf32a2",
+        "input": "Please cancel my subscription and confirm the final invoice amount.",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Subscription cancellation with invoice inquiry is billing-related, medium priority, score 3 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "8216d9a793ef3048b69f46a1591741e33215ea1c7b0975d754308a90664089c4",
+        "input": "Is there a discount for non-profit organizations on the enterprise tier?",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Question about pricing/discounts is sales-related, medium priority, reasonable urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "8e8fe20dad34403be1dfb290a500681cf34405fffe1268dd922728b0b1ba9cc9",
+        "input": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Visual bug affecting usability warrants medium priority, technical department, moderate urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "69f5895a48ec29f14971d0a2adde286b8667304d8e0ec66ba8a75262854fabf9",
+        "input": "Urgent: our webhook deliveries have been failing silently for 3 hours, losing orders.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Should be \"critical\" priority; silent order loss for 3 hours warrants highest severity",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "77bfb5d6aa4cf203040d18eb0c771accab30bafdac1a1bd2ccdfb5ddd0ee82d9",
+        "input": "Just wanted to say the new onboarding flow is much clearer, nice work.",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback correctly classified as low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "d31e0b34bf69001982b7573ad02890820af263dae0cf3baa26cb85bdd3a1fb08",
+        "input": "Requesting a data export of all our account's usage logs for the last 12 months.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Data export request is technical, medium priority, moderate urgency. Classification reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "9466b2998cf99a50e1d9ff1e5b47ca31c7fdb6eeb298cbff4177787a11b55b04",
+        "input": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Authentication failure affecting EU users warrants high priority, not medium",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f7ac2a1323aea959c7c636e231cca84606af65dd5e0abab2984654467ed872c4",
+        "input": "What's the SLA for critical incidents on the enterprise support plan?",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Question asks about SLA policy, not a support ticket needing classification",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "e213751307b18be879bb62063dbfcc6e79e0ef0f98d7188a9cd999dc5a2a1663",
+        "input": "The billing page shows a negative balance that doesn't match our invoice history.",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Billing discrepancy correctly classified as medium priority, billing department, moderate urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "7b432bf2040e3b4932e2aaa1aee31729e6776db42592ceeba79ed3b1cf551442",
+        "input": "Hi, I'm trying to understand how your real-time dashboard integrates with Salesforce. We're evaluating your platform for our sales team and want to know if there's documentation on the CRM sync capabilities. Thanks.",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Sales inquiry about product integration features; medium priority and urgency appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "1b76d5360628a4f95b2a949d9531f02595241e76dda3ac39e4c5c14c3b47d0c8",
+        "input": "I need to dispute a charge from last month. On February 18th I was billed $1,200 for the Professional tier but I downgraded to Starter on February 10th. The system still charged me the full amount. Please review subscription change order #SUB-789456 and issue a credit.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Billing dispute with financial impact warrants high priority, billing department, urgent score",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "ad5a8fcb2aef3b0a12ac9dac4580c3f1f36362719a7e66ce1ae57e349be51da5",
+        "input": "getting an HTTP 502 Bad Gateway error whenever i try to export data to CSV from the Revenue Cohort report. this started happening around 10 AM EST today and ive tried clearing cache/cookies but still broken. workspace ID is analytics-prod-2847. need this fixed ASAP for end of quarter reporting",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Technical issue with system error, time-sensitive business need, high but not life-threatening",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "12dadfdeb20b3afe4c14b29a900e99d3fba664b087706c90f30d3bac8e450180",
+        "input": "We're migrating our analytics stack and need to transfer data and dashboard ownership from our previous admin sarah.kim@acmecorp.com (user ID U-445821) to our new lead james.wright@acmecorp.com. Can you handle this transfer? We also need to know if we can export our custom metric definitions.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Technical issue about data migration and dashboard transfer ownership. Medium priority reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "9c3bb7cd7237a6bdb2ced9cdedd407bb6efd9046e48ae340a56d425297c7ee5a",
+        "input": "Ordered the premium data connector license pack on 3/29 (Order #DCP-991247) for overnight shipping and it still hasn't arrived. Tracking shows it left the warehouse on 3/30 but now says \"delivery exception\" with no update since 4/1. Where is this?",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"technical\"; this is a shipping/order issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "45c2068b010763e5029a892f2466e3dbc5aca768af128886f9d6bd6be768191f",
+        "input": "CRITICAL SECURITY ISSUE - we detected suspicious activity on our account. someone logged in from IP 185.220.101.x on april 2 at 2:33 AM but none of our team was online. they accessed the 'User Permissions' section and modified API key settings. we have NOT confirmed if any keys were exposed. please disable all active API keys immediately (we have 7 total) and help us audit what was accessed. this is urgent.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach with unauthorized access, API key compromise, and immediate action needed justifies critical/technical/5",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "79df129c996431b2193de0405c1075fa6421ead40cad9d999ae808aff2faa17c",
+        "input": "Just wanted to reach out and say the new version has been rock solid for us. The team loves the improved filtering on the Custom Events dashboard. We're planning to expand to your Enterprise tier soon. Great work on this release.",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback with no problems warrants low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "145501a11b5003dfc0f768bcae16a6ebb1416156b2516b0632d6abbd08e96e99",
+        "input": "Hi there, we're being double-billed for our annual contract. Invoice #INV-204156 (dated Jan 3) charged us $8,500 for the year, but then Invoice #INV-204201 (dated Jan 5) charged another $8,500 for what looks like the same renewal period. We only authorized one payment. Can you clarify what's happening and reverse one of these charges?",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Double billing is financial loss requiring urgent resolution; high priority and billing department appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "5e49ba9cf361e4894912973d610d31c5d6080aa69398d54c4253e8de362a9188",
+        "input": "Hi, I noticed someone tried to log into my account from India on April 2nd around 3 AM. I'm in Ohio and definitely wasn't traveling. Should I be worried? My account is username 'david_sz1987' and I haven't changed my password in like 2 years so maybe thats the problem?",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach attempt warrants critical priority, technical department, maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "0bfa7e9236f856a632b85b13c34de282e5fe33db555714d1fa9d183896ae7b69",
+        "input": "Do you guys sell phone chargers in bulk? Looking to outfit a small office with USB-C cables and wall adapters. What's your minimum order quantity and do you offer any corporate discounts?",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Sales inquiry about bulk pricing and corporate discounts. Medium priority and urgency appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "d40209a4468723b4a16b178f845a0f7beed3a74ee9b35a905c049d6ffcf0fa04",
+        "input": "I was charged twice for my order on March 28th - both charges went through as $89.99 for the Anker PowerBank 25000mAh (SKU: ANK-PB25K-BLK). Transaction IDs are TXN-7634921 and TXN-7634922. Please refund one of these immediately.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Duplicate charge is billing issue requiring prompt resolution. High priority and urgency_score 4 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f02a5eb6ff8f849f4954220a3ab1f26a6ae03c80c177923ad9e73bd8cd93095a",
+        "input": "everytime i click on product reviews the page just goes blank??? its been like this for 3 days now. im trying to decide if i should buy the samsung 4k monitor but i cant see what people think about it. using firefox on windows 10. HELP",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Priority should be \"high\" - blocking purchase decision for 3 days warrants higher urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6e541513e678feb88fc746fc1fc24f3e364477b1e174b7ce57eed6a202014aa4",
+        "input": "I can't remember the password to my account and when I try to reset it, the email never shows up in my inbox or spam folder. I've tried using both the email address I signed up with (margaret.chen84@gmail.com) and my backup email. This is my first time buying from you guys and I really need to access my account to track my order.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Account access blocking purchase tracking is high-priority technical issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "160ff0e89d00357da6d243da031cd363ea6d9789a6bf082e2ed54b1f05cf2f39",
+        "input": "Order #OE-556847 was supposed to arrive yesterday (April 9th) with 2-day shipping. Tracking number shows it's been stuck in the distribution center in Memphis since April 8th. The package contains a laptop cooling pad I need for work tomorrow. Can you contact the carrier or upgrade my shipping at no charge?",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" (shipping/order issue), not \"technical\"",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "196948e4a0c52e312c2fb79a2eecde899a99ded3a4d5056bb6c2c2cb5b87dc54",
+        "input": "URGENT SECURITY BREACH: My credit card ending in 4782 was used to make an unauthorized purchase of $247.50 for a graphics card on your site on April 4th at 11:23 PM. I did NOT make this purchase. Order number is OE-889234. My card issuer is disputing the charge but I need this investigated ASAP. Lock my account immediately.",
+        "output": "{\"priority\": \"critical\", \"department\": \"billing\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Unauthorized charge is security/fraud issue; critical priority, billing department, max urgency appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6946b95f72739f9c5691861636f026d70c0a2d77506099ba6cf9fbd6a5c67333",
+        "input": "just wanted to say that the new LED desk lamp (model DL-6500RGB) I ordered last week is absolutely perfect. Works great, arrived early, and the app controls for the color settings are really intuitive. Not many complaints from me!",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback with no problems warrants low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "9ec0f003086d937bec7e26811038183d8754d4d3e053f41423a15b53d2c5af76",
+        "input": "Hi, I ordered the CloudSync USB adapter (part #CS-2847) on April 2nd with expedited shipping and the tracking number hasn't updated since April 3rd. It was supposed to arrive yesterday. What's going on?",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"technical\"; shipping/tracking is billing-related",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "41d9801d4fbf7a303223716d267f8bf1ac87ea03dd423f4d803d10b029033e4b",
+        "input": "ALERT: I found logins to my account from an IP address in Nigeria on April 18 at 2:34 AM. I'm in Toronto and definitely wasn't accessing my account then. This is serious - I store sensitive client files here. What do I do???",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Unauthorized account access with sensitive data exposure warrants critical priority, technical department, maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "0d56e775b624757535b32e1be29abe93ae0e7ddcbb6f974194f44f790063e3ae",
+        "input": "does your cloud storage work with google workspace or just microsoft? trying to figure out if this will fit our workflow",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Customer asking about product compatibility is sales/technical inquiry, medium priority reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "44267a47ea96515add170e53132cce0e6fb3fc4ebab036d709c72650c68848c8",
+        "input": "I was charged $14.99 on April 15th (invoice #INV-847562) for what I thought was a free trial month. your website said the first month was free but my card was still hit. need this reversed immediately.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Billing department correct, high priority justified by financial dispute, urgency_score 4 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f4654c20419c715fc7f518c33709f4e3f3c3b7571d7a78dde26ded9c0b042a54",
+        "input": "whenever i try to upload files larger than 500MB the browser just closes. ive tried firefox and chrome and it keeps happening. getting error code UPLOAD_CRASH_229. this is blocking my work",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Priority should be \"high\" or \"critical\"\u2014work-blocking bug with error code warrants escalation",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6838cd169d738aabaae8d3414f7773432ec25cc05f0d4824b078865bb37787a9",
+        "input": "I changed my email address from sarah.k@oldomain.com to sarah.katherine@newdomain.com on my account three weeks ago but I'm still getting password reset emails sent to the old address. can you fix this?",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Email routing issue is technical, medium priority, 3/5 urgency reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "0f7e2f8081c157c03a1f4e6f6d2b2a54f74e50c29b63e900ebebb040ee2fe1b4",
+        "input": "ORDER #FS-334891 still hasn't shipped and i ordered it on april 8th. your site said 1-2 business days for processing. its been 8 days. need tracking info asap.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"technical\"; shipping/order issue is billing-related",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "51715241b2859f9f46d98918d566fc47ed13b78438bef6ee705858721b8049dd",
+        "input": "Je suis preoccupe - j'ai vu une tentative de connexion a mon compte depuis une adresse IP en Roumanie le 22 avril a 19h45. J'habite en France. Est-ce qu'on a ete hacke? S'il vous plait repondez rapidement, j'ai des donnees financieres sensibles stockees ici.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach concern with financial data at risk justifies critical priority and maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "b3f4a8b698b1a4ab5bca601ebfe48f8cbf3474246350769fda7ae70141bd581f",
+        "input": "Hi there, I'm hoping you can help me out. I've been a subscriber for about 8 months now and I really love the service, but I'm going on a 3-week trip to visit my family and I'd like to pause my account starting May 15th through June 5th. I don't want to cancel entirely because I plan to restart when I get back. I tried looking in my account settings but couldn't find a pause option anywhere. Could someone walk me through how to do this? Thanks so much!",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Department should be \"general\" not \"billing\"; account pause is not billing-related",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f96969d8b65b32c7e688abe2b9e8e89ce0ac32f1babac81716d692f12978aade",
+        "input": "where is order #MK-887734??? ordered the italian pasta collection on april 18 with standard shipping and tracking says it left the warehouse on april 21 but its been sitting in memphis tennessee for 4 days now. i need this by this weekend for my dinner party. PLEASE HELP",
+        "output": "{\"priority\": \"high\", \"department\": \"general\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"general\"; shipping/tracking issue is billing-related",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "c5e9abe7734e02b941e4e1f3cc76f649cd28dc29f5d6505f45eab1623264545d",
+        "input": "I'm writing to report a serious security concern. On April 23rd at approximately 11:47 PM, I received a login alert from an IP address (203.45.189.22) that I do not recognize, originating from Jakarta, Indonesia. I am currently located in Seattle and have never traveled there. I immediately changed my password, but I'm worried about what access this person may have had to my account and payment information. Please advise on what steps I should take next and whether my data has been compromised.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach with payment info at risk justifies critical priority and maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "904198e975749604388f0b0e84f3f51bcc28350629e5b2d3792f78c21d3333ca",
+        "input": "Do you offer gluten-free options? My daughter has celiac disease and I want to make sure before I sign up.",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Department should be \"general\" not \"sales\"; this is a pre-signup question, not sales",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "4bb0898115860ccabb159689b4c0a7d724c77dca812d85043df1848a2cb61046",
+        "input": "I was charged $84.99 on April 20th for my weekly meal plan renewal (Order #MK-556203), but I had already scheduled a skip week from April 20-26. The charge should not have gone through. This is the second time this has happened in the last two months and I'm frustrated. I need a refund processed immediately.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Billing department correct. High priority justified by repeated issue and refund demand. Score 4 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6fa2f4553103b75a9bf43cce9d3b91d20bbbfeefd03f5b170411951daa6f916a",
+        "input": "getting an error code E4012 whenever i try to load my meal preferences page. ive cleared my browser cache, tried incognito mode, and even switched to a different browser but still getting the same error. its been happening since yesterday morning and i cant update my allergies or dietary restrictions for next week's meals",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Technical error blocking meal/allergy updates; high priority and urgency_score 4 justified",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "fcf7886875b78831248dcdef39601dd7f177e74a6ecf08bbdca296de38321973",
+        "input": "Hi, I need to update the name on my account. I recently got married and changed my legal name from Jennifer Walsh to Jennifer Chen-Walsh, and I'd like all future correspondence and meal prep labels to reflect my new name. My account email is jen.walsh.meals@gmail.com and my customer ID is CUS-445821. Could you update this for me? Thanks!",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Account update request is non-urgent, doesn't fit billing/technical/sales, medium priority reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "cb44da1ef243bbd7afd6ae920831c1d6c78064fdece12c77438611742354aeff",
+        "input": "Hola, tengo un problema con mi env\u00edo. El pedido n\u00famero MK-778945 fue despachado el 19 de abril pero el rastreador dice que est\u00e1 perdido en tr\u00e1nsito. Orden\u00e9 las comidas mediterr\u00e1neas y estaban programadas para llegar el 21 de abril. Ya pasaron dos d\u00edas y no ha llegado nada. \u00bfPueden ayudarme a localizar el paquete o reenviar uno nuevo? Gracias.",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Package lost in transit for perishable food warrants high priority, not medium",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "d43f131c026133857449d4cebc3b01ef91c08ca383a6c4bb2a1e3d8eb0ae7231",
+        "input": "Hi, I'm getting a 503 Service Unavailable error whenever I try to deploy my Node.js application to the us-east-2 region. This started happening around 2 PM today and my production environment is completely down. The error logs just show \"Gateway timeout\" with no additional details. Can someone look into this immediately?",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Production environment completely down warrants critical priority, not high",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "70ebfac1aea693971edf43fa141be0f91911d36e0235fc7b1baed274a4e71a96",
+        "input": "I need to change the billing contact on my account from my old company email to my personal email. My account ID is ACC-294857 and the old email is billing@techcorp.net. Can you update this for me?",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Billing department correct, medium priority reasonable for account update request, score 3 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "02959723f2aa8a94c0f3c03182c3b4d4c89ce78242af8db4093bb7aac0874299",
+        "input": "Where's my order? Ordered the networking cables on March 15th with 2-day shipping and it never showed up. Tracking #UPS8847291L just says \"delivery attempted\" but nobody came to my door.",
+        "output": "{\"priority\": \"high\", \"department\": \"general\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"general\"; order/shipping issues are billing-related",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "20a9d278937c8e681bf41730bf0ecb51a1d8b2239b46a9d36a1d6476c73bc8e6",
+        "input": "URGENT - I just noticed unauthorized API calls being made on my account this morning. Someone generated new credentials and made 47 requests to my database endpoints between 6-7 AM EST. My API key is still secure but the account shows login activity from 185.220.101.45 which is definitely not me. Please disable all access immediately and help me investigate.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach with unauthorized access, credential compromise, and immediate action needed justifies critical priority and maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "c5ac6ea93a6301e2f1c394f89ad6f4a6af69cb874353de22a0954ad2d593f4e7",
+        "input": "Quick question - do you support webhook integrations with Zapier? I'm trying to set up automated notifications when my deployments complete but I'm not sure if your platform is compatible.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Technical integration question about webhook/Zapier compatibility. Medium priority and urgency appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "a563178aac43a96482bc85b5bad27ddead51dc3119e0a6b50094f8ccdefda69e",
+        "input": "I was double-charged for my Developer Pro plan renewal on April 24th. Both charges of $299/month went through on the same day (invoice #INV-2847261 and INV-2847262). I only have one active subscription so I need one of these reversed ASAP.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Double-charge is billing issue requiring urgent resolution. High priority and urgency_score 4 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "a12441b960009a288a100cd443a25bf7e5dd9d676e67faa2538dd74bdf3f0dcf",
+        "input": "estoy recibiendo un error de 'conexion perdida' cuando intento conectarme al servidor SFTP. hace 2 dias que esto ocurre. intente cambiar mi contrase\u00f1a pero sigue el mismo problema. mi nombre de usuario es dev_carlos_23 y la conexion falla cuando llego al paso de autenticacion. necesito acceso urgente para subir archivos del cliente.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "SFTP authentication failure blocking client work justifies high priority, technical department, urgency 4",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "19be819f86a5b85ccf739e01a2a80db5dcd58199162cbc40e7e78a0268fbfa3f",
+        "input": "my account got locked out after i typed the wrong password to many times. i havent been able to log in since yesterday afternoon around 4 PM. ive tried clicking the forgot password link but the reset email isnt showing up in my inbox or spam folder. can you unlock it so i can get back in? my email is james.morrison@consultancy.co",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Account lockout blocking access is high-priority technical issue requiring urgent resolution",
+        "rule_passed": true,
+        "judge_error": null
+      }
+    ]
+  },
+  "adapter_b": {
+    "judge_id": "anthropic/claude-haiku-4-5/temperature=0.0/B",
+    "spec": "Classify a customer support ticket into priority (low, medium, high, or critical), department (billing, technical, sales, or general), and urgency_score (integer 1-5).",
+    "temperature_note": "temperature=0.0 -- default-temperature judging measured a 4.5% (6/134) verdict-flip rate on byte-identical input/output (measurements/README.md, 'Finetune compiler').",
+    "total_cases": 60,
+    "pass_count": 46,
+    "pass_rate": 76.66666666666667,
+    "unparseable_count": 0,
+    "error_count": 0,
+    "verdicts": [
+      {
+        "case_id": "90ce870c7d7b59e38a455cdd1f4855808cfb92ad8fb011bd2d9037395b0db68b",
+        "input": "I was charged twice on my credit card for invoice #INV-9821. Please refund immediately!",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Duplicate charge is billing issue, high priority, urgency score 4 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "2727ccfa2e792e4832eb6366cd4e80d432190c8d1031cf6b5a77a175d7be55ba",
+        "input": "Our production API gateway is throwing 502 Bad Gateway errors across all regions!",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Production API outage across all regions clearly warrants critical priority, technical department, maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "218171f6c5bb2e4df829be14b41b5457911ee721948d1f93b891d0669c139e66",
+        "input": "We are interested in an enterprise annual contract for 250 seats. Who can we talk to?",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Enterprise contract inquiry correctly routed to sales with appropriate medium priority",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f5da65f0ebeda767f96017158b35478f04c11f20ec8c82821ae29802b7fc5b1a",
+        "input": "How do I update my profile picture in the settings page? I can't find the upload button.",
+        "output": "{\"priority\": \"low\", \"department\": \"technical\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Profile picture upload is a minor settings issue, low priority and technical support fit well",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "0c9a5020f56d39bce96ddd3b98255498a3300616408d23e85a8b132e6eeaca2a",
+        "input": "Database replication lag is exceeding 45 minutes on our primary PostgreSQL cluster.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Database replication lag is a serious technical issue warranting high priority and urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f5c5b75d94fe3c5b9e44a1a32cfaea57a20a47b4186fa3906078140f5becda88",
+        "input": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Should be \"billing\" department for compliance/audit documentation request, not \"general\"",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "b7e3e6b1d984e16c42e26122ef95ffd65d937b0dc9f30dfb27c70d34aff9ed1a",
+        "input": "My password reset email is never arriving in my inbox or spam folder.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Password reset access issue is technical problem; medium priority and urgency_score 3 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "c24ae0a4b635e060b44266133bd7d671d3c091b2d822a66e465293f32986c892",
+        "input": "We need to add 5 more team members to our billing subscription plan.",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Billing department, medium priority for subscription scaling request, reasonable urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "cd970aed9fbed964a92e45b24d31b71fc294dc3bc62861af7fdf17d50ba2e04e",
+        "input": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "App crash is technical issue; high priority and urgency_score 4 are reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "20155a710929c5c24748111d98e631e2905de6d78287a30ae8529740eb31d601",
+        "input": "Thank you for the quick support yesterday, everything is working smoothly now!",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback ticket correctly classified as low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "e5660969666fb4897efff5bfed0d31eb5f915fe45488ba7a498382cb4450f8d4",
+        "input": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "403 error blocking API endpoint since morning warrants high priority, not medium",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f8db4214e40a2886be2ef0813b807cd3ef81b22fc3b65d1bbaef2247a1bf32a2",
+        "input": "Please cancel my subscription and confirm the final invoice amount.",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Subscription cancellation with invoice inquiry is billing-related, medium priority, score 3 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "3f4d488502b90045513be2c30a6abe41f8ccaf2beb46d65caa3227eb41f8ae65",
+        "input": "Is there a discount for non-profit organizations on the enterprise tier?",
+        "output": "{\"priority\": \"low\", \"department\": \"sales\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Question about pricing/discounts is sales-related, low priority, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "8e8fe20dad34403be1dfb290a500681cf34405fffe1268dd922728b0b1ba9cc9",
+        "input": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Visual bug affecting usability warrants medium priority, technical department, moderate urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "718cede78a33e6442416e7be7da736ae400cee8ee989545a89b5fed67a3f8cb1",
+        "input": "Urgent: our webhook deliveries have been failing silently for 3 hours, losing orders.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Silent webhook failures losing orders for 3 hours clearly warrants critical priority, technical department, maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "77bfb5d6aa4cf203040d18eb0c771accab30bafdac1a1bd2ccdfb5ddd0ee82d9",
+        "input": "Just wanted to say the new onboarding flow is much clearer, nice work.",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback correctly classified as low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "0641f369d79ae98656ff6cf451fa139bdf2a58036fa4db61247f48ee4a4fc9c0",
+        "input": "Requesting a data export of all our account's usage logs for the last 12 months.",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Data export request is administrative, medium priority, general department appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "9466b2998cf99a50e1d9ff1e5b47ca31c7fdb6eeb298cbff4177787a11b55b04",
+        "input": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Authentication failure affecting EU users warrants high priority, not medium",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "a5828a5868998a84c09aa92c25b9784fd19edc8f9b7bae2acd639a412adf2077",
+        "input": "What's the SLA for critical incidents on the enterprise support plan?",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Question asks about SLA policy, not a support ticket needing classification",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "e213751307b18be879bb62063dbfcc6e79e0ef0f98d7188a9cd999dc5a2a1663",
+        "input": "The billing page shows a negative balance that doesn't match our invoice history.",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Billing discrepancy correctly classified as medium priority, billing department, moderate urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "7b432bf2040e3b4932e2aaa1aee31729e6776db42592ceeba79ed3b1cf551442",
+        "input": "Hi, I'm trying to understand how your real-time dashboard integrates with Salesforce. We're evaluating your platform for our sales team and want to know if there's documentation on the CRM sync capabilities. Thanks.",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Sales inquiry about product integration features; medium priority and urgency appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "1b76d5360628a4f95b2a949d9531f02595241e76dda3ac39e4c5c14c3b47d0c8",
+        "input": "I need to dispute a charge from last month. On February 18th I was billed $1,200 for the Professional tier but I downgraded to Starter on February 10th. The system still charged me the full amount. Please review subscription change order #SUB-789456 and issue a credit.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Billing dispute with financial impact warrants high priority and urgency score 4",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "ad5a8fcb2aef3b0a12ac9dac4580c3f1f36362719a7e66ce1ae57e349be51da5",
+        "input": "getting an HTTP 502 Bad Gateway error whenever i try to export data to CSV from the Revenue Cohort report. this started happening around 10 AM EST today and ive tried clearing cache/cookies but still broken. workspace ID is analytics-prod-2847. need this fixed ASAP for end of quarter reporting",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Technical issue with system error, time-sensitive business need, high but not life-threatening",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f7ced6889b5fae9f3a0f1a4c7867f5e47af1afe5ed16437fec4fd5a8170278f7",
+        "input": "We're migrating our analytics stack and need to transfer data and dashboard ownership from our previous admin sarah.kim@acmecorp.com (user ID U-445821) to our new lead james.wright@acmecorp.com. Can you handle this transfer? We also need to know if we can export our custom metric definitions.",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Technical account/data migration request reasonably classified as medium priority general support",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "e270c40443aa72bb54a218d0af1e0787a8b40b084fe2e125d9b84de7c2a5e9e4",
+        "input": "Ordered the premium data connector license pack on 3/29 (Order #DCP-991247) for overnight shipping and it still hasn't arrived. Tracking shows it left the warehouse on 3/30 but now says \"delivery exception\" with no update since 4/1. Where is this?",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"technical\" or \"sales\", not \"billing\". Shipping/delivery issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "45c2068b010763e5029a892f2466e3dbc5aca768af128886f9d6bd6be768191f",
+        "input": "CRITICAL SECURITY ISSUE - we detected suspicious activity on our account. someone logged in from IP 185.220.101.x on april 2 at 2:33 AM but none of our team was online. they accessed the 'User Permissions' section and modified API key settings. we have NOT confirmed if any keys were exposed. please disable all active API keys immediately (we have 7 total) and help us audit what was accessed. this is urgent.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach with unauthorized access, API key compromise, and immediate action needed justifies critical/technical/5",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "79df129c996431b2193de0405c1075fa6421ead40cad9d999ae808aff2faa17c",
+        "input": "Just wanted to reach out and say the new version has been rock solid for us. The team loves the improved filtering on the Custom Events dashboard. We're planning to expand to your Enterprise tier soon. Great work on this release.",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback with no problems warrants low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "145501a11b5003dfc0f768bcae16a6ebb1416156b2516b0632d6abbd08e96e99",
+        "input": "Hi there, we're being double-billed for our annual contract. Invoice #INV-204156 (dated Jan 3) charged us $8,500 for the year, but then Invoice #INV-204201 (dated Jan 5) charged another $8,500 for what looks like the same renewal period. We only authorized one payment. Can you clarify what's happening and reverse one of these charges?",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Double billing is financial loss requiring urgent resolution; high priority and billing department appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "5e49ba9cf361e4894912973d610d31c5d6080aa69398d54c4253e8de362a9188",
+        "input": "Hi, I noticed someone tried to log into my account from India on April 2nd around 3 AM. I'm in Ohio and definitely wasn't traveling. Should I be worried? My account is username 'david_sz1987' and I haven't changed my password in like 2 years so maybe thats the problem?",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach attempt warrants critical priority, technical department, maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "0bfa7e9236f856a632b85b13c34de282e5fe33db555714d1fa9d183896ae7b69",
+        "input": "Do you guys sell phone chargers in bulk? Looking to outfit a small office with USB-C cables and wall adapters. What's your minimum order quantity and do you offer any corporate discounts?",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Sales inquiry about bulk pricing and corporate discounts. Medium priority and urgency appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "d40209a4468723b4a16b178f845a0f7beed3a74ee9b35a905c049d6ffcf0fa04",
+        "input": "I was charged twice for my order on March 28th - both charges went through as $89.99 for the Anker PowerBank 25000mAh (SKU: ANK-PB25K-BLK). Transaction IDs are TXN-7634921 and TXN-7634922. Please refund one of these immediately.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Duplicate charge is billing issue requiring prompt resolution. High priority and urgency_score 4 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "dab02589f2aba8707770fe91197e0e0b25c535b4fe670bd785802992e8ca2abf",
+        "input": "everytime i click on product reviews the page just goes blank??? its been like this for 3 days now. im trying to decide if i should buy the samsung 4k monitor but i cant see what people think about it. using firefox on windows 10. HELP",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": false,
+        "reason": "Technical issue blocking purchase decision warrants high priority, not medium",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6e541513e678feb88fc746fc1fc24f3e364477b1e174b7ce57eed6a202014aa4",
+        "input": "I can't remember the password to my account and when I try to reset it, the email never shows up in my inbox or spam folder. I've tried using both the email address I signed up with (margaret.chen84@gmail.com) and my backup email. This is my first time buying from you guys and I really need to access my account to track my order.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Account access blocking purchase tracking is high-priority technical issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "4a67856f382a2ca16b5f4ca5807b16a9b4511a4014e5b4b75b06d434c2454304",
+        "input": "Order #OE-556847 was supposed to arrive yesterday (April 9th) with 2-day shipping. Tracking number shows it's been stuck in the distribution center in Memphis since April 8th. The package contains a laptop cooling pad I need for work tomorrow. Can you contact the carrier or upgrade my shipping at no charge?",
+        "output": "{\"priority\": \"high\", \"department\": \"general\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"technical\" or \"billing\", not \"general\" for shipping/logistics issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "196948e4a0c52e312c2fb79a2eecde899a99ded3a4d5056bb6c2c2cb5b87dc54",
+        "input": "URGENT SECURITY BREACH: My credit card ending in 4782 was used to make an unauthorized purchase of $247.50 for a graphics card on your site on April 4th at 11:23 PM. I did NOT make this purchase. Order number is OE-889234. My card issuer is disputing the charge but I need this investigated ASAP. Lock my account immediately.",
+        "output": "{\"priority\": \"critical\", \"department\": \"billing\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Unauthorized charge is security/fraud issue; critical priority, billing department, max urgency appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6946b95f72739f9c5691861636f026d70c0a2d77506099ba6cf9fbd6a5c67333",
+        "input": "just wanted to say that the new LED desk lamp (model DL-6500RGB) I ordered last week is absolutely perfect. Works great, arrived early, and the app controls for the color settings are really intuitive. Not many complaints from me!",
+        "output": "{\"priority\": \"low\", \"department\": \"general\", \"urgency_score\": 1}",
+        "verdict": true,
+        "reason": "Positive feedback with no problems warrants low priority, general department, minimal urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f9e01869ecffeb894b85a613ac51ce7648882a8b8d8cda4f9c6a442d0f63489e",
+        "input": "Hi, I ordered the CloudSync USB adapter (part #CS-2847) on April 2nd with expedited shipping and the tracking number hasn't updated since April 3rd. It was supposed to arrive yesterday. What's going on?",
+        "output": "{\"priority\": \"high\", \"department\": \"general\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" or \"technical\", not \"general\" for shipping issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "41d9801d4fbf7a303223716d267f8bf1ac87ea03dd423f4d803d10b029033e4b",
+        "input": "ALERT: I found logins to my account from an IP address in Nigeria on April 18 at 2:34 AM. I'm in Toronto and definitely wasn't accessing my account then. This is serious - I store sensitive client files here. What do I do???",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Unauthorized account access with sensitive data exposure warrants critical priority, technical department, maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "891c84273e5c7d7b35190a280ccb3bf448062715891535270293795350ccd854",
+        "input": "does your cloud storage work with google workspace or just microsoft? trying to figure out if this will fit our workflow",
+        "output": "{\"priority\": \"medium\", \"department\": \"sales\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Customer inquiring about product compatibility; sales department appropriate, medium priority reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "44267a47ea96515add170e53132cce0e6fb3fc4ebab036d709c72650c68848c8",
+        "input": "I was charged $14.99 on April 15th (invoice #INV-847562) for what I thought was a free trial month. your website said the first month was free but my card was still hit. need this reversed immediately.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Billing department correct, high priority justified by financial dispute, urgency_score 4 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "a654f097f38ec222f2350ad2f69ef19d67a9fdef1c120f21f153d18f822ff58c",
+        "input": "whenever i try to upload files larger than 500MB the browser just closes. ive tried firefox and chrome and it keeps happening. getting error code UPLOAD_CRASH_229. this is blocking my work",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Browser crash on file uploads is technical issue blocking work, warrants high priority",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6838cd169d738aabaae8d3414f7773432ec25cc05f0d4824b078865bb37787a9",
+        "input": "I changed my email address from sarah.k@oldomain.com to sarah.katherine@newdomain.com on my account three weeks ago but I'm still getting password reset emails sent to the old address. can you fix this?",
+        "output": "{\"priority\": \"medium\", \"department\": \"technical\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Email routing issue is technical, medium priority, 3/5 urgency reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "905a9e1b279fd32257573ce3d8694bf4f0517bf80e89ce7ea9bb11b5deb848a6",
+        "input": "ORDER #FS-334891 still hasn't shipped and i ordered it on april 8th. your site said 1-2 business days for processing. its been 8 days. need tracking info asap.",
+        "output": "{\"priority\": \"high\", \"department\": \"general\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"general\"; order/shipping issues are billing-related",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "51715241b2859f9f46d98918d566fc47ed13b78438bef6ee705858721b8049dd",
+        "input": "Je suis preoccupe - j'ai vu une tentative de connexion a mon compte depuis une adresse IP en Roumanie le 22 avril a 19h45. J'habite en France. Est-ce qu'on a ete hacke? S'il vous plait repondez rapidement, j'ai des donnees financieres sensibles stockees ici.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach concern with financial data at risk justifies critical priority and maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "9402ce22efd95ea58d744efe848dac22c3652e271962257c32a8287835de8dff",
+        "input": "Hi there, I'm hoping you can help me out. I've been a subscriber for about 8 months now and I really love the service, but I'm going on a 3-week trip to visit my family and I'd like to pause my account starting May 15th through June 5th. I don't want to cancel entirely because I plan to restart when I get back. I tried looking in my account settings but couldn't find a pause option anywhere. Could someone walk me through how to do this? Thanks so much!",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Customer seeks account pause feature; not urgent, general inquiry, medium priority reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "f96969d8b65b32c7e688abe2b9e8e89ce0ac32f1babac81716d692f12978aade",
+        "input": "where is order #MK-887734??? ordered the italian pasta collection on april 18 with standard shipping and tracking says it left the warehouse on april 21 but its been sitting in memphis tennessee for 4 days now. i need this by this weekend for my dinner party. PLEASE HELP",
+        "output": "{\"priority\": \"high\", \"department\": \"general\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"general\"; shipping/tracking issue is billing-related",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "c5e9abe7734e02b941e4e1f3cc76f649cd28dc29f5d6505f45eab1623264545d",
+        "input": "I'm writing to report a serious security concern. On April 23rd at approximately 11:47 PM, I received a login alert from an IP address (203.45.189.22) that I do not recognize, originating from Jakarta, Indonesia. I am currently located in Seattle and have never traveled there. I immediately changed my password, but I'm worried about what access this person may have had to my account and payment information. Please advise on what steps I should take next and whether my data has been compromised.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach with payment info at risk justifies critical priority and maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "17ec3d1ccd62089ca165eec91c86216d23dd04e16e0b7a62b4cd75c3132f4f31",
+        "input": "Do you offer gluten-free options? My daughter has celiac disease and I want to make sure before I sign up.",
+        "output": "{\"priority\": \"low\", \"department\": \"sales\", \"urgency_score\": 1}",
+        "verdict": false,
+        "reason": "Department should be \"general\" not \"sales\"; this is a product question, not sales-driven",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "4bb0898115860ccabb159689b4c0a7d724c77dca812d85043df1848a2cb61046",
+        "input": "I was charged $84.99 on April 20th for my weekly meal plan renewal (Order #MK-556203), but I had already scheduled a skip week from April 20-26. The charge should not have gone through. This is the second time this has happened in the last two months and I'm frustrated. I need a refund processed immediately.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Billing department correct. High priority justified by repeated issue and refund demand. Score 4 reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "6fa2f4553103b75a9bf43cce9d3b91d20bbbfeefd03f5b170411951daa6f916a",
+        "input": "getting an error code E4012 whenever i try to load my meal preferences page. ive cleared my browser cache, tried incognito mode, and even switched to a different browser but still getting the same error. its been happening since yesterday morning and i cant update my allergies or dietary restrictions for next week's meals",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Technical error blocking meal/allergy updates; high priority and urgency_score 4 justified",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "fcf7886875b78831248dcdef39601dd7f177e74a6ecf08bbdca296de38321973",
+        "input": "Hi, I need to update the name on my account. I recently got married and changed my legal name from Jennifer Walsh to Jennifer Chen-Walsh, and I'd like all future correspondence and meal prep labels to reflect my new name. My account email is jen.walsh.meals@gmail.com and my customer ID is CUS-445821. Could you update this for me? Thanks!",
+        "output": "{\"priority\": \"medium\", \"department\": \"general\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Account update request is non-urgent, doesn't fit billing/technical/sales, medium priority reasonable",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "5bf1cad9da068840610d9f2fd99147b5158639e0f308beffd2e7221d30629d6a",
+        "input": "Hola, tengo un problema con mi env\u00edo. El pedido n\u00famero MK-778945 fue despachado el 19 de abril pero el rastreador dice que est\u00e1 perdido en tr\u00e1nsito. Orden\u00e9 las comidas mediterr\u00e1neas y estaban programadas para llegar el 21 de abril. Ya pasaron dos d\u00edas y no ha llegado nada. \u00bfPueden ayudarme a localizar el paquete o reenviar uno nuevo? Gracias.",
+        "output": "{\"priority\": \"high\", \"department\": \"general\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"billing\" not \"general\"; lost shipment is billing/order issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "2fdc495a6ddc5f188c1a5ec1b03868344739c5aabf7eb029e72c937e1d7fb633",
+        "input": "Hi, I'm getting a 503 Service Unavailable error whenever I try to deploy my Node.js application to the us-east-2 region. This started happening around 2 PM today and my production environment is completely down. The error logs just show \"Gateway timeout\" with no additional details. Can someone look into this immediately?",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Production environment down, 503 errors, immediate action requested. Critical/technical/5 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "70ebfac1aea693971edf43fa141be0f91911d36e0235fc7b1baed274a4e71a96",
+        "input": "I need to change the billing contact on my account from my old company email to my personal email. My account ID is ACC-294857 and the old email is billing@techcorp.net. Can you update this for me?",
+        "output": "{\"priority\": \"medium\", \"department\": \"billing\", \"urgency_score\": 3}",
+        "verdict": true,
+        "reason": "Billing department correct, medium priority reasonable for account update request, score 3 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "02f9a7b56c9f7b977eae40559188f5d7ebc02f746572e24cf35f73da6f35cffd",
+        "input": "Where's my order? Ordered the networking cables on March 15th with 2-day shipping and it never showed up. Tracking #UPS8847291L just says \"delivery attempted\" but nobody came to my door.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": false,
+        "reason": "Department should be \"technical\" or \"general\", not \"billing\". Order/shipping issue",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "20a9d278937c8e681bf41730bf0ecb51a1d8b2239b46a9d36a1d6476c73bc8e6",
+        "input": "URGENT - I just noticed unauthorized API calls being made on my account this morning. Someone generated new credentials and made 47 requests to my database endpoints between 6-7 AM EST. My API key is still secure but the account shows login activity from 185.220.101.45 which is definitely not me. Please disable all access immediately and help me investigate.",
+        "output": "{\"priority\": \"critical\", \"department\": \"technical\", \"urgency_score\": 5}",
+        "verdict": true,
+        "reason": "Security breach with unauthorized access, credential compromise, and immediate action needed justifies critical priority and maximum urgency",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "4274c60fe921e3e88c5383e44b81b9c3a25c0d7e20149e5fa5633e2d43cfe572",
+        "input": "Quick question - do you support webhook integrations with Zapier? I'm trying to set up automated notifications when my deployments complete but I'm not sure if your platform is compatible.",
+        "output": "{\"priority\": \"low\", \"department\": \"sales\", \"urgency_score\": 2}",
+        "verdict": false,
+        "reason": "Technical integration question misclassified as sales; should be technical department",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "a563178aac43a96482bc85b5bad27ddead51dc3119e0a6b50094f8ccdefda69e",
+        "input": "I was double-charged for my Developer Pro plan renewal on April 24th. Both charges of $299/month went through on the same day (invoice #INV-2847261 and INV-2847262). I only have one active subscription so I need one of these reversed ASAP.",
+        "output": "{\"priority\": \"high\", \"department\": \"billing\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Double-charge is billing issue requiring urgent resolution. High priority and urgency_score 4 appropriate",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "a12441b960009a288a100cd443a25bf7e5dd9d676e67faa2538dd74bdf3f0dcf",
+        "input": "estoy recibiendo un error de 'conexion perdida' cuando intento conectarme al servidor SFTP. hace 2 dias que esto ocurre. intente cambiar mi contrase\u00f1a pero sigue el mismo problema. mi nombre de usuario es dev_carlos_23 y la conexion falla cuando llego al paso de autenticacion. necesito acceso urgente para subir archivos del cliente.",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "SFTP authentication failure blocking client work justifies high priority, technical department, urgency 4",
+        "rule_passed": true,
+        "judge_error": null
+      },
+      {
+        "case_id": "19be819f86a5b85ccf739e01a2a80db5dcd58199162cbc40e7e78a0268fbfa3f",
+        "input": "my account got locked out after i typed the wrong password to many times. i havent been able to log in since yesterday afternoon around 4 PM. ive tried clicking the forgot password link but the reset email isnt showing up in my inbox or spam folder. can you unlock it so i can get back in? my email is james.morrison@consultancy.co",
+        "output": "{\"priority\": \"high\", \"department\": \"technical\", \"urgency_score\": 4}",
+        "verdict": true,
+        "reason": "Account lockout blocking access is high-priority technical issue requiring urgent resolution",
+        "rule_passed": true,
+        "judge_error": null
+      }
+    ]
+  }
+}

@@ -365,7 +365,22 @@ def fold_examples(fixture: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def compile_arm(arm: Dict[str, Any], examples: List[Dict[str, str]], skip: bool) -> Dict[str, Any]:
     path = Path(arm["manifest"])
-    if skip and path.exists():
+    if skip:
+        if not path.exists():
+            # Do NOT fall through to a compile here. `.paw` manifests are gitignored
+            # (`.gitignore:39-40`), so a `git clean` or a fresh worktree makes them
+            # vanish while every committed artifact still refers to them by program id.
+            # The old behaviour silently spent a compile call and substituted a *new*
+            # adapter for the one the recorded numbers came from -- a measurement that
+            # reports itself as `--skip-compile` while quietly re-compiling is worse
+            # than one that stops. Compile the arm explicitly instead.
+            raise RuntimeError(
+                f"--skip-compile was passed but arm {arm['arm']}'s manifest {path} does not "
+                f"exist, so there is nothing to reuse. Refusing to silently compile a "
+                f"different adapter under a flag that promises not to. Run "
+                f"`--no-run --arms {arm['arm']}` first to (re)compile it; if the spec is "
+                f"unchanged the service returns the same program from cache."
+            )
         manifest = json.loads(path.read_text())
         print(f"[compile:{arm['arm']}] reusing {path} (program {manifest.get('program_id')}, "
               f"compile_wall_s={manifest.get('compile_wall_s')})")
@@ -537,6 +552,16 @@ def main() -> int:
             "compile_wall_s": arm["manifest_data"].get("compile_wall_s"),
             "public": arm["manifest_data"].get("public"),
             "cache_hit": arm["manifest_data"].get("cache_hit"),
+            # Mirrored so the arms stay checkable without the gitignored .paw files.
+            # full_spec_sha256 is the load-bearing one: it covers spec + folded
+            # examples, so B and C sharing it is what proves they differ only in
+            # compiler. status/slug/compiled_at complete the manifest's identity.
+            "status": arm["manifest_data"].get("status"),
+            "slug": arm["manifest_data"].get("slug"),
+            "spec_sha256": arm["manifest_data"].get("spec_sha256"),
+            "full_spec_sha256": arm["manifest_data"].get("full_spec_sha256"),
+            "compiled_at": arm["manifest_data"].get("compiled_at"),
+            "compiler_version": arm["manifest_data"].get("manifest_version"),
             "parse_failures": n_fail,
             "parse_failure_rate_pct": n_fail / len(rows) * 100.0,
             "latency_ms": {
