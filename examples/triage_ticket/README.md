@@ -1,6 +1,6 @@
 # Example 1: Customer Support Ticket Triage (`paw.jit`)
 
-This example demonstrates how to use the `@compile_on_hit` decorator from `paw-kit` to trace a high-volume LLM function, trigger compilation at a call threshold, and hot-swap to the compiled adapter with fail-open fallback.
+This example demonstrates how to use the `@compile_on_hit` decorator from `paw-kit` to trace a high-volume LLM function, trigger compilation at a call threshold, and hot-swap to the compiled adapter with fail-open fallback. In real use a compiled adapter first runs in [shadow mode](../../docs/shadow-mode.md) and is promoted only after it agrees with the teacher over a window of calls; this five-call example pins `shadow_window=0` so the swap happens as soon as the compile finishes.
 
 ## What It Does
 

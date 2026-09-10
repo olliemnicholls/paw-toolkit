@@ -174,6 +174,13 @@ in this script, not in the shipped library; `real.py`'s docstring now says so.
 
 ## Semantic correctness, for real: does it mean the right thing, not just look right
 
+> **What this measurement led to.** The 60% agreement figure below is why
+> `@compile_on_hit` now has [shadow mode](../docs/shadow-mode.md): a compiled adapter is
+> promoted only after a window of live comparisons clears a threshold, and with the shipped
+> defaults this adapter would not have promoted. The measurement scripts are pinned to
+> `shadow_window=0` so the runs recorded here stay reproducible. Measuring shadow mode
+> itself is a follow-up.
+
 Every test above this line checks *shape*: does the output match a regex, parse as JSON,
 hit a length bound. None of them ask whether the output is actually a correct answer.
 This section does, two ways: (1) re-scoring the ticket-triage adapter from the JIT test

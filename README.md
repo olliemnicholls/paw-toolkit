@@ -6,22 +6,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.04199-b31b1b.svg)](https://arxiv.org/abs/2609.04199)
 
-> **Status: early alpha (v0.1), one person, one weekend.** The harness — tracing
-> decorator, test runner, schema validation, HTTP server — is built and unit-tested, and
-> its one real backend, `ProgramAsWeightsBackend`, has been run end to end against the
-> upstream service on an RTX 3080 and an A100. What that showed, in one paragraph: a
-> compiled date normaliser answers in ~65 ms on the 3080 (~6 s on CPU) and passes 71/82
-> of its own suite; a compiled ticket-triage adapter replaced a live Claude teacher at
-> ~11x lower latency and zero tokens billed, but agreed with a fresh teacher call on only
-> 60% of tickets; semantic correctness across four tasks ranged from 60% to ~90%, with a
-> ±2-point noise floor from the LLM judge itself. Everything that is not labelled
-> "measured" runs on a deterministic mock — a dictionary lookup, not a model — so the
-> workflow can be tried with no GPU and no API key. Several first-pass numbers were wrong
-> and are corrected in place, visibly, in
-> [`measurements/README.md`](./measurements/README.md); read it before repeating any
-> figure from this repo.
-
----
+> **Status: early alpha (v0.1), one person, one weekend.** The harness is built and
+> unit-tested, and its one real backend has been run end to end against the upstream
+> service on an RTX 3080 and an A100. What that showed: a compiled date normaliser answers
+> in ~65 ms on the 3080 and passes 71/82 of its own suite; a compiled ticket-triage adapter
+> replaced a live Claude teacher at ~11x lower latency and zero tokens billed, but agreed
+> with a fresh teacher call on only 60% of tickets. Everything not labelled "measured"
+> runs on a deterministic mock, so the workflow can be tried with no GPU and no API key.
+> Read [`measurements/README.md`](./measurements/README.md) before repeating any figure
+> from this repo; several first-pass numbers were wrong and are corrected there in place.
 
 ## What PAW is, in three sentences
 
@@ -39,95 +32,54 @@ that for people who want to swap a compiled function into a codebase that curren
 a frontier API, and who want evidence before they trust it:
 
 - **`@compile_on_hit` (paw.jit)**: wrap the function that currently calls your LLM. It
-  keeps calling it, logs every input/output pair to a local SQLite trace database, and
-  once a call-count threshold is reached it triggers compilation in a background thread
-  and routes later calls to the compiled adapter. Any exception or schema violation on the
-  local path falls back to the original function (fail-open).
+  keeps calling it and logs every input/output pair to a local SQLite trace database.
+  Once a call-count threshold is reached it compiles in a background thread and enters
+  [*shadow mode*](./docs/shadow-mode.md): the adapter runs on every input off the request
+  path and its answer is compared against the teacher's, but the teacher keeps serving.
+  Only when agreement over a window of real inputs clears a threshold does the adapter
+  take over; optionally, a sampled fraction of calls still runs the teacher afterwards so
+  drift stays measurable. Any exception or schema violation on the local path falls back
+  to the original function (fail-open).
 - **`paw-test` (paw.test)**: a declarative `suite.yaml` of standard cases and assertions,
-  an adversarial fuzzer (Unicode injection, whitespace floods, payload extremes, your own
-  probes), and an active-learning loop that sends failing inputs to a teacher for labels
-  and recompiles. Use it to find out what a compiled function gets wrong before you ship it.
-- **`paw.load` (paw.schema)**: bind an adapter to a Pydantic model. Output is validated and,
-  on failure, routed to a fallback. Includes a regex-to-FSM logits processor for
-  token-level constrained decoding, but see the caveat below: no current backend can apply it.
+  an adversarial fuzzer, an active-learning loop that sends failing inputs to a teacher
+  for labels and recompiles, a per-case diff of two adapters, and an LLM judge with a
+  measured noise floor. Use it to find out what a compiled function gets wrong before you
+  ship it.
+- **`paw.load` (paw.schema)**: bind an adapter to a Pydantic model. Output is validated
+  and, on failure, routed to a fallback. Includes a regex-to-FSM logits processor for
+  constrained decoding that no current backend can apply; see
+  [the real-backend notes](./docs/real-backend.md).
 - **`paw-serve`**: expose any adapter as a local HTTP service speaking the OpenAI Chat
-  Completions and Anthropic Messages wire formats, so non-Python clients can call it.
-  `paw-kit export docker` generates a Dockerfile and compose file for it.
+  Completions and Anthropic Messages wire formats. `paw-kit export docker` scaffolds a
+  container for it.
 
-### What is real and what is mocked
-
-| Component | State | Exercised against |
-|---|---|---|
-| Tracing decorator, SQLite trace DB, background compile, hot-swap, fail-open | Implemented, unit-tested, **and run for real**: a live Claude teacher hot-swapped to a real compiled adapter (~11x lower steady-state latency, zero tokens billed afterwards; 60% full agreement with a fresh teacher call on the same tickets). One real induced failure (adapter file deleted) fell open cleanly; a second (bad API key) was inconclusive because the service accepted the key | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the numbers — [`measurements/`](./measurements) |
-| `suite.yaml` runner, fuzzer, active-learning loop | Implemented, unit-tested, **and run for real** against 11 real fuzzer failures with a live Claude teacher: **0 repaired**, and correctly so — every teacher label failed the suite's own assertions (the suite had no "not a date" case), so the loop refused to train on them. The loop is bounded and best-effort, not a guarantee | Same as above |
-| Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **confirmed against a real model** (15/15 valid Pydantic parses vs 0/15 raw and 11/15 fence-stripped unconstrained; no latency cost once warm), and driven once against a real upstream adapter through a **private** SDK attribute (4/5 structurally valid; the constrained value of one field was constant regardless of input; ~1.7 s warm-up per new FSM state, so 47 s on the first call). **No shipped backend applies it.** `paw.load` validates after generation instead | `Qwen2.5-0.5B-Instruct` via transformers; one upstream adapter via a monkeypatched llama.cpp sampler. Both are measurement scripts, not shipped code — [`measurements/`](./measurements) |
-| HTTP server, Docker export, dataset export, CLI | Implemented, unit-tested | `MockPAWBackend` only |
-| `ProgramAsWeightsBackend` (official upstream SDK) | Implemented, unit-tested against a fake SDK, **and run end to end against the real service** with both upstream compilers | Real compile + inference on an RTX 3080 (CPU and CUDA) and an A100 — [`measurements/`](./measurements) |
-| `MockPAWBackend` | A dictionary lookup that returns canned strings. It is a test double, not a model | n/a |
-
-The demo command and the three examples all run on the mock. When they print "local
-adapter" they mean the dictionary lookup. They demonstrate the *control flow* of the
-harness, nothing about model quality or speed.
-
----
+The line between what is measured and what is mocked is drawn in
+[`docs/what-is-real.md`](./docs/what-is-real.md).
 
 ## Install
-
-Not on PyPI yet. From source:
 
 ```bash
 git clone https://github.com/olliemnicholls/paw-toolkit
 cd paw-toolkit
 uv sync --dev          # or: pip install -e .
-uv run pytest -q       # 230 tests, no GPU, no network, no API key
+uv run pytest -q       # 483 tests, no GPU, no network, no API key
 ```
 
-For a real backend, install the `real` extra and get an API key from
-[programasweights.com/settings](https://programasweights.com/settings):
+For a real backend: `uv sync --extra real`, set `PAW_API_KEY`, and run `paw-kit doctor`.
+The PyPI `llama-cpp-python` wheel is CPU-only, which costs ~90x in latency; the first call
+downloads a ~600 MB base model. Details in [`docs/install.md`](./docs/install.md).
 
-```bash
-uv sync --extra real   # or: pip install 'paw-kit[real]'
-export PAW_API_KEY=paw_sk_...
-```
-
-`paw-kit[real]` pulls the official upstream SDK, which is what
-`ProgramAsWeightsBackend` runs on. It resolves from PyPI directly — the
-`--extra-index-url` in upstream's own README is not needed (verified 2026-09-09 against
-`programasweights==0.4.4`). No API key is required to *run* an already-compiled program;
-only to compile a new one.
-
-Two things to know before the first real call: the `llama-cpp-python` wheel this pulls
-from PyPI is **CPU-only** — on this repo's date normaliser that meant ~5.9 s per call
-against ~65 ms once a CUDA build was in place (the build notes are at the end of
-[`measurements/README.md`](./measurements/README.md#if-inference-is-unexpectedly-slow-seconds-not-milliseconds));
-and the first call to any program downloads the ~600 MB base model into the SDK's cache.
-
-`paw-kit[measure]` is a separate, optional extra pulling PyTorch/transformers. It exists
-only to reproduce `scripts/measure_schema_real_model.py`, which backs the
-constrained-decoding numbers in [`measurements/`](./measurements). It is **not** a backend
-and buys you no inference. (It was called `[torch]`, and before that it was what `[real]`
-installed — both were misleading, so it is now named for what it actually does.)
-
----
-
-## Try the workflow with no hardware (mock backend)
+## Try the workflow with no hardware
 
 ```bash
 uv run paw-kit demo                  # ticket triage: trace, threshold, compile, hot-swap
 uv run paw-kit demo --scenario pii   # schema-validated extraction with fallback
 uv run python examples/triage_ticket/run.py
-uv run python examples/pii_scrubber/run.py
-uv run python examples/date_normalizer/run.py
 ```
 
-The same thing in code. Compilation triggers at the end of call 3 (`threshold=3`); from
-call 4 the decorator routes to the adapter once the compile (asynchronous by default) has
-finished. The status is printed explicitly rather than inferred from the returned value:
-with `MockPAWBackend` a teacher call and a hot-swapped call return identical-looking
-values whether or not the swap happened. (An earlier version of this block varied the
-ticket text per call, which a literal-match mock can never match, so every call was
-silently falling back to the teacher through the decorator's fail-open path — caught in
-review 2026-09-08. `wrapper.get_fail_open_count()` now exists so you can check.)
+The same thing in code. Compilation triggers at the end of call 3; from call 4 the
+decorator routes to the adapter. The status is printed explicitly because, with the mock,
+a teacher call and a swapped call return identical-looking values.
 
 ```python
 from pydantic import BaseModel
@@ -144,10 +96,10 @@ class SupportTriage(BaseModel):
     response_model=SupportTriage,
     backend=MockPAWBackend(),   # explicit. Omitting backend= also gives you the mock, with a warning.
     cache_dir="./.paw",
-    sync_compile=True,  # blocks call 3 until compilation finishes, so this 5-call demo
-                         # reaches "ready" deterministically. Compilation is asynchronous
-                         # by default (the point of it, in production, is that threshold
-                         # calls stay fast) -- drop this in real use.
+    sync_compile=True,  # blocks call 3 until compilation finishes so this 5-call demo
+                        # reaches "ready" deterministically. Drop this in real use.
+    shadow_window=0,    # shadow mode is on by default; five calls cannot fill an agreement
+                        # window, so turn it off here to keep the swap deterministic.
 )
 def triage_ticket(ticket_body: str) -> SupportTriage:
     # In real use, this body is your existing Claude/OpenAI call.
@@ -157,259 +109,37 @@ ticket = "Invoice refund needed for charge #1!"  # same input every call, on pur
 # MockPAWBackend only matches input it has seen verbatim. Vary the text and every
 # post-threshold call falls open to `triage_ticket`'s own body, silently.
 for i in range(1, 6):
-    served_by = triage_ticket.db.get_status(triage_ticket.task_id)  # "tracing" / "compiling" / "ready"
-    print(i, served_by, triage_ticket(ticket), triage_ticket.get_fail_open_count())
+    state = triage_ticket.db.get_status(triage_ticket.task_id)  # "tracing" / "compiling" / "shadow" / "ready" / "failed"
+    print(i, state, triage_ticket(ticket), triage_ticket.get_fail_open_count())
 ```
 
----
+## Going further
 
-## Use a real model (ProgramAsWeightsBackend)
-
-`ProgramAsWeightsBackend` implements paw-kit's backend interface on top of the official
-SDK. Compilation goes to the upstream service; inference runs locally through the SDK's
-llama.cpp runtime (GPU if available). The `.paw` file paw-kit writes is a small JSON
-manifest pointing at the upstream program ID; the weights live in the SDK's cache.
-
-Run `paw-kit doctor` first: most `--backend real` failures (a CPU-only `llama-cpp-python`
-wheel, an un-downloaded base model, an upstream compile service that returns a healthy
-`200` with no GPU workers behind it) are environment problems `doctor` catches up front,
-with a one-line remedy, rather than a confusing failure deep inside `compile()`/`infer()`.
-
-```python
-from pydantic import BaseModel
-import paw_kit as paw
-from paw_kit import ProgramAsWeightsBackend, compile_on_hit
-
-backend = ProgramAsWeightsBackend(
-    compiler="paw-4b-qwen3-0.6b",   # upstream default, seconds. "paw-ft-bs48" = the finetune
-                                    # compiler from the paper, queued and polled (minutes).
-    n_gpu_layers=None,              # SDK decides; 0 forces CPU
-    max_spec_examples=16,           # how many traced examples to fold into the spec text
-)
-
-class Triage(BaseModel):
-    priority: str
-    department: str
-    urgency_score: int
-
-@compile_on_hit(spec="...", threshold=50, response_model=Triage, backend=backend, cache_dir="./.paw")
-def triage_ticket(body: str) -> Triage:
-    return call_your_llm(body)      # traced until threshold, then compiled and replaced
-```
-
-**Compiles are private by default.** Upstream `paw.compile`/`paw.compile_async` default to
-`public=True`, which lists the compiled program on programasweights.com with its full spec
-text readable by anyone, no login required. `ProgramAsWeightsBackend` passes `public=False`
-unless you opt in. The spec that gets uploaded is not just what you wrote in `spec=` --
-it has up to `max_spec_examples` traced input/output pairs folded into it, so a public
-compile publishes a sample of real production traffic; think about `redact_trace=True`
-on the decorator if you do set `public=True`. Note also that upstream's compile cache is
-keyed on the spec text and ignores `public` on a cache hit, so recompiling a spec that was
-previously compiled public will return that same public program regardless of what you pass
-this time -- `compile()` warns when it detects this via `precheck_compile`, but it can't
-change the existing program's visibility. Versions of paw-kit before this change compiled
-publicly by default; if you compiled anything with an earlier version, check
-programasweights.com for it.
-
-What to expect, from the runs in [`measurements/`](./measurements) (one machine each, one
-run each — indicative, not a benchmark):
-
-- **Compile**: 1–5 s wall time with the default fast compiler; ~3 min with `paw-ft-bs48`.
-  On one phone-extraction task the two produced byte-identical output on 132 of 134 inputs.
-- **First call**: 2 s to ~110 s, depending on whether the base model and program are
-  already in the SDK cache.
-- **Steady state**: ~65 ms per call on an RTX 3080, ~89 ms on a shared A100, ~5.9 s on
-  the CPU-only PyPI wheel. The model is small enough that GPU class barely matters; GPU
-  versus CPU matters ~90x.
-- **Quality**: task-dependent and the thing to test, not assume. Structural pass rates of
-  0% to 100% on the same task depending on whether the spec pins down the output format;
-  60% full agreement with a fresh teacher call on ticket triage; one clear fabricated
-  answer (`1-800-FLOWERS` → invented digits) found by the fuzzer.
-
-Two limitations come straight from the upstream API and are worth knowing before you
-plan around them:
-
-1. **The upstream compiler takes a spec, not a dataset.** It generates its own examples
-   with teacher models. paw-kit's traced calls and active-learning labels can only reach it
-   as few-shot demonstrations appended to the spec text (`max_spec_examples`). Whether that
-   helps is exactly the kind of question `paw-test` is for. It is not assumed.
-2. **No grammar-constrained decoding.** The SDK's callable has no grammar or logits hook, so
-   the FSM logits processor in `paw.schema` cannot be applied. `paw.load` validates output
-   after generation with Pydantic and falls back on failure. Whether the processor stays in
-   this package at all is an open question, pending upstream: `llama_cpp.Llama.sample()`
-   already accepts `grammar` and `logits_processor`, and the SDK's decode loop already
-   calls it, so the ask is a passthrough rather than new machinery. See roadmap item 5.
-   It is **not** being kept for a future in-process backend — there isn't going to be one.
-
-**Bringing your own runtime.** `AbstractPAWBackend` is three methods — `compile`, `infer`,
-`is_available`. Implement them and pass `backend=` to `paw.load` or `@compile_on_hit`, and
-paw-kit will drive whatever runtime you like. There is no in-process PyTorch/PEFT backend in
-this package and there is not going to be one: paw-kit is a toolkit around upstream PAW, not
-a reimplementation of it. (A `RealPAWBackend` placeholder existed through v0.1 and raised
-`NotImplementedError`; it was deleted rather than built, because shipping a class that looks
-like a working backend and is not is the exact confusion this project spent a track
-removing.)
-
----
-
-## Test a compiled function before trusting it
-
-```yaml
-# suite.yaml
-task_name: date_normalizer
-spec: "Convert natural language date expressions into ISO-8601 YYYY-MM-DD."
-adapter_path: ".paw/date_normalizer.paw"
-
-standard_cases:
-  - input: "January 15, 2026"
-    expected: "2026-01-15"
-
-assertions:
-  - rule: regex_match
-    pattern: "^\\d{4}-\\d{2}-\\d{2}$"
-  - rule: max_length
-    value: 10
-
-fuzzing:
-  inject_unicode: true
-  whitespace_flood: true
-  adversarial_probes:
-    - "2026年09月05日"
-
-active_learning:
-  auto_recompile: true
-  max_iterations: 3
-```
-
-```bash
-uv run paw-test check examples/date_normalizer/suite.yaml
-```
-
-The runner reports pass rate per case and per assertion. With `auto_recompile: true` and a
-teacher callable supplied in code (`run_active_learning_loop(..., teacher_provider=...)`),
-failing inputs are sent to the teacher inside a delimited prompt, the returned labels are
-checked against the suite's own assertions before being trusted, and the adapter is
-recompiled with them folded in.
-
-**`paw-test check` supplies its own teacher**, and it is a demo stub — a two-branch lookup
-that answers `"2026-01-01"` to almost any input, not a frontier model. Because recompilation
-overwrites the adapter in place (and, on a real backend, costs a paid upstream compile), the
-CLI runs **read-only against `--backend real`**: `auto_recompile` is forced off with a
-printed notice, and passing `--auto-recompile` explicitly is refused rather than allowed,
-because stub labels must never become training signal for a paid compile. Drive the loop
-from code, with a real teacher, when you want it to actually repair something. Against the mock
-backend (the default) it recompiles freely, but that is **not** harmless either:
-`MockPAWBackend.compile()` writes a real file, so recompiling replaces whatever
-`adapter_path` points at with a mock stub containing the demo teacher's invented labels.
-`paw-test check` therefore refuses to recompile any adapter that does not identify itself
-as a mock manifest, so a real compiled adapter cannot be destroyed by a stray run.
-
-`ActiveLearningReport.stuck_reason` tells you *why* a repair iteration made no progress,
-instead of leaving `is_success=False, repaired_edge_cases=0` to mean either "the model is
-hopeless" or "the harness correctly refused every teacher label" -- it's one of
-`"all_labels_rejected"` (the teacher answered, but every answer failed the suite's own
-assertions), `"teacher_errors"` (the teacher call itself raised or returned nothing), or
-`"no_failures"` (there was nothing to query, e.g. an empty suite), and the report's
-`rejected_labels` lists each rejected input with the teacher's (truncated) output and
-which rules it failed. Sometimes `all_labels_rejected` means the suite, not the model, is
-wrong -- if every failing input has no legal answer (e.g. whitespace-only garbage with no
-valid date), set a suite-level `abstain_value`: any assertion then passes automatically
-when the output matches it exactly, so the loop can teach the model to admit "I don't
-know" instead of being forced to hallucinate a shaped-but-wrong answer.
-
-**`paw-test compare A.paw B.paw suite.yaml`** runs every case in a suite through two
-compiled adapters and diffs the results per case -- differences first, then a one-line
-summary (`--json out.json` for the full report). This is not a nice-to-have: the
-project's own real A/B comparison between the fast and finetune compilers
-(`measurements/README.md`, "Finetune compiler") was decided by exactly this diff --
-132 of 134 outputs were byte-identical, and the two that weren't were adversarial
-probes -- not by the aggregate pass-rate percentages, which turned out to sit inside the
-judge's own measurement noise (next paragraph). `--backend real` is read-only here too:
-`compare` never calls `compile()`.
-
-**`paw-test judge report.json --spec "..."`** scores a `compare`/`check` report's
-outputs with an independent LLM judge and persists a per-case verdict + reason, keyed by
-a stable hash of (input, output) so two runs can be diffed later
-(`paw-test judge --diff old.json new.json`). This exists because the judge itself is
-noisy: at the API's default sampling temperature, re-judging byte-identical
-input/output pairs flipped the YES/NO verdict **4.5% of the time (6/134)**, run to run.
-`anthropic_judge` (the shipped reference judge) therefore pins `temperature=0.0` --
-that alone does not guarantee bit-identical judging, but it is the cheapest available
-fix, and `--diff` is how you check whether it held for your own prompt and judge model.
-
----
-
-## Serve over HTTP
-
-```bash
-uv run paw-serve .paw/triage.paw --port 8000        # auth on by default; see --help
-curl -X POST localhost:8000/invoke -H 'Content-Type: application/json' -d '{"input": "Outage in eu-west"}'
-```
-
-`POST /v1/chat/completions` (OpenAI shape) and `POST /v1/messages` (Anthropic shape) are
-also exposed, so the official OpenAI and Anthropic client libraries work with
-`baseURL` pointed at the server. `GET /health` (liveness) and `GET /ready` (readiness --
-200 only once the adapter has served one successful call, or after `--warm`; useful
-because a cold Qwen3-0.6B load can take up to ~110s, see `measurements/README.md`) are
-the only unauthenticated routes; `GET /metrics` and every inference route require the
-bearer token. `paw-kit export docker`'s generated container HEALTHCHECK polls `/ready`
-and passes `--warm` in its CMD.
-
-```bash
-uv run paw-kit export docker .paw/triage.paw --out-dir ./docker   # Dockerfile + compose
-uv run paw-kit export dataset --db ./.paw/traces.db --out traces.jsonl
-```
+- [Use a real model](./docs/real-backend.md): `ProgramAsWeightsBackend`, private-by-default
+  compiles, what a timeout means, what to expect, upstream limitations.
+- [Shadow mode](./docs/shadow-mode.md): how the adapter earns production traffic, every
+  parameter and default, what is stored, `paw-kit report`.
+- [Test before trusting](./docs/testing.md): suites, fuzzing, active learning,
+  `paw-test compare`, `paw-test judge`, `paw-kit lint-spec`.
+- [Serve over HTTP](./docs/serving.md): `paw-serve`, `/ready`, Docker export.
+- [Roadmap](./docs/roadmap.md).
 
 ## CLI
 
 ```
-paw-kit demo [--scenario pii]         mock-backend walkthroughs
-paw-test check suite.yaml             run a suite (--backend real runs the upstream SDK, read-only)
+paw-kit demo [--scenario pii]             mock-backend walkthroughs
+paw-kit doctor [--adapter a.paw]          diagnose the local environment for --backend real
+paw-kit report [--task id] [--json]       task state, shadow-mode agreement, disagreements
+paw-kit history adapter.paw               every past compile of an adapter, oldest first
+paw-kit lint-spec "text"|--file f.txt     static checks for spec-authoring mistakes
+paw-kit export docker|dataset ...         container scaffold (--backend mock|real), trace export
+paw-test check suite.yaml                 run a suite (--backend real is read-only)
 paw-test compare A.paw B.paw suite.yaml   diff two adapters' outputs, per case
-paw-test judge report.json --spec ".."    score a compare/check report with an LLM judge
-paw-kit doctor [--adapter a.paw]      diagnose the local environment for --backend real
-paw-inspect adapter.paw               show an adapter manifest
-paw-kit history adapter.paw           show every past compile of an adapter, oldest first
-paw-clean [--dry-run]                 remove cached adapters and trace DB
-paw-serve adapter.paw --port 8000     HTTP server (--warm to pay cold-load cost before binding)
-paw-kit export docker|dataset ...     scaffolding and trace export
-paw-kit lint-spec "text"|--file f.txt static checks for spec-authoring mistakes measured against real adapters
+paw-test judge report.json --spec ".."    score a report with an LLM judge (sends data to Anthropic)
+paw-inspect adapter.paw                   show an adapter manifest
+paw-serve adapter.paw --port 8000         HTTP server (--warm to pay the cold load before binding)
+paw-clean [--dry-run]                     remove cached adapters and trace DB
 ```
-
----
-
-## Roadmap
-
-In order, and nothing gets announced until the first item is done:
-
-1. ~~Run `ProgramAsWeightsBackend` end to end against the real service on an RTX 3080
-   (11GB) and an A100. Publish actual compile time, per-call latency, and `paw-test`
-   pass rates on the three example tasks, with the exact commands used.~~ **Done** —
-   see [`measurements/`](./measurements), plus real JIT hot-swap, grammar-constrained
-   decoding, fail-open, semantic-correctness, and finetune-compiler tests that went
-   beyond the original scope of this item.
-2. ~~Decide from those numbers whether folding traced examples into the spec helps at
-   all.~~ **Done, and the honest answer is "it depends on the failure mode."** A real
-   A/B test (`measurements/README.md#does-folding-examples-into-the-spec-text-actually-help-a-real-answer-on-the-second-try`)
-   found folding examples in fixed format-ambiguity failures dramatically (one task
-   went from 0% to 92.5% structural pass) and did nothing for failures unrelated to
-   format (unicode-handling edge cases) — and introduced a new failure mode of its own
-   (verbatim memorization of an example for out-of-distribution input). Not a flat
-   yes/no; read the section before deciding whether to fold examples in for your task.
-3. ~~Wire `--backend real` in the CLI to `ProgramAsWeightsBackend`.~~ **Done** — it
-   resolves to the upstream SDK, announces any fallback to the mock, and refuses to
-   recompile (a paid, destructive operation) unless asked explicitly. See `paw_kit/cli.py`.
-4. ~~Decide `RealPAWBackend`'s fate.~~ **Done — deleted.** It was the placeholder for an
-   in-process PEFT path, justified mainly as "the only place the logits processor could
-   ever be applied", which [`measurements/`](./measurements) showed to be false:
-   constrained decoding reaches the real upstream adapter through llama.cpp's own
-   sampling loop. paw-kit wraps upstream PAW rather than reimplementing it, so the
-   placeholder was removed instead of built.
-5. Ask upstream for a supported `grammar` / `logits_processor` passthrough on
-   `PawFunction.__call__`. `llama_cpp.Llama.sample()` already accepts both; the SDK's
-   decode loop already calls it. Until there is an answer, **nothing in this package
-   applies constrained decoding** — `paw.load` validates after generation and falls back
-   on failure. Whether `RegexLogitsProcessor` stays here at all depends on that answer.
 
 ## Relationship to upstream
 
