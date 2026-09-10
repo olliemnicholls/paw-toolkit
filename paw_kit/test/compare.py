@@ -41,7 +41,12 @@ def read_adapter_manifest(adapter_path: str) -> Dict[str, Any]:
     that raises (not that backend's manifest format -- true of every `MockPAWBackend`
     adapter and any third-party `.paw` file), falls back to a generic bounded JSON read
     so whatever the file *does* declare (e.g. mock's `spec`/`examples_count`) still shows
-    up. Returns `{}` only when the file cannot be read as JSON at all.
+    up -- but only when it declares a non-empty string `backend` field, the one key every
+    manifest either backend writes actually has. Without that check any unrelated JSON
+    dict (`{"foo": "bar"}`) read as a "manifest", which is what let `paw-test compare`'s
+    CLI gate (`cli.py`'s `Could not read a manifest ... not the expected shape` check)
+    wave through a file that plainly isn't one. Returns `{}` when the file cannot be read
+    as JSON at all, or is JSON but not shaped like a manifest.
     """
     try:
         return dict(ProgramAsWeightsBackend.read_manifest(adapter_path))
@@ -56,7 +61,32 @@ def read_adapter_manifest(adapter_path: str) -> Dict[str, Any]:
         data = json.loads(raw)
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict) or not isinstance(data.get("backend"), str) or not data["backend"]:
+        return {}
+    return data
+
+
+# Display-safe manifest fields for a `CompareReport` (finding 11): a manifest can carry
+# `examples`/`rules`/`spec` -- for `ProgramAsWeightsBackend`, `spec` is the full spec
+# text with every traced example folded in when `compile_on_hit`'s trace-folding ran
+# (see `programasweights.py`'s `_render_spec_with_examples`). `compare --json` is meant
+# to report which two adapters were compared, not re-export what may be private training
+# data through a side channel never intended to carry it. Only these fields, and only the
+# ones actually present, make it into the report.
+_MANIFEST_DISPLAY_FIELDS = (
+    "backend",
+    "program_id",
+    "compiler",
+    "spec_sha256",
+    "compiled_at",
+    "manifest_version",
+)
+
+
+def _project_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only `_MANIFEST_DISPLAY_FIELDS` of a manifest, dropping `spec`/`examples`/
+    `rules`/`default_response`/everything else that isn't meant for display."""
+    return {key: manifest[key] for key in _MANIFEST_DISPLAY_FIELDS if key in manifest}
 
 
 class CompareRow(BaseModel):
@@ -92,6 +122,12 @@ class CompareReport(BaseModel):
     b_pass_count: int = 0
     only_a_pass_count: int = 0
     only_b_pass_count: int = 0
+    # A case counts here if the backend raised for adapter A and/or adapter B on it (see
+    # `_infer_safely`) -- independent of `identical`/`pass_a`/`pass_b`, which can't be
+    # trusted to surface it: two adapters that both raise produce the same
+    # "[EXECUTION_ERROR]" placeholder for both, so they're `identical=True` and agree on
+    # `pass_a == pass_b`, and never show up in `differing_rows` at all (finding 1).
+    errored_count: int = 0
     rows: List[CompareRow] = Field(default_factory=list)
 
     @property
@@ -123,14 +159,25 @@ def compare_adapters(
     suite: TestSuiteConfig,
     backend: AbstractPAWBackend,
     *,
-    include_fuzz: bool = False,
+    include_fuzz: bool = True,
 ) -> CompareReport:
-    """Run every standard case (and, if asked, fuzz case) in `suite` through both
-    adapters via `backend`, and diff the results.
+    """Run every standard case (and, by default, every fuzz case) in `suite` through
+    both adapters via `backend`, and diff the results.
+
+    `include_fuzz` defaults to **True** so a default call covers the same cases
+    `TestRunner.run`/`paw-test check` does (`paw-test compare --no-fuzz` opts back out
+    to standard_cases only, e.g. for a quick look).
+
+    Both adapters are held in memory by `backend` for the whole run (two ~600MB
+    llama.cpp models under `--backend real`, resident from the first case onward and
+    never released) -- so the first row's `latency_a_ms`/`latency_b_ms` include that
+    cold load, not steady-state inference time.
 
     Read-only: this never calls `backend.compile()`. Assertion pass/fail reuses
-    `paw_kit.test.runner.evaluate_assertion` -- the same function `TestRunner`/`paw-test
-    check` use -- so a "pass" here means the same thing it means there.
+    `paw_kit.test.runner.evaluate_assertion` with `suite.abstain_value` threaded through
+    -- the same function and the same `abstain_value` `TestRunner`/`paw-test check` use
+    (`runner.py`'s `TestRunner.run`) -- so a "pass" here means the same thing it means
+    there.
     """
     inputs: List[str] = [c.input for c in suite.standard_cases]
     if include_fuzz:
@@ -138,7 +185,7 @@ def compare_adapters(
         inputs.extend(AdversarialFuzzer.generate(suite.fuzzing, base_inputs=seed_inputs))
 
     rows: List[CompareRow] = []
-    identical_count = a_pass_count = b_pass_count = only_a = only_b = 0
+    identical_count = a_pass_count = b_pass_count = only_a = only_b = errored_count = 0
 
     for inp in inputs:
         out_a, lat_a, err_a = _infer_safely(backend, adapter_a, inp)
@@ -146,12 +193,12 @@ def compare_adapters(
 
         failed_a = []
         for rule in suite.assertions:
-            ok, reason = evaluate_assertion(out_a, rule)
+            ok, reason = evaluate_assertion(out_a, rule, abstain_value=suite.abstain_value)
             if not ok:
                 failed_a.append(f"{rule.rule}: {reason}")
         failed_b = []
         for rule in suite.assertions:
-            ok, reason = evaluate_assertion(out_b, rule)
+            ok, reason = evaluate_assertion(out_b, rule, abstain_value=suite.abstain_value)
             if not ok:
                 failed_b.append(f"{rule.rule}: {reason}")
 
@@ -166,6 +213,8 @@ def compare_adapters(
             only_a += 1
         if pass_b and not pass_a:
             only_b += 1
+        if err_a or err_b:
+            errored_count += 1
 
         rows.append(
             CompareRow(
@@ -188,13 +237,14 @@ def compare_adapters(
         task_name=suite.task_name,
         adapter_a=str(adapter_a),
         adapter_b=str(adapter_b),
-        manifest_a=read_adapter_manifest(str(adapter_a)),
-        manifest_b=read_adapter_manifest(str(adapter_b)),
+        manifest_a=_project_manifest(read_adapter_manifest(str(adapter_a))),
+        manifest_b=_project_manifest(read_adapter_manifest(str(adapter_b))),
         total_cases=len(rows),
         identical_count=identical_count,
         a_pass_count=a_pass_count,
         b_pass_count=b_pass_count,
         only_a_pass_count=only_a,
         only_b_pass_count=only_b,
+        errored_count=errored_count,
         rows=rows,
     )

@@ -64,19 +64,33 @@ correct; silently returning something misleading does not).
 
 Respond with EXACTLY one line: "YES: <reason, <15 words>" or "NO: <reason, <15 words>"."""
 
-_VERDICT_RE = re.compile(r"^\s*(YES|NO)\b[:.,]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
+_VERDICT_RE = re.compile(r"^\s*(YES|NO)\b[:.,]?\s*(.*)$", re.IGNORECASE)
 
 
 def parse_verdict(raw_text: str) -> Tuple[bool, str]:
     """Parse a judge's raw response into `(verdict, reason)`.
 
-    Handles the documented `"YES: reason"` / `"NO: reason"` shape and tolerates a bare
-    `"YES"` or `"No."` with no reason attached. Anything that doesn't even start with
-    YES/NO -- empty, truncated, off-format -- is treated as a **NO with reason
+    Only the first non-empty line of `raw_text` is considered. Handles the documented
+    `"YES: reason"` / `"NO: reason"` shape and tolerates a bare `"YES"` or `"No."` with
+    no reason attached. Anything that doesn't even start with YES/NO on that first line
+    -- empty, truncated, off-format -- is treated as a **NO with reason
     "unparseable"**: a judge that didn't follow the requested format is not a signal to
     silently count as a pass.
+
+    Deliberately does *not* match across the whole response (no `re.DOTALL`, and only
+    the first line is even considered): a self-correcting multi-line response like
+    `"YES\\nNO"` used to be read as YES with reason "NO" -- the model's own
+    correction was folded into a would-be pass's reason text instead of changing the
+    verdict at all.
     """
-    match = _VERDICT_RE.match(raw_text or "")
+    text = raw_text or ""
+    first_line = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            first_line = stripped
+            break
+    match = _VERDICT_RE.match(first_line)
     if not match:
         return False, "unparseable"
     verdict = match.group(1).upper() == "YES"
@@ -97,13 +111,20 @@ def case_id_for(input_text: str, output_text: str) -> str:
 
 
 class JudgeInputRow(BaseModel):
-    """One case to be judged. `expected` is accepted but never shown to the judge --
-    matching `measure_semantic_correctness.py`'s own rule that the judge sees only the
-    spec, the input, and the adapter's output, never the suite's own gold label."""
+    """One case to be judged. `expected` and `rule_passed` are accepted but never shown
+    to the judge -- matching `measure_semantic_correctness.py`'s own rule that the judge
+    sees only the spec, the input, and the adapter's output, never the suite's own gold
+    label or its own assertion outcome."""
 
     input: str
     output: str
     expected: Optional[str] = None
+    # The originating report's own pass/fail for this case (`check --json`'s
+    # `results[].passed`, or `compare --json`'s `rows[].pass_a`/`pass_b`) -- carried
+    # through to `JudgeVerdict.rule_passed` so a caller can see where the judge and the
+    # suite's own assertions disagree, without re-reading the source report. `None`
+    # means the caller didn't have one to pass (e.g. a hand-built row).
+    rule_passed: Optional[bool] = None
 
 
 class JudgeVerdict(BaseModel):
@@ -114,6 +135,13 @@ class JudgeVerdict(BaseModel):
     output: str
     verdict: bool
     reason: str
+    # Copied straight from `JudgeInputRow.rule_passed` -- see that field's docstring.
+    rule_passed: Optional[bool] = None
+    # Set only when the `judge` callable itself raised (network error, rate limit,
+    # timeout) for this case -- distinct from `reason == "unparseable"`, which means the
+    # judge answered but not in the requested format. `verdict` is `False` in both
+    # cases, but only this field says the judge was never actually consulted.
+    judge_error: Optional[str] = None
 
 
 class JudgeReport(BaseModel):
@@ -127,6 +155,13 @@ class JudgeReport(BaseModel):
     total_cases: int = 0
     pass_count: int = 0
     pass_rate: float = 0.0
+    # Verdicts folded into `pass_count` as a fail because the judge's raw response
+    # didn't parse (see `parse_verdict`) -- a model that answered "Verdict: YES" or
+    # "**YES**" reads as 0% pass without this being visible separately.
+    unparseable_count: int = 0
+    # Verdicts where the `judge` callable itself raised, not just answered off-format --
+    # see `JudgeVerdict.judge_error`.
+    error_count: int = 0
     verdicts: List[JudgeVerdict] = Field(default_factory=list)
 
 
@@ -144,13 +179,40 @@ def judge_outputs(
     raw text response comes out. `spec` and `temperature_note` are recorded on the report
     so a later reader (or `judge --diff`) knows what was asked and under what sampling
     settings, without re-deriving it from the caller's code.
+
+    A `judge` call that raises (a paid judge run is one HTTP call per case, with no
+    retry) is caught per case, not left to abort the whole run: that case's verdict
+    records the failure in `judge_error` and scoring continues, mirroring
+    `paw_kit.test.compare._infer_safely`'s "one bad case doesn't crash the batch"
+    handling of a backend failure.
     """
     verdicts: List[JudgeVerdict] = []
     pass_count = 0
+    unparseable_count = 0
+    error_count = 0
     for row in rows:
         prompt = JUDGE_PROMPT.format(spec=spec, input=row.input, output=row.output)
-        raw = judge(prompt)
+        try:
+            raw = judge(prompt)
+        except Exception as exc:  # noqa: BLE001 -- one case's failure (rate limit,
+            # network blip, timeout) must not discard every verdict already collected.
+            error_count += 1
+            verdicts.append(
+                JudgeVerdict(
+                    case_id=case_id_for(row.input, row.output),
+                    input=row.input,
+                    output=row.output,
+                    verdict=False,
+                    reason="judge call failed",
+                    rule_passed=row.rule_passed,
+                    judge_error=str(exc),
+                )
+            )
+            continue
+
         verdict, reason = parse_verdict(raw)
+        if reason == "unparseable":
+            unparseable_count += 1
         pass_count += int(verdict)
         verdicts.append(
             JudgeVerdict(
@@ -159,6 +221,7 @@ def judge_outputs(
                 output=row.output,
                 verdict=verdict,
                 reason=reason,
+                rule_passed=row.rule_passed,
             )
         )
 
@@ -170,6 +233,8 @@ def judge_outputs(
         total_cases=total,
         pass_count=pass_count,
         pass_rate=(pass_count / total * 100.0) if total else 0.0,
+        unparseable_count=unparseable_count,
+        error_count=error_count,
         verdicts=verdicts,
     )
 
@@ -215,6 +280,16 @@ def anthropic_judge(
         return "".join(block.text for block in response.content if hasattr(block, "text")).strip()
 
     return _judge
+
+
+def judge_disagreements(report: JudgeReport) -> List[JudgeVerdict]:
+    """Verdicts where the source report's own assertion pass/fail (`rule_passed`)
+    disagrees with the judge's verdict -- the case that matters most (assertions pass,
+    judge says NO, or the reverse) and the one a plain pass-rate number hides.
+    `rule_passed is None` (no source report pass/fail was carried through) is excluded,
+    not treated as a disagreement.
+    """
+    return [v for v in report.verdicts if v.rule_passed is not None and v.rule_passed != v.verdict]
 
 
 class VerdictFlip(BaseModel):

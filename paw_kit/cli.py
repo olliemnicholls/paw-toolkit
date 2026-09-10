@@ -9,7 +9,7 @@ import re
 import sys
 import tempfile
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -28,6 +28,7 @@ from paw_kit.test.judge import (
     JudgeReport,
     anthropic_judge,
     diff_verdicts,
+    judge_disagreements,
     judge_outputs,
 )
 from paw_kit.test.runner import TestRunner
@@ -556,9 +557,11 @@ def compare_cmd(
     suite_path: Path = typer.Argument(..., help="Path to declarative suite.yaml specification"),
     backend_type: str = typer.Option("mock", "--backend", "-b", help="Backend engine: mock | real"),
     fuzz: bool = typer.Option(
-        False,
+        True,
         "--fuzz/--no-fuzz",
-        help="Also run the suite's fuzz cases (not just standard_cases) through both adapters",
+        help="Also run the suite's fuzz cases through both adapters, not just "
+        "standard_cases -- on by default, so a default `compare` run covers the same "
+        "cases `paw-test check` does. Pass --no-fuzz for standard_cases only.",
     ),
     json_out: Optional[Path] = typer.Option(
         None, "--json", help="Write the full CompareReport as JSON to this path"
@@ -571,6 +574,10 @@ def compare_cmd(
     different compile from `paw-4b-qwen3-0.6b` (132/134 byte-identical outputs, see
     `measurements/README.md`'s "Finetune compiler" section), where the aggregate pass-rate
     delta alone sat inside the LLM judge's own measured run-to-run noise.
+
+    Both adapters are held in memory for the whole run (two ~600MB llama.cpp models
+    under `--backend real`, never released) -- the first row's latencies include that
+    cold load, not steady-state inference time.
     """
     for label, adapter_path_arg in (("A", adapter_a), ("B", adapter_b)):
         if not adapter_path_arg.exists():
@@ -599,6 +606,22 @@ def compare_cmd(
         str(adapter_a), str(adapter_b), suite, backend, include_fuzz=fuzz
     )
 
+    # PAW-TEST-08-style backend failures (`_infer_safely`) never raise -- a backend
+    # that errors on every case still produces a "complete" report, byte-identical
+    # "[EXECUTION_ERROR]" output for both adapters, and no differing rows at all. Print
+    # every errored case's own error text, separately from the differences section
+    # below, so that isn't mistaken for a clean comparison that measured nothing.
+    errored_rows = [row for row in report.rows if row.execution_error_a or row.execution_error_b]
+    if errored_rows:
+        console.print(f"[bold red]Errors ({_e(len(errored_rows))}/{_e(report.total_cases)}):[/bold red]\n")
+        for row in errored_rows:
+            console.print(f"  [bold]Input:[/bold] {_e(row.input[:80])}")
+            if row.execution_error_a:
+                console.print(f"    [red]A error:[/red] {_e(row.execution_error_a)}")
+            if row.execution_error_b:
+                console.print(f"    [red]B error:[/red] {_e(row.execution_error_b)}")
+        console.print()
+
     differing = report.differing_rows
     if differing:
         console.print(f"[bold]Differences ({_e(len(differing))}/{_e(report.total_cases)}):[/bold]\n")
@@ -608,18 +631,67 @@ def compare_cmd(
             console.print(f"    B -> {_e(row.output_b[:80])}")
             if row.pass_a != row.pass_b:
                 console.print(f"    [yellow]pass differs:[/yellow] A={_e(row.pass_a)} B={_e(row.pass_b)}")
-    else:
+    elif not errored_rows:
+        # Suppressed whenever any case errored -- both adapters raising on every case is
+        # exactly the "0 differing rows" shape this green line used to paper over.
         console.print("[bold green]No differences[/bold green] -- identical output and pass status on every case.")
 
     console.print(
         f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output, "
         f"A pass {_e(report.a_pass_count)}/{_e(report.total_cases)}, "
         f"B pass {_e(report.b_pass_count)}/{_e(report.total_cases)}, "
-        f"only-A-pass {_e(report.only_a_pass_count)}, only-B-pass {_e(report.only_b_pass_count)}"
+        f"only-A-pass {_e(report.only_a_pass_count)}, only-B-pass {_e(report.only_b_pass_count)}, "
+        f"errored {_e(report.errored_count)}/{_e(report.total_cases)}"
     )
 
     _write_json_report(json_out, report.model_dump())
+    if errored_rows:
+        raise typer.Exit(code=1)
     raise typer.Exit(code=0)
+
+
+def _load_judge_verdicts_file(path: Path) -> Dict[str, JudgeReport]:
+    """Load a `judge --out` file for `--diff`.
+
+    Accepts both shapes `--out` can write: a bare `JudgeReport` (judging a `check`
+    report) -- returned as `{"": report}` -- or the `{"adapter_a": ..., "adapter_b":
+    ...}` wrapper (judging a `compare` report) -- returned as `{"A": ..., "B": ...}`.
+    Before this, `--diff` on a compare-shaped `--out` file validated the whole file as
+    one `JudgeReport` and failed outright (finding 4).
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "adapter_a" in data and "adapter_b" in data:
+        return {
+            "A": JudgeReport.model_validate(data["adapter_a"]),
+            "B": JudgeReport.model_validate(data["adapter_b"]),
+        }
+    return {"": JudgeReport.model_validate(data)}
+
+
+# Above this share of a judge run's cases parsing as "unparseable" (finding 6), warn --
+# a run where most responses didn't even follow the requested YES/NO format is a broken
+# judge/prompt, not a genuinely bad pass rate, and the plain pass-rate number alone
+# reads identically to both.
+_UNPARSEABLE_WARN_THRESHOLD = 0.2
+
+
+def _warn_on_unparseable(report: JudgeReport, side: Optional[str] = None) -> None:
+    """Print a stderr warning when more than `_UNPARSEABLE_WARN_THRESHOLD` of a judge
+    run's verdicts came from an unparseable response (see `JudgeReport.unparseable_count`
+    and `parse_verdict`)."""
+    if not report.total_cases:
+        return
+    rate = report.unparseable_count / report.total_cases
+    if rate <= _UNPARSEABLE_WARN_THRESHOLD:
+        return
+    label = f" ({side})" if side else ""
+    print(
+        f"[paw-test judge] WARNING: {report.unparseable_count}/{report.total_cases} "
+        f"({rate * 100:.0f}%) judge responses{label} were unparseable "
+        f"(judge_id={report.judge_id}) -- these count as a fail, not a reliable "
+        "pass/fail signal. Check the judge's raw responses or prompt format.",
+        file=sys.stderr,
+    )
 
 
 @test_app.command(name="judge")
@@ -649,6 +721,11 @@ def judge_cmd(
     input/output 4.5% of the time (6/134), measured in `measurements/README.md`'s
     "Finetune compiler" section. `--diff` is how to check whether that is still true for a
     given judge and prompt.
+
+    Every case's spec, input, and output leaves this machine: each is sent to the
+    configured judge provider (Anthropic by default) as part of the judge prompt.
+    Judging a `compare` report costs 2x cases in judge calls, since both adapters'
+    outputs are judged separately.
     """
     if diff is not None:
         old_path, new_path = diff
@@ -657,30 +734,46 @@ def judge_cmd(
                 console.print(f"[bold red]Error:[/bold red] Verdicts file '{_e(diff_path)}' does not exist.")
                 raise typer.Exit(code=1)
         try:
-            old_report = JudgeReport.model_validate_json(old_path.read_text(encoding="utf-8"))
-            new_report = JudgeReport.model_validate_json(new_path.read_text(encoding="utf-8"))
+            old_reports = _load_judge_verdicts_file(old_path)
+            new_reports = _load_judge_verdicts_file(new_path)
         except Exception as exc:
             console.print(f"[bold red]Error reading verdicts:[/bold red] {_e(exc)}")
             raise typer.Exit(code=1)
 
-        diff_report = diff_verdicts(old_report, new_report)
-        if diff_report.flips:
+        if set(old_reports) != set(new_reports):
             console.print(
-                f"[bold]Flipped verdicts ({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)}):[/bold]\n"
+                "[bold red]Error:[/bold red] old and new verdicts files are different shapes -- "
+                "one is a single judge report, the other a `compare`-report A/B wrapper."
             )
-            for flip in diff_report.flips:
-                console.print(f"  [bold]Input:[/bold] {_e(flip.input[:80])}")
-                console.print(f"    Output: {_e(flip.output[:80])}")
+            raise typer.Exit(code=1)
+
+        # "" alone for a bare JudgeReport; "A" then "B" for a compare-report wrapper --
+        # diffs A against A and B against B, and prints both (finding 4).
+        for i, side in enumerate(sorted(old_reports)):
+            if i > 0:
+                console.print()
+            old_report = old_reports[side]
+            new_report = new_reports[side]
+            diff_report = diff_verdicts(old_report, new_report)
+            suffix = f" ({side})" if side else ""
+            if diff_report.flips:
                 console.print(
-                    f"    {_e(old_report.judge_id)}: {_e(flip.old_verdict)} ({_e(flip.old_reason)})  ->  "
-                    f"{_e(new_report.judge_id)}: {_e(flip.new_verdict)} ({_e(flip.new_reason)})"
+                    f"[bold]Flipped verdicts{_e(suffix)} "
+                    f"({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)}):[/bold]\n"
                 )
-        else:
-            console.print("[bold green]No flips[/bold green] -- every comparable verdict matched.")
-        console.print(
-            f"\n[bold]Flip rate:[/bold] {_e(round(diff_report.flip_rate, 1))}% "
-            f"({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)})"
-        )
+                for flip in diff_report.flips:
+                    console.print(f"  [bold]Input:[/bold] {_e(flip.input[:80])}")
+                    console.print(f"    Output: {_e(flip.output[:80])}")
+                    console.print(
+                        f"    {_e(old_report.judge_id)}: {_e(flip.old_verdict)} ({_e(flip.old_reason)})  ->  "
+                        f"{_e(new_report.judge_id)}: {_e(flip.new_verdict)} ({_e(flip.new_reason)})"
+                    )
+            else:
+                console.print(f"[bold green]No flips{_e(suffix)}[/bold green] -- every comparable verdict matched.")
+            console.print(
+                f"\n[bold]Flip rate{_e(suffix)}:[/bold] {_e(round(diff_report.flip_rate, 1))}% "
+                f"({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)})"
+            )
         raise typer.Exit(code=0)
 
     if report is None:
@@ -742,8 +835,14 @@ def judge_cmd(
     judge_id = f"anthropic/{model}/temperature=0.0"
 
     if "rows" in report_data and "adapter_a" in report_data:
-        rows_a = [JudgeInputRow(input=r["input"], output=r["output_a"]) for r in report_data["rows"]]
-        rows_b = [JudgeInputRow(input=r["input"], output=r["output_b"]) for r in report_data["rows"]]
+        rows_a = [
+            JudgeInputRow(input=r["input"], output=r["output_a"], rule_passed=r.get("pass_a"))
+            for r in report_data["rows"]
+        ]
+        rows_b = [
+            JudgeInputRow(input=r["input"], output=r["output_b"], rule_passed=r.get("pass_b"))
+            for r in report_data["rows"]
+        ]
         report_a = judge_outputs(
             rows_a, judge_fn, spec=resolved_spec, temperature_note=temperature_note, judge_id=f"{judge_id}/A"
         )
@@ -762,12 +861,31 @@ def judge_cmd(
                 console.print(f"    B: {_e(vb.output[:80])} -> {_e(vb.verdict)} ({_e(vb.reason)})")
         else:
             console.print("[bold green]No verdict differences[/bold green] between A and B.")
+        # Finding 5: assertions passing/failing and the judge's own verdict are two
+        # separate signals -- print where they disagree instead of only ever showing
+        # the judge's own YES/NO.
+        for side_label, side_report in (("A", report_a), ("B", report_b)):
+            disagreements = judge_disagreements(side_report)
+            if disagreements:
+                console.print(
+                    f"\n[bold yellow]judge disagrees with assertions ({_e(side_label)}) "
+                    f"({_e(len(disagreements))}/{_e(side_report.total_cases)}):[/bold yellow]"
+                )
+                for v in disagreements:
+                    console.print(
+                        f"  {_e(v.case_id)}: rule_passed={_e(v.rule_passed)} "
+                        f"judge={_e(v.verdict)} ({_e(v.reason)})"
+                    )
         console.print(
             f"\n[bold]Summary:[/bold] A pass rate {_e(round(report_a.pass_rate, 1))}% "
             f"({_e(report_a.pass_count)}/{_e(report_a.total_cases)}), "
+            f"unparseable A {_e(report_a.unparseable_count)}, errored A {_e(report_a.error_count)}, "
             f"B pass rate {_e(round(report_b.pass_rate, 1))}% "
-            f"({_e(report_b.pass_count)}/{_e(report_b.total_cases)})"
+            f"({_e(report_b.pass_count)}/{_e(report_b.total_cases)}), "
+            f"unparseable B {_e(report_b.unparseable_count)}, errored B {_e(report_b.error_count)}"
         )
+        _warn_on_unparseable(report_a, side="A")
+        _warn_on_unparseable(report_b, side="B")
         if out is not None:
             out.write_text(
                 json.dumps({"adapter_a": report_a.model_dump(), "adapter_b": report_b.model_dump()}, indent=2),
@@ -777,7 +895,10 @@ def judge_cmd(
         raise typer.Exit(code=0)
 
     if "results" in report_data:
-        rows = [JudgeInputRow(input=r["input"], output=r["output"]) for r in report_data["results"]]
+        rows = [
+            JudgeInputRow(input=r["input"], output=r["output"], rule_passed=r.get("passed"))
+            for r in report_data["results"]
+        ]
         jreport = judge_outputs(
             rows, judge_fn, spec=resolved_spec, temperature_note=temperature_note, judge_id=judge_id
         )
@@ -790,10 +911,25 @@ def judge_cmd(
                 console.print(f"    [red]Reason:[/red] {_e(v.reason)}")
         else:
             console.print("[bold green]Judge said YES on every case.[/bold green]")
+        # Finding 5: the case that matters most is assertions-pass-judge-says-NO (or the
+        # reverse), and it's invisible in the "Judge said NO" list above whenever the
+        # assertions themselves failed too.
+        disagreements = judge_disagreements(jreport)
+        if disagreements:
+            console.print(
+                f"\n[bold yellow]judge disagrees with assertions "
+                f"({_e(len(disagreements))}/{_e(jreport.total_cases)}):[/bold yellow]"
+            )
+            for v in disagreements:
+                console.print(
+                    f"  {_e(v.case_id)}: rule_passed={_e(v.rule_passed)} judge={_e(v.verdict)} ({_e(v.reason)})"
+                )
         console.print(
             f"\n[bold]Pass rate:[/bold] {_e(round(jreport.pass_rate, 1))}% "
-            f"({_e(jreport.pass_count)}/{_e(jreport.total_cases)})"
+            f"({_e(jreport.pass_count)}/{_e(jreport.total_cases)}), "
+            f"unparseable {_e(jreport.unparseable_count)}, errored {_e(jreport.error_count)}"
         )
+        _warn_on_unparseable(jreport)
         if out is not None:
             out.write_text(jreport.model_dump_json(indent=2), encoding="utf-8")
             console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")

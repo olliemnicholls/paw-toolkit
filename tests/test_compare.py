@@ -199,7 +199,8 @@ def test_compare_cli_json_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     out_path = Path("report.json")
 
     result = runner.invoke(
-        test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--json", str(out_path)]
+        test_app,
+        ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz", "--json", str(out_path)],
     )
     assert result.exit_code == 0
     assert out_path.exists()
@@ -263,6 +264,218 @@ def test_compare_never_calls_compile(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(backend, "compile", _boom)
     compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=True)
+
+
+# ------------------------------------------------------------ finding 1: execution errors
+
+
+def test_compare_adapters_records_execution_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reproduces finding 1: a backend that raises on every case must not be invisible
+    -- `errored_count` and each row's `execution_error_a/_b` must carry the failure."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": "HELLO", "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO", "world": "WORLD"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("backend offline")
+
+    monkeypatch.setattr(backend, "infer", _boom)
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    assert report.errored_count == 2
+    assert all(row.execution_error_a == "backend offline" for row in report.rows)
+    assert all(row.execution_error_b == "backend offline" for row in report.rows)
+    # Both adapters raise identically -> "[EXECUTION_ERROR]" for both, same pass status
+    # -- differing_rows alone would hide this entirely (the bug in finding 1).
+    assert report.differing_rows == []
+
+
+def test_compare_cli_reports_execution_errors_suppresses_green_line_and_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("a.paw")
+    adapter_b = Path("b.paw")
+    _write_mock_manifest(adapter_a, {"hello": "HELLO", "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO", "world": "WORLD"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    broken_backend = MockPAWBackend()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("backend offline")
+
+    monkeypatch.setattr(broken_backend, "infer", _boom)
+
+    import paw_kit.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "_resolve_cli_backend", lambda backend_type: broken_backend)
+
+    result = runner.invoke(test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz"])
+
+    assert result.exit_code != 0
+    assert "Errors (2/2)" in result.output
+    assert "backend offline" in result.output
+    assert "No differences" not in result.output
+    assert "errored 2/2" in result.output
+
+
+# --------------------------------------------------------- finding 1 (cont.): manifest gate
+
+
+def test_read_adapter_manifest_rejects_json_without_backend_key(tmp_path: Path) -> None:
+    path = tmp_path / "not_a_manifest.paw"
+    path.write_text(json.dumps({"foo": "bar", "examples": []}), encoding="utf-8")
+    assert read_adapter_manifest(str(path)) == {}
+
+
+def test_compare_cli_manifest_lacking_expected_shape_is_hard_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A JSON dict that isn't shaped like a manifest (no `backend` field) must be
+    rejected by the same gate that rejects unparseable-as-JSON files, with the error
+    text the CLI already claims ('not the expected shape')."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("a.paw")
+    adapter_b = Path("b.paw")
+    _write_mock_manifest(adapter_a, {"hello": "HELLO"})
+    adapter_b.write_text(json.dumps({"foo": "bar", "examples": []}), encoding="utf-8")
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    result = runner.invoke(test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path)])
+    assert result.exit_code == 1
+    assert "Could not read a manifest" in result.output
+    assert "expected shape" in result.output
+
+
+# ----------------------------------------------------------------- finding 2: abstain_value
+
+ABSTAIN_SUITE_YAML = """
+task_name: abstain_parity
+spec: "Parse the date or abstain"
+adapter_path: "{adapter_path}"
+abstain_value: "IDK"
+
+standard_cases:
+  - input: "impossible date"
+    expected: "2026-01-01"
+
+assertions:
+  - rule: exact_match
+    value: "2026-01-01"
+"""
+
+
+def test_compare_and_check_agree_on_abstain_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reproduces finding 2: compare must thread `suite.abstain_value` through
+    `evaluate_assertion` the same way `TestRunner.run` does, or the same abstaining
+    output passes `check` and fails `compare`."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    rules = {"impossible date": "IDK"}
+    _write_mock_manifest(adapter_a, rules)
+    _write_mock_manifest(adapter_b, dict(rules))
+
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(ABSTAIN_SUITE_YAML.replace("{adapter_path}", str(adapter_a)), encoding="utf-8")
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    compare_report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+    assert compare_report.a_pass_count == 1
+    assert compare_report.b_pass_count == 1
+
+    from paw_kit.test.runner import TestRunner
+
+    check_report = TestRunner(backend=backend).run(suite)
+    assert check_report.is_success
+
+
+# --------------------------------------------------------------------- finding 3: fuzz default
+
+
+def test_compare_adapters_defaults_to_include_fuzz(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": "HELLO", "world": "WORLD", "fuzzy input": "FUZZY INPUT"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO", "world": "WORLD", "fuzzy input": "FUZZY INPUT"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    default_report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend)
+    explicit_report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=True)
+
+    assert default_report.total_cases == explicit_report.total_cases
+    assert any(row.input == "fuzzy input" for row in default_report.rows)
+
+
+def test_compare_cli_runs_fuzz_cases_by_default_and_no_fuzz_opts_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("a.paw")
+    adapter_b = Path("b.paw")
+    _write_mock_manifest(adapter_a, {"hello": "HELLO", "world": "WORLD", "fuzzy input": "FUZZY INPUT"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO", "world": "WORLD", "fuzzy input": "FUZZY INPUT"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    with_fuzz_out = Path("with_fuzz.json")
+    result = runner.invoke(
+        test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--json", str(with_fuzz_out)]
+    )
+    assert result.exit_code == 0
+    with_fuzz = json.loads(with_fuzz_out.read_text(encoding="utf-8"))
+    assert with_fuzz["total_cases"] == 3  # 2 standard_cases + 1 adversarial_probes entry
+
+    no_fuzz_out = Path("no_fuzz.json")
+    result = runner.invoke(
+        test_app,
+        ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz", "--json", str(no_fuzz_out)],
+    )
+    assert result.exit_code == 0
+    no_fuzz = json.loads(no_fuzz_out.read_text(encoding="utf-8"))
+    assert no_fuzz["total_cases"] == 2
+
+
+# --------------------------------------------------------------------- finding 10: docs/help
+
+
+def test_compare_cli_help_mentions_memory_and_cold_load() -> None:
+    result = runner.invoke(test_app, ["compare", "--help"])
+    assert result.exit_code == 0
+    assert "memory" in result.output
+    assert "cold load" in result.output
+
+
+# ------------------------------------------------------------------- finding 11: manifest fields
+
+
+def test_compare_report_manifest_projected_to_display_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": "HELLO", "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO", "world": "WORLD"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    assert report.manifest_a.get("backend") == "mock"
+    for forbidden in ("examples", "spec", "rules"):
+        assert forbidden not in report.manifest_a
+        assert forbidden not in report.manifest_b
 
 
 def test_no_unescaped_console_interpolations_in_compare_and_judge_commands():
