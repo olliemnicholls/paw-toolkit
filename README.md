@@ -1,6 +1,8 @@
 # paw-kit
 
-**A reliability and migration harness for Program-as-Weights (PAW) neural functions.**
+**PAW compiles a spec into a tiny local model. paw-kit tells you whether you can trust the one you just made.**
+
+A reliability and migration harness for Program-as-Weights (PAW) neural functions.
 
 [![Python Version](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
@@ -122,6 +124,7 @@ for i in range(1, 6):
 - [Test before trusting](./docs/testing.md): suites, fuzzing, active learning,
   `paw-test compare`, `paw-test judge`, `paw-kit lint-spec`.
 - [Serve over HTTP](./docs/serving.md): `paw-serve`, `/ready`, Docker export.
+- [Results](./docs/results.md): every measured number, one page.
 - [Roadmap](./docs/roadmap.md).
 
 ## CLI

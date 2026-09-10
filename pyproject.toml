@@ -1,7 +1,7 @@
 [project]
 name = "paw-kit"
 version = "0.1.0"
-description = "Reliability and migration harness for Program-as-Weights (PAW) neural functions (early alpha)"
+description = "PAW compiles a spec into a tiny local model. paw-kit tells you whether you can trust the one you just made. Reliability and migration harness for Program-as-Weights (early alpha)"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
