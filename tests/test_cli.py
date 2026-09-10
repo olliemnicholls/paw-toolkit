@@ -1076,3 +1076,137 @@ def test_public_api_is_importable_and_excludes_deleted_backends():
     assert "RealPAWBackend" not in paw_kit.__all__
     assert "RealPAWBackend" not in paw_kit.backend.__all__
     assert not hasattr(paw_kit, "RealPAWBackend")
+
+
+# --- Track 14: `paw-kit report` ------------------------------------------------
+
+
+def _seed_shadow_db(db_file: Path) -> str:
+    """Build a trace database holding one promoted task with a recorded disagreement."""
+    from paw_kit.jit.db import TraceDB
+
+    db = TraceDB(str(db_file))
+    task_id = "a" * 64
+    db.sync_shadow_config(
+        task_id,
+        {"shadow_window": 2, "shadow_threshold": 0.8, "audit_window": 2, "demote_threshold": 0.6},
+    )
+    db.record_trace(task_id, "hello", "teacher:hello", 1.0)
+    db.record_trace(task_id, "world", "teacher:world", 1.0)
+    db.set_shadow_started(task_id, str(db_file.parent / "adapter.paw"))
+    epoch = db.get_task_routing(task_id)[2]
+    db.record_shadow_pair(
+        task_id, epoch, "shadow", "hello", "teacher:hello", "teacher:hello", "agree"
+    )
+    db.record_shadow_pair(
+        task_id, epoch, "shadow", "world", "teacher:world", "[v2] wrong", "disagree"
+    )
+    db.try_promote(task_id, epoch, 0.5, 2)
+    db.increment_fail_open(task_id)
+    db.close()
+    return task_id
+
+
+def test_cli_report_missing_db_exits_one(tmp_path: Path) -> None:
+    """A missing trace database is a clear error, exit 1 -- mirroring `export dataset`."""
+    result = runner.invoke(app, ["report", "--db", str(tmp_path / "nope.db")])
+    assert result.exit_code == 1
+    # Rich wraps the path, so normalise the line breaks before matching.
+    assert "not exist" in " ".join(result.stdout.split())
+
+
+def test_cli_report_empty_db_exits_zero(tmp_path: Path) -> None:
+    """An empty database is not an error."""
+    from paw_kit.jit.db import TraceDB
+
+    db_file = tmp_path / "empty" / "traces.db"
+    TraceDB(str(db_file)).close()
+    result = runner.invoke(app, ["report", "--db", str(db_file)])
+    assert result.exit_code == 0
+    assert "No tasks recorded" in result.stdout
+
+
+def test_cli_report_renders_state_agreement_and_fail_open(tmp_path: Path) -> None:
+    """The table shows per-task state, calls, agreement and the persisted fail-open count."""
+    db_file = tmp_path / "report" / "traces.db"
+    task_id = _seed_shadow_db(db_file)
+
+    result = runner.invoke(app, ["report", "--db", str(db_file)])
+    assert result.exit_code == 0, result.stdout
+    assert task_id[:12] in result.stdout
+    assert "ready" in result.stdout
+    # The disagreement panel renders the adapter's bracketed output without Rich
+    # eating it or raising MarkupError.
+    assert "disagree" in result.stdout
+    assert "[v2] wrong" in result.stdout
+
+
+def test_cli_report_json_output_matches_get_task_report(tmp_path: Path) -> None:
+    """--json emits exactly what TraceDB.get_task_report reports, plus disagreements."""
+    from paw_kit.jit.db import TraceDB
+
+    db_file = tmp_path / "reportjson" / "traces.db"
+    task_id = _seed_shadow_db(db_file)
+
+    result = runner.invoke(app, ["report", "--db", str(db_file), "--json"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [entry["task_id"] for entry in payload["tasks"]] == [task_id]
+
+    db = TraceDB(str(db_file))
+    expected = db.get_task_report(task_id)
+    db.close()
+    entry = payload["tasks"][0]
+    for key, value in expected.items():
+        assert entry[key] == value
+    assert len(entry["last_disagreements"]) == 1
+
+
+def test_cli_report_migrates_v1_db_in_place(tmp_path: Path) -> None:
+    """`report` opens a real TraceDB, so it migrates a pre-v2 database. Documented, not a bug."""
+    import sqlite3
+
+    db_file = tmp_path / "v1" / "traces.db"
+    db_file.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(db_file))
+    conn.executescript(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY, call_count INTEGER DEFAULT 0, adapter_path TEXT,
+            status TEXT DEFAULT 'tracing', compile_attempts INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+            input_payload TEXT NOT NULL, teacher_output TEXT NOT NULL,
+            latency_ms REAL NOT NULL, timestamp TEXT NOT NULL);
+        INSERT INTO tasks VALUES ('b0', 7, NULL, 'tracing', 0, '2026-01-01', '2026-01-01');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(app, ["report", "--db", str(db_file)])
+    assert result.exit_code == 0, result.stdout
+    assert "tracing" in result.stdout
+
+    conn = sqlite3.connect(str(db_file))
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")}
+    assert {"shadow_pairs", "state_transitions"} <= tables
+    assert conn.execute("PRAGMA user_version;").fetchone()[0] == 2
+    conn.close()
+
+
+def test_cli_report_task_filter_selects_one_task(tmp_path: Path) -> None:
+    """--task narrows the report to a single task_id."""
+    from paw_kit.jit.db import TraceDB
+
+    db_file = tmp_path / "filter" / "traces.db"
+    task_id = _seed_shadow_db(db_file)
+    db = TraceDB(str(db_file))
+    db.record_trace("c" * 64, "other", "teacher:other", 1.0)
+    db.close()
+
+    result = runner.invoke(app, ["report", "--db", str(db_file), "--task", task_id, "--json"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [entry["task_id"] for entry in payload["tasks"]] == [task_id]

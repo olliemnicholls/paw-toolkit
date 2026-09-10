@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import json
 import logging
 import queue
+import random
 import threading
 import time
 from typing import Any, Callable, Dict, Optional, Set, Tuple, Type
@@ -140,6 +141,12 @@ class ShadowRunner:
         self._stall_counter: Dict[Tuple[_RunnerKey, int], int] = {}
         self._seq_cache: Dict[Tuple[_RunnerKey, int], int] = {}
         self._error_logged: Set[Tuple[str, str]] = set()
+        # Stall-guard subsampling. Random rather than a deterministic "every Nth job"
+        # counter: systematic sampling aliases against periodic traffic (a task called
+        # in a repeating cycle would have the *same* residue class sampled forever), and
+        # the agreement figure `paw-kit report` shows for a stalled task would then be
+        # an artefact of that alignment rather than an estimate of its real rate.
+        self._stall_rng = random.Random()
 
     # --- caller-thread surface ------------------------------------------------
 
@@ -253,6 +260,7 @@ class ShadowRunner:
             self._stall_warned.add(cache_key)
             count = self._stall_counter.get(cache_key, 0) + 1
             self._stall_counter[cache_key] = count
+            keep = self._stall_rng.random() < (1.0 / job.shadow_window)
         if first:
             try:
                 stats = job.db.get_agreement_stats(
@@ -268,7 +276,7 @@ class ShadowRunner:
                 job.task_id, "unknown" if rate is None else f"{rate:.2f}", seq,
                 job.shadow_window,
             )
-        if count % job.shadow_window != 0:
+        if not keep:
             with self._lock:
                 self._stalled[job.key] = self._stalled.get(job.key, 0) + 1
             return True
@@ -405,6 +413,23 @@ class ShadowRunner:
         """
         window = job.window
         if window <= 0 or seq <= 0 or seq % window != 0:
+            return
+        if job.phase == "shadow" and seq > _SHADOW_STALL_FACTOR * window:
+            # A task that has run `_SHADOW_STALL_FACTOR` full windows at one epoch
+            # without ever clearing the threshold is not converging, and from here the
+            # runner is only sampling one comparison in every `shadow_window` -- a
+            # *systematic* subsample, which aliases badly against periodic traffic and
+            # can hand a below-threshold adapter a window drawn entirely from the
+            # inputs it happens to get right. Comparisons keep being recorded (so
+            # `paw-kit report` and `get_agreement()` still show the drift) but they no
+            # longer promote: the fail-safe direction, and the only reading under which
+            # "an adapter that disagrees more often than shadow_threshold never serves
+            # production traffic" is actually true rather than merely probable. Any
+            # epoch bump -- a config change, a demotion -- gives the task a fresh start.
+            logger.debug(
+                "paw_kit.jit.shadow: task_id=%s window complete at seq=%d but the task is "
+                "past the stall point; not evaluating promotion.", job.task_id, seq,
+            )
             return
         try:
             stats = job.db.get_agreement_stats(
