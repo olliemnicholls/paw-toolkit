@@ -507,6 +507,302 @@ structural rate as `93.3%` while the run artifact it cites
 one. Corrected at the source (the table now reads `92.5%`); this section's own
 `92.5% (124/134)` fast-compiler row was already right throughout.
 
+## Finetune compiler on a task the fast compiler fails
+
+The section above ends by naming its own blind spot: `paw-ft-bs48` had only ever been run
+on phone extraction, where an 8-example fast compile already sat at 93% and 132 of 134
+outputs came back byte-identical, and "the places `paw-ft-bs48` would plausibly earn its
+wall-time — a task the fast compiler genuinely fails at ... — are exactly the places this
+test did not go." This section goes there, on ticket triage: the one task in this
+document where the fast compiler is known to be *wrong* rather than near-saturated (the
+60%-agreement re-score above).
+
+**The headline is a negative result about the service, not about the compiler:
+`paw-ft-bs48` could not be compiled at all today.** Async compile is refused service-side
+with HTTP 503 `durable_queue_unavailable`, so the three-arm comparison this section was
+built to run is a two-arm comparison. Everything below is real and reproducible; the arm
+that would have answered the actual question is missing, and no number here should be
+read as evidence for or against the finetune compiler.
+
+```bash
+# Data: 20 recorded tickets + 48 fresh, teacher-generated, deduplicated.
+# 8 fresh -> folding pool; 40 fresh + 20 recorded -> 60-ticket evaluation set.
+# Every evaluation ticket labelled TWICE, independently, at temperature 0.
+uv run python scripts/measure_finetune_triage.py --label 3080 --no-run --skip-compile --arms A
+
+# Compile: A already compiled above; B and C in one call (C fails, see below).
+uv run python scripts/measure_finetune_triage.py --label 3080 --no-run --arms B,C
+
+# Inference: 60 tickets per arm on the 3080, temperature 0.
+uv run python scripts/measure_finetune_triage.py --label 3080 --skip-compile --arms A,B
+```
+
+Artifacts: `measurements/finetune-triage-tickets.json` (the committed data fixture: every
+ticket, both teacher labels, the folding pool), `measurements/finetune-triage-3080-20260910-145744.json`
+(the run), `measurements/finetune-triage-suite.yaml`,
+`measurements/finetune-triage-compare-AB.json`, `measurements/finetune-triage-judge-AB.json`.
+
+The compile manifests (`measurements/finetune_triage_{A,B}-paw-4b-qwen3-0.6b.paw` and their
+`.history.jsonl` lineage files) are **not** committed, and neither is any other `.paw` file
+in this directory: `.gitignore:39-40` excludes `*.paw` and `*.paw.history.jsonl`, so the
+manifests sitting next to the older measurements here are untracked local files too. Rather
+than force-add against that rule, every manifest field this section relies on —
+`program_id`, `compiler_snapshot`, `examples_folded_into_spec`, `compile_wall_s`, `public`,
+`cache_hit` — is mirrored per arm into the committed run JSON, so the lineage is checkable
+without the `.paw` files. Worth deciding deliberately one way or the other: a measurement
+whose provenance lives only in an ignored file is one `git clean` from unverifiable.
+
+### The arms
+
+| Arm | Compiler | Examples | Compiled? |
+|---|---|---|---|
+| A | `paw-4b-qwen3-0.6b` | 0 | yes, `a8be657c5ac492f0c296` |
+| B | `paw-4b-qwen3-0.6b` | 8 folded | yes, `f0df1ccfe6083ed8f6f7` |
+| C | `paw-ft-bs48` | 8 folded | **no — HTTP 503, twice** |
+
+All three were compiled `public=False` (the `ProgramAsWeightsBackend` default), which
+matters here: the folded spec carries eight full ticket bodies.
+
+### Results
+
+Scored against the **first** teacher label. "Full agreement" is all three fields exact;
+the "urgency ±1" column is the looser criterion the recorded 60% run used, kept so the
+two are comparable. Latency is per call on the 3080, excluding the first call (which
+includes the ~4 s llama.cpp model load and is reported separately).
+
+| Arm | Full agreement (all 3 exact) | Full (urgency ±1) | Priority | Department | Urgency exact | Urgency ±1 | Parse failures | Compile wall | Latency/call |
+|---|---|---|---|---|---|---|---|---|---|
+| A — fast, 0 examples | 38.3% (23/60) | 46.7% | 50.0% | 81.7% | 40.0% | 93.3% | 0/60 | 4.29 s | 89.9 ms (median 90.4, first 4567) |
+| B — fast, 8 examples | **53.3%** (32/60) | 55.0% | 63.3% | 90.0% | 60.0% | 93.3% | 0/60 | 4.94 s | 112.6 ms (median 112.0, first 4174) |
+| C — finetune, 8 examples | — | — | — | — | — | — | — | **compile refused** | — |
+| **Teacher ceiling** (label 1 vs label 2) | **91.7%** | 96.7% | 96.7% | 100.0% | 91.7% | 100.0% | n/a | n/a | n/a |
+
+Against the *second* teacher label the same ordering holds and every number moves by a
+few points (A 35.0% full-exact, B 46.7%), which is a useful sanity check: the gap between
+the arms (≈15 points) is several times larger than the gap between the two label sets
+(≈3–7 points).
+
+**This is the "task the fast compiler fails" the previous section asked for, and it is
+unambiguously that.** The best fast-compiler arm sits at 53.3% against a teacher that
+agrees with itself 91.7% of the time. There are ~38 points of headroom here, against
+phone extraction's ~7. Whatever `paw-ft-bs48` would have done, it had room to do it in.
+
+Note the teacher ceiling is itself a finding: two independent temperature-0 calls on the
+same 60 tickets disagree on 5 of them, always on `priority`/`urgency_score`, **never once
+on `department`** (100.0%). Department is the objective part of this task; priority is
+genuinely ambiguous, and no adapter can be scored above ~92% against this label set.
+
+### Why B beats A, and where both fail
+
+Per-case, B fixes 12 of A's errors, breaks 3, and leaves 25 wrong in the same way. The
+mechanism is visible in the output distributions:
+
+| | medium | high | critical | low |
+|---|---|---|---|---|
+| A's outputs | **35** | 10 | 10 | 5 |
+| B's outputs | 27 | 21 | 7 | 5 |
+| Teacher (label 1) | 9 | 29 | 10 | 12 |
+
+A emits `medium`/`urgency 3` for **35 of 60** tickets where the teacher uses `urgency 3`
+only 7 times. This is exactly the "regression to medium" the 60% re-score above found and
+attributed to central tendency — reproduced here on a 3x larger and mostly different
+ticket set, so it is a property of the compiled adapter, not of those particular 20
+tickets. Folding 8 examples in moves the distribution toward the teacher's (medium 35→27,
+high 10→21) without eliminating the pull.
+
+The three cases where **folding made it worse** are all the same failure, and all
+`critical → high`:
+
+| Ticket | Teacher | A (0 ex.) | B (8 ex.) |
+|---|---|---|---|
+| `"Our production API gateway is throwing 502 Bad Gateway errors across all regions!"` | `critical`/5 | `critical`/5 | `high`/4 |
+| `"Urgent: our webhook deliveries have been failing silently for 3 hours, losing orders."` | `critical`/5 | `critical`/5 | `high`/4 |
+| `"Hi, I'm getting a 503 Service Unavailable error whenever I try to deploy my Node.js application to the us-east-2 region."` | `critical`/5 | `critical`/5 | `high`/4 |
+
+The cause is in the folding pool, which is committed and checkable: of its 8 teacher
+labels, **6 are `high`/urgency 4**, one is `critical` and one is `low`. The examples that
+taught B to stop saying `medium` also taught it that the top of the scale is `high`, and
+it dragged three genuine criticals down. This is the same shape as the memorization
+failure the folded-examples section found on phone extraction (`(555) 123-4567` returned
+verbatim for a UK number): folding fixes the dominant error and introduces a new one
+biased toward whatever the examples happen to over-represent. **An 8-example folding pool
+drawn by sampling is a label-distribution decision, not just a quantity decision**, and
+nothing in `paw-kit` warns about it.
+
+Where both arms fail identically (25 cases) the pattern is severity, not category:
+
+| Ticket | Teacher | A and B |
+|---|---|---|
+| `"My password reset email is never arriving in my inbox or spam folder."` | `high`/4 | `medium`/3 |
+| `"The iOS app crashes immediately upon opening on iOS 18 beta."` | `high`/4 | `medium`/3 |
+| `"Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning."` | `high`/4 | `medium`/3 |
+| `"Database replication lag is exceeding 45 minutes on our primary PostgreSQL cluster."` | `critical`/5 | A `high`/4, B `medium`/3 |
+
+Three of those four are the *same tickets* that failed in the recorded 60% run five
+sections above, failing the same way against a fresh label, a fresh compile and a fresh
+adapter. Department, by contrast, is 90.0% right in B — the adapter knows what kind of
+ticket it is looking at and does not know how much it matters.
+
+### Using paw-kit's own tools for the comparison
+
+The per-case comparison was done with `paw-test`, not by hand. `paw-test compare` between
+B and C is the run this section was written for and could not be made; A vs B was run in
+full:
+
+```bash
+uv run paw-test compare \
+    measurements/finetune_triage_A-paw-4b-qwen3-0.6b.paw \
+    measurements/finetune_triage_B-paw-4b-qwen3-0.6b.paw \
+    measurements/finetune-triage-suite.yaml \
+    --backend real --json measurements/finetune-triage-compare-AB.json
+
+uv run paw-test judge measurements/finetune-triage-compare-AB.json \
+    --suite measurements/finetune-triage-suite.yaml --out <verdicts.json>
+```
+
+Independent judge verdicts on the compare report: **A 61.7% (37/60), B 66.7% (40/60)**,
+0 unparseable, 0 errored. The judge and the suite's own assertions disagree on 23 cases
+(A) and 20 (B) — every one of them an assertion *pass* the judge called wrong, e.g.
+`"403 error blocking API endpoint since morning warrants high priority, not medium"` and
+`"Department should be \"billing\" not \"technical\"; this is a shipping/order issue"`.
+That block is the useful output: the assertions can only check shape, so a 60/60
+structural pass rate carries no information about whether the triage is right, and the
+disagreement list is what makes that visible rather than reassuring.
+
+Four things about these tools got in the way, recorded as feedback rather than fixed:
+
+1. **`paw-test judge` cannot run at all against the installed SDK.**
+   `paw_kit/test/judge.py:277` passes `temperature=temperature` to
+   `client.messages.create`, and `anthropic==1.4.0` (the version in this project's own
+   `.venv`; `pyproject.toml` does not pin `anthropic` at all) removed `temperature` from
+   that method's typed signature. Every judge call raises
+   `TypeError: Messages.create() got an unexpected keyword argument 'temperature'`.
+   Reproduce in one line, no API call made:
+   ```
+   python -c "from paw_kit.test.judge import anthropic_judge; anthropic_judge()('hi')"
+   ```
+   **The failure mode is worse than the break.** `judge_outputs` catches per-case
+   exceptions by design, so the CLI does not crash — it prints
+   `Summary: A pass rate 0.0% (0/60), unparseable A 0, errored A 60` and **exits 0**. A
+   pass rate of 0.0% next to an exit code of 0 reads like "the adapter failed every case",
+   which is precisely the wrong conclusion. The `errored` count is the only thing
+   distinguishing total tool failure from total adapter failure, and it is not what the
+   eye goes to. The wire API still honours the field, so `extra_body={"temperature": 0.0}`
+   works; the verdicts above were obtained by calling paw-kit's own `judge_outputs` with
+   exactly the prompt, parsing, disagreement block and report shape `paw_kit/cli.py`'s
+   `judge_cmd` uses, substituting only the judge callable
+   (`scripts/measure_finetune_triage.py`'s `judge_compare_report`). That is a measurement
+   workaround, not a fix.
+
+2. **`compare`'s "identical output" is a byte comparison, and it hid the real answer
+   here.** The report says `60 cases, 0 identical output`. In fact **37 of the 60 pairs
+   are semantically identical** and differ only in JSON whitespace: A emits
+   `{"priority":"critical","department":"technical","urgency_score":5}` and B emits
+   `{"priority": "critical", "department": "technical", "urgency_score": 5}`, because the
+   folded examples were rendered with `json.dumps` and taught B the spaced form. Read
+   literally, "0 identical" says these are two completely different programs; the truth is
+   that they agree on 62% of cases and differ in a separator. This matters beyond
+   cosmetics, because the previous section's headline finding — "132 of 134 outputs are
+   byte-identical" — rests on exactly this comparison. That result stands (those outputs
+   were bare strings, not JSON), but the metric is one formatting change away from being
+   meaningless, and for any structured output it already is. A normalized or
+   parse-then-compare diff mode would have turned this run's compare output from
+   misleading into the most informative table in the section.
+
+3. **The assertion vocabulary cannot express this task's contract.** `paw-test` implements
+   exactly `regex_match`, `max_length`, `min_length`, `exact_match`, `not_contains`
+   (`paw_kit/test/suite.py:23`). There is no `one_of`, no `is_valid_json`, no schema rule,
+   so "priority is one of four literals and urgency_score is an integer 1–5" has to be
+   written as a stack of hopeful regexes against the raw string, and "this parses into the
+   `Triage` model" cannot be written at all. Both arms pass 60/60 on the resulting suite
+   while being 38% and 53% correct. The semantic scoring in this section is therefore done
+   in `scripts/measure_finetune_triage.py`, not in the suite — which is a gap for a
+   toolkit whose whole premise is compiling *typed, structured* outputs.
+
+4. **`paw-kit doctor`'s service check is not predictive in either direction.** It warned
+   `gpu_services is empty ... compiles are likely to fail or hang`; the fast compiler then
+   compiled twice in ~5 s each. It did *not* warn about the thing that actually broke
+   (`redis_unavailable`, listed in the health payload as a rate-limit footnote), which is
+   precisely what makes async compile impossible. The one check that would have predicted
+   this run's failure was present in the data and not surfaced.
+
+### What compile C actually did
+
+```
+RuntimeError: ProgramAsWeights compile service returned HTTP 503 after 2 attempt(s).
+Run `paw-kit doctor` to check service health.
+Response: {"detail":{"error":"durable_queue_unavailable",
+           "message":"Async compile is unavailable until durable Redis is healthy.",
+           "request_id":"5d6d3b52-c06"}}
+```
+
+`GET /api/v1/health` returns `{"status":"degraded", "gpu_services":{}, "queue_depth":0,
+"warnings":["redis_unavailable: using in-memory global rate limit fallback"]}` throughout.
+Attempted twice, ~25 minutes apart, with the same deterministic refusal both times; the
+request is rejected at queue admission, so no compile was ever queued and no GPU work was
+requested. `precheck_compile` on `paw-ft-bs48` succeeds and cheerfully returns
+`compiler_snapshot: paw-ft-bs48-20260530` in the same period — **precheck is not a
+readiness signal for the finetune path.** (It is not an authentication signal either: an
+absent key, a syntactically invalid key and the real key all return an identical 200.
+Nothing short of an actual compile tells you whether `PAW_API_KEY` is good.)
+
+Note the retry accounting: `_invoke_compile` retries a 5xx other than 504, so each of the
+two attempts cost two HTTP calls. Six compile-endpoint calls were made in total across
+this run, of which two produced programs.
+
+### What was expected, and where this differs
+
+Expected, from the phone-extraction result: that a task with 38 points of headroom would
+either show `paw-ft-bs48` earning its ~3 minutes of wall time, or show it failing the same
+way the fast compiler does — and that either answer would be worth more than the
+near-saturated 132/134 tie. Neither was obtained. What this run does establish, and the
+phone-extraction run could not:
+
+- **The fast compiler's failure on triage is systematic and reproducible**, not an artifact
+  of the original 20 tickets: the same central-tendency pull to `medium`/3 appears on 60
+  tickets, most of them new, with a fresh compile.
+- **Folding examples helps here too, and by a lot** (38.3% → 53.3% full agreement), which
+  is a third data point for the folded-examples section — and it is the *first* one where
+  the mechanism is a label distribution rather than an output format.
+- **Folding's failure mode generalizes.** On phone extraction it was verbatim
+  regurgitation of an example; here it is inheriting the examples' label skew. Same
+  trade-off, different surface.
+- **The task has a measured ceiling.** 91.7% teacher self-agreement, with department at
+  100% and priority at 96.7%, is a number this document did not previously have for any
+  task, and it is what makes "53.3%" interpretable at all.
+
+### Limitations
+
+- **Arm C does not exist.** The section's central question is unanswered. Re-running
+  `--arms C` when `/api/v1/health` reports `redis` healthy, then
+  `--skip-compile --arms A,B,C`, completes it against the same committed fixture.
+- **The 48 fresh tickets were generated by the same model that labels them**
+  (`claude-haiku-4-5-20251001`). The evaluation set is not independent of the labeller:
+  tickets may be unrepresentatively easy for this model to classify, and the 91.7%
+  "ceiling" is a ceiling on agreement with *this teacher*, not on correctness. The 20
+  recorded tickets (hand-written, in the repo since 2026-09-08) are the only part of the
+  set free of this.
+- **Generation is not temperature 0.** It was tried first: at temperature 0 with a prompt
+  varying only in category names, the teacher returned substantially the same tickets
+  every batch and deduplication stalled at 24/48 unique after 12 calls. Generation
+  therefore runs at default sampling with per-batch product/voice variation and an
+  explicit "don't repeat these" list, and is *not* reproducible call-for-call — the
+  committed fixture is what makes the run reproducible. All 128 labelling calls, and the
+  120 judge calls, are temperature 0.
+- **The two teacher labels are not identically prompted.** Two temperature-0 calls with a
+  byte-identical prompt would measure the API's determinism, not the task's ambiguity, so
+  the second pass reframes the question while asking for the same judgement. The 91.7%
+  figure therefore mixes genuine ambiguity with prompt sensitivity and should be read as a
+  soft ceiling.
+- **Adapter temperature is 0 by inheritance, not by choice.** `programasweights`'
+  `PawFunction` defaults to `temperature=0.0`
+  (`.venv/.../programasweights/runtime_llamacpp.py:399`);
+  `ProgramAsWeightsBackend.infer` accepts no temperature or seed argument and passes only
+  `max_tokens`, so paw-kit can neither set nor guarantee it.
+- **One run, one seed, one machine** (RTX 3080), 60 tickets. The A-vs-B gap (≈15 points)
+  is well outside the label-set noise (≈3–7 points); no smaller difference in this section
+  should be treated as real.
+
 ## Constrained decoding against the real upstream adapter: the hook wasn't missing
 
 Every claim in this project about grammar-constrained decoding has carried the same
