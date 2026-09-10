@@ -148,15 +148,19 @@ def append_history_entry(output_path: Union[str, Path], manifest: Dict[str, Any]
 
 
 def extract_snapshot(obj: Any) -> Any:
-    """Best-effort `snapshot` attribute/key off an upstream compiler response object.
+    """Best-effort compiler snapshot off an upstream compiler response object.
 
-    None if `obj` is None, has no such attribute/key, or isn't dict-or-object shaped
-    enough to ask. There is no upstream-documented `snapshot` field as of this
-    writing; this is deliberately permissive so a future SDK version that adds one
-    starts flowing through immediately, with today's absence simply reading as null.
+    The upstream `Program` dataclass (programasweights 0.4.4, `client.py`) names it
+    `compiler_snapshot` (e.g. `paw-4b-qwen3-0.6b-20260407`); `snapshot` is accepted as
+    a fallback. None if `obj` is None or carries neither.
     """
     if obj is None:
         return None
-    if isinstance(obj, dict):
-        return obj.get("snapshot")
-    return getattr(obj, "snapshot", None)
+    for key in ("compiler_snapshot", "snapshot"):
+        if isinstance(obj, dict):
+            value = obj.get(key)
+        else:
+            value = getattr(obj, key, None)
+        if value is not None:
+            return value
+    return None
