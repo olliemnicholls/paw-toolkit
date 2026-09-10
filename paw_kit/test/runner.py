@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.schema.loader import get_default_backend
 from paw_kit.test.fuzzer import AdversarialFuzzer
-from paw_kit.test.matching import values_equivalent
+from paw_kit.test.matching import values_equivalent, values_equivalent_unquoted
 from paw_kit.test.suite import AssertionRule, TestSuiteConfig
 
 # measurements/README.md, "Finetune compiler on a rule the base model does not know",
@@ -124,6 +124,13 @@ class TestRunReport(BaseModel):
     # a different angle -- "how good is the answer key match", not "did the case pass".
     expected_total: int = 0
     expected_matched: int = 0
+    # measurements/README.md, "Tool feedback" point 1 (quoted-scalar follow-up):
+    # `expected_matched` under `values_equivalent_unquoted` instead of the strict
+    # `values_equivalent` -- always >= `expected_matched`, since the unquoted check is
+    # a strict relaxation of the exact one. Reporting only; never changes
+    # `expected_match`/`case_passed` above, so what counts as a passing case is
+    # unaffected by this field's existence.
+    expected_matched_unquoted: int = 0
     results: List[TestCaseResult] = Field(default_factory=list)
 
     @property
@@ -141,6 +148,17 @@ class TestRunReport(BaseModel):
         """Percentage of cases carrying an `expected` field whose output matched it
         (0.0 to 100.0). 0.0, not a division error, when no case has `expected`."""
         return (self.expected_matched / self.expected_total * 100.0) if self.expected_total > 0 else 0.0
+
+    @property
+    def expected_match_rate_unquoted(self) -> float:
+        """Percentage of cases carrying an `expected` field whose output matched it
+        under `values_equivalent_unquoted` (0.0 to 100.0). 0.0, not a division error,
+        when no case has `expected`."""
+        return (
+            (self.expected_matched_unquoted / self.expected_total * 100.0)
+            if self.expected_total > 0
+            else 0.0
+        )
 
     def get_failing_inputs(self) -> List[Tuple[str, str, List[str]]]:
         """Return list of (input, output, failure_reasons) for all failing cases."""
@@ -253,6 +271,7 @@ class TestRunner:
         failed_count = 0
         expected_total = 0
         expected_matched = 0
+        expected_matched_unquoted = 0
 
         for inp, expected in zip(inputs_to_test, expected_values):
             t0 = time.perf_counter()
@@ -298,6 +317,13 @@ class TestRunner:
                     )
                     failed_rules.append(reason)
                     failed_rule_names.append("expected")
+                # Reporting only (see TestRunReport.expected_matched_unquoted's
+                # docstring) -- does not affect expected_match/case_passed above.
+                # `expected_match` implies this (values_equivalent_unquoted is a
+                # strict relaxation of values_equivalent), so `or` short-circuits the
+                # abstain-match case straight to True without re-deriving it.
+                if expected_match or values_equivalent_unquoted(out, expected):
+                    expected_matched_unquoted += 1
 
             case_passed = len(failed_rules) == 0
             if case_passed:
@@ -326,5 +352,6 @@ class TestRunner:
             failed_cases=failed_count,
             expected_total=expected_total,
             expected_matched=expected_matched,
+            expected_matched_unquoted=expected_matched_unquoted,
             results=results,
         )

@@ -604,7 +604,7 @@ def test_compare_cli_shows_equivalent_count_and_collapses_whitespace_only_headin
     assert result.exit_code == 0
     out = result.output
 
-    assert "Whitespace-only differences (1/2)" in out
+    assert "Whitespace- or quoting-only differences (1/2)" in out
     assert "1 identical output" in out
     assert "2 equivalent output" in out
     # "hello" is whitespace-only, not a real disagreement -- must not appear under the
@@ -633,11 +633,110 @@ def test_compare_cli_genuine_differences_and_whitespace_only_both_shown(
     out = result.output
 
     assert "Differences (1/2)" in out
-    assert "Whitespace-only differences (1/2)" in out
+    assert "Whitespace- or quoting-only differences (1/2)" in out
     diff_idx = out.index("Differences (1/2)")
-    whitespace_idx = out.index("Whitespace-only differences")
+    whitespace_idx = out.index("Whitespace- or quoting-only differences")
     world_idx = out.index("world", diff_idx)
     assert diff_idx < world_idx < whitespace_idx
+
+
+# ------------------------------------------------ quoted-scalar follow-up: equivalent_unquoted
+
+
+def test_compare_adapters_quoted_scalar_is_equivalent_unquoted_not_equivalent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One adapter's output is the other's, JSON-string-quoted -- `values_equivalent`
+    calls it different (a quoting defect is real), but it must land in the new
+    `"equivalent_unquoted"` match_kind rather than plain `"different"`, and count in
+    `equivalent_unquoted_count` but NOT in the strict `equivalent_count`."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": '"RG-M2"', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "RG-M2", "world": "WORLD"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    hello_row = next(r for r in report.rows if r.input == "hello")
+    assert hello_row.match_kind == "equivalent_unquoted"
+    assert report.equivalent_count == 1  # only "world" (byte-identical)
+    assert report.equivalent_unquoted_count == 2  # "world" + the unquoted "hello"
+    assert [r.input for r in report.equivalent_only_rows] == ["hello"]
+    assert [r.input for r in report.genuinely_differing_rows] == []
+
+
+def test_compare_adapters_json_string_versus_json_number_stays_different(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`'"5"'` vs. `5`: both sides parse as JSON, a genuine type mismatch -- must stay
+    `"different"`, not fall into `"equivalent_unquoted"`, mirroring
+    `values_equivalent_unquoted`'s own carve-out."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": '"5"', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "5", "world": "WORLD"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    hello_row = next(r for r in report.rows if r.input == "hello")
+    assert hello_row.match_kind == "different"
+    assert report.equivalent_unquoted_count == report.equivalent_count == 1
+
+
+def test_compare_cli_shows_equivalent_unquoted_segment_only_when_it_exceeds_equivalent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The summary line's extra "equivalent output once unwrapped" segment must show
+    only when unquoting actually widens the count, and the quoted-only row must land
+    under the (renamed) collapsed heading, not the main "Differences" listing."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("a.paw")
+    adapter_b = Path("b.paw")
+    _write_mock_manifest(adapter_a, {"hello": '"RG-M2"', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "RG-M2", "world": "WORLD"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    result = runner.invoke(
+        test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz"]
+    )
+    assert result.exit_code == 0
+    out = result.output
+
+    assert "Whitespace- or quoting-only differences (1/2)" in out
+    assert "Differences (" not in out
+    assert "1 equivalent output" in out
+    assert "2 equivalent output once unwrapped" in out
+
+
+def test_compare_cli_omits_equivalent_unquoted_segment_when_nothing_is_quoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: when unquoting adds nothing, the summary line must not carry the
+    extra segment at all."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("a.paw")
+    adapter_b = Path("b.paw")
+    _write_mock_manifest(adapter_a, {"hello": "HELLO", "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO", "world": "WORLD"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    result = runner.invoke(
+        test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz"]
+    )
+    assert result.exit_code == 0
+    out = result.output
+
+    assert "equivalent output once unwrapped" not in out
 
 
 # --------------------------------------------------------------------- finding: adapter labels

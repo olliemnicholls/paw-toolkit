@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.test.fuzzer import AdversarialFuzzer
-from paw_kit.test.matching import normalize_whitespace, parse_json_or_none
+from paw_kit.test.matching import values_equivalent, values_equivalent_unquoted
 from paw_kit.test.runner import evaluate_assertion
 from paw_kit.test.suite import TestSuiteConfig
 
@@ -102,29 +102,41 @@ def _project_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
 # collapse. Every byte-identical pair is trivially also equivalent.
 _MATCH_BYTE_IDENTICAL = "byte_identical"
 _MATCH_EQUIVALENT = "equivalent"
+# Quoted-scalar follow-up (measurements/README.md, "Tool feedback"): a pair that
+# `values_equivalent` calls different but `values_equivalent_unquoted` calls the same
+# -- one side is the other, JSON-string-quoted (e.g. `'"RG-M2"'` vs. `RG-M2`). Kept
+# distinct from `_MATCH_EQUIVALENT` rather than folded into it: the strict rule stays
+# the one that decides `identical`/`equivalent_count`/pass-fail-shaped reporting, so a
+# quoting defect doesn't silently disappear into "equivalent" -- it gets its own count
+# and its own (still collapsed, still not a "real" difference) heading instead.
+_MATCH_EQUIVALENT_UNQUOTED = "equivalent_unquoted"
 _MATCH_DIFFERENT = "different"
 
 
 def _outputs_match_kind(output_a: str, output_b: str) -> str:
-    """Classify one pair of outputs as byte-identical, equivalent-but-not-identical, or
-    genuinely different.
+    """Classify one pair of outputs as byte-identical, equivalent-but-not-identical,
+    equivalent-only-once-unquoted, or genuinely different.
 
-    "Equivalent" means: both parse as JSON and their parsed values are equal (so
-    `{"a":1}` and `{"a": 1}` match, key order aside -- `json.loads` returns a `dict`,
-    and dict equality is order-independent); otherwise, equal after
-    `_normalize_whitespace`. If only one side parses as JSON, that is not "both parse"
-    -- comparison falls through to the whitespace-normalized text, on the raw strings,
+    "Equivalent" (`values_equivalent`, `paw_kit.test.matching`) means: both parse as
+    JSON and their parsed values are equal (so `{"a":1}` and `{"a": 1}` match, key
+    order aside -- `json.loads` returns a `dict`, and dict equality is
+    order-independent); otherwise, equal after Unicode NFC normalization and
+    whitespace collapse, on the raw strings. If only one side parses as JSON, that is
+    not "both parse" -- comparison falls through to the whitespace-normalized text,
     not a parsed value compared against unparsed text.
+
+    "Equivalent, unquoted" (`values_equivalent_unquoted`) is strictly weaker: it also
+    catches a pair where exactly one side is the other's value as a JSON string scalar
+    -- `'"RG-M2"'` vs. `RG-M2` -- which `values_equivalent` deliberately still calls
+    different (a quoted output is a real defect for any consumer of the adapter).
     """
     if output_a == output_b:
         return _MATCH_BYTE_IDENTICAL
-    a_is_json, parsed_a = parse_json_or_none(output_a)
-    b_is_json, parsed_b = parse_json_or_none(output_b)
-    if a_is_json and b_is_json:
-        equivalent = parsed_a == parsed_b
-    else:
-        equivalent = normalize_whitespace(output_a) == normalize_whitespace(output_b)
-    return _MATCH_EQUIVALENT if equivalent else _MATCH_DIFFERENT
+    if values_equivalent(output_a, output_b):
+        return _MATCH_EQUIVALENT
+    if values_equivalent_unquoted(output_a, output_b):
+        return _MATCH_EQUIVALENT_UNQUOTED
+    return _MATCH_DIFFERENT
 
 
 def adapter_label_pair(adapter_a: str, adapter_b: str) -> Tuple[str, str]:
@@ -187,6 +199,13 @@ class CompareReport(BaseModel):
     # ticket-triage run this module's docstring describes, `identical_count` was 0 and
     # `equivalent_count` would have been 37/60 -- the number that actually mattered.
     equivalent_count: int = 0
+    # Quoted-scalar follow-up: `equivalent_count` widened to also treat a
+    # JSON-string-quoted/bare pair as a match (`values_equivalent_unquoted`) --
+    # includes every `equivalent_count` row too, so `equivalent_unquoted_count >=
+    # equivalent_count` always, same relationship `equivalent_count` has to
+    # `identical_count`. The CLI only prints this when it's strictly greater than
+    # `equivalent_count` -- otherwise there's nothing extra to say.
+    equivalent_unquoted_count: int = 0
     a_pass_count: int = 0
     b_pass_count: int = 0
     only_a_pass_count: int = 0
@@ -214,18 +233,21 @@ class CompareReport(BaseModel):
 
     @property
     def equivalent_only_rows(self) -> List[CompareRow]:
-        """The subset of `differing_rows` that are only a formatting difference: not
-        byte-identical, but `match_kind == "equivalent"` (same JSON value, or the same
-        text after whitespace normalization) and the two adapters agree on pass/fail.
+        """The subset of `differing_rows` that are only a formatting or quoting
+        difference: not byte-identical, but `match_kind` is `"equivalent"` (same JSON
+        value, or the same text after whitespace normalization) or
+        `"equivalent_unquoted"` (same value once a JSON-string-quoted side is
+        unwrapped), and the two adapters agree on pass/fail.
 
-        This is the "whitespace-only" list finding 2 asks to report separately: `paw-test
-        compare`'s CLI lists these under their own, collapsed heading instead of folding
-        them into (or silently dropping them from) the main differences listing.
+        This is the "whitespace- or quoting-only" list finding 2 (and its quoted-scalar
+        follow-up) asks to report separately: `paw-test compare`'s CLI lists these
+        under their own, collapsed heading instead of folding them into (or silently
+        dropping them from) the main differences listing.
         """
         return [
             r
             for r in self.differing_rows
-            if r.match_kind == _MATCH_EQUIVALENT and r.pass_a == r.pass_b
+            if r.match_kind in (_MATCH_EQUIVALENT, _MATCH_EQUIVALENT_UNQUOTED) and r.pass_a == r.pass_b
         ]
 
     @property
@@ -283,7 +305,8 @@ def compare_adapters(
         inputs.extend(AdversarialFuzzer.generate(suite.fuzzing, base_inputs=seed_inputs))
 
     rows: List[CompareRow] = []
-    identical_count = equivalent_count = a_pass_count = b_pass_count = only_a = only_b = errored_count = 0
+    identical_count = equivalent_count = equivalent_unquoted_count = 0
+    a_pass_count = b_pass_count = only_a = only_b = errored_count = 0
 
     for inp in inputs:
         out_a, lat_a, err_a = _infer_safely(backend, adapter_a, inp)
@@ -307,6 +330,9 @@ def compare_adapters(
 
         identical_count += int(identical)
         equivalent_count += int(match_kind in (_MATCH_BYTE_IDENTICAL, _MATCH_EQUIVALENT))
+        equivalent_unquoted_count += int(
+            match_kind in (_MATCH_BYTE_IDENTICAL, _MATCH_EQUIVALENT, _MATCH_EQUIVALENT_UNQUOTED)
+        )
         a_pass_count += int(pass_a)
         b_pass_count += int(pass_b)
         if pass_a and not pass_b:
@@ -346,6 +372,7 @@ def compare_adapters(
         total_cases=len(rows),
         identical_count=identical_count,
         equivalent_count=equivalent_count,
+        equivalent_unquoted_count=equivalent_unquoted_count,
         a_pass_count=a_pass_count,
         b_pass_count=b_pass_count,
         only_a_pass_count=only_a,

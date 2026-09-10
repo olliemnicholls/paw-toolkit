@@ -35,8 +35,12 @@ The runner reports pass rate per case and per assertion, and now also compares e
 case's output against its own `expected` field when one is set (not just a suite-wide
 assertion, which cannot express "every case has a different correct answer"): a case
 whose output doesn't match `expected` counts as failed, `check` prints a separate
-"Correct against expected: N/M (X%)" line, and `--adapter PATH` can run the same suite
-against a different compiled adapter. With `auto_recompile: true` and a teacher callable
+"Correct against expected: N/M (X%)" line (staying strict about quoting -- a JSON
+string scalar never counts as matching the bare value it wraps -- but printing a second
+"Correct after unquoting a JSON string" line whenever unquoting would have matched
+more cases, so that gap is visible rather than just scored as wrong), and `--adapter
+PATH` can run the same suite against a different compiled adapter. With
+`auto_recompile: true` and a teacher callable
 supplied in code (`run_active_learning_loop(..., teacher_provider=...)`), failing inputs
 (including one that fails only against `expected`) are sent to the teacher inside a
 delimited prompt, the returned labels are checked against the suite's own assertions

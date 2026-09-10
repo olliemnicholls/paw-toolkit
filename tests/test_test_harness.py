@@ -1069,6 +1069,93 @@ def test_runner_expected_match_uses_same_normalisation_as_compare(tmp_path: Path
     assert report.expected_matched == 2
 
 
+# ---------------------------------------------- quoted-scalar follow-up: expected_matched_unquoted
+
+
+def test_runner_expected_matched_unquoted_counts_quoted_scalars_without_changing_pass_fail(
+    tmp_path: Path,
+) -> None:
+    """The measured defect (measurements/README.md, "Tool feedback"): an adapter that
+    wraps every correct answer in quotes scores 0 against the strict `expected_matched`
+    (the quoting is a real defect), but `expected_matched_unquoted` must show that the
+    underlying lookup was actually right -- and neither `expected_match`,
+    `report.expected_matched`, `passed`, nor `is_success` may move because this field
+    exists."""
+    adapter_path = str(tmp_path / "quoted.paw")
+    backend = MockPAWBackend()
+    backend.compile(
+        spec="s",
+        examples=[
+            {"input": "sku_a", "output": '"RG-M2"'},  # correct, but JSON-string-quoted
+            {"input": "sku_b", "output": '"RG-M3"'},  # correct, but JSON-string-quoted
+            {"input": "sku_c", "output": "RG-WRONG"},  # actually wrong, unquoted
+        ],
+        output_path=adapter_path,
+    )
+
+    config = TestSuiteConfig(
+        task_name="quoted_scalar_test",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[
+            StandardTestCase(input="sku_a", expected="RG-M2"),
+            StandardTestCase(input="sku_b", expected="RG-M3"),
+            StandardTestCase(input="sku_c", expected="RG-M4"),
+        ],
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+    )
+
+    report = TestRunner(backend=backend).run(config)
+
+    # Strict scoring is unaffected: every case is wrong, exactly as before this field
+    # existed.
+    assert all(r.expected_match is False for r in report.results)
+    assert all(r.passed is False for r in report.results)
+    assert report.is_success is False
+    assert report.expected_total == 3
+    assert report.expected_matched == 0
+    assert report.expected_match_rate == 0.0
+
+    # The new, reporting-only field sees the two quoted-but-correct cases.
+    assert report.expected_matched_unquoted == 2
+    assert round(report.expected_match_rate_unquoted, 1) == round(2 / 3 * 100.0, 1)
+
+
+def test_runner_expected_matched_unquoted_equals_strict_when_nothing_is_quoted(tmp_path: Path) -> None:
+    """Regression: when every case already matches strictly (or strictly fails for a
+    reason unrelated to quoting), `expected_matched_unquoted` must equal
+    `expected_matched` exactly -- unquoting a plain wrong answer must not manufacture
+    an extra match."""
+    adapter_path = str(tmp_path / "plain.paw")
+    backend = MockPAWBackend()
+    backend.compile(
+        spec="s",
+        examples=[
+            {"input": "ok", "output": "RG-M2"},
+            {"input": "bad", "output": "RG-WRONG"},
+        ],
+        output_path=adapter_path,
+    )
+
+    config = TestSuiteConfig(
+        task_name="no_quoting_test",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[
+            StandardTestCase(input="ok", expected="RG-M2"),
+            StandardTestCase(input="bad", expected="RG-M4"),
+        ],
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+    )
+
+    report = TestRunner(backend=backend).run(config)
+    assert report.expected_matched == 1
+    assert report.expected_matched_unquoted == 1
+    assert report.expected_match_rate_unquoted == report.expected_match_rate
+
+
 def test_active_learning_repairs_case_failing_only_on_expected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

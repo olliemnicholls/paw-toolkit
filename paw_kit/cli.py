@@ -374,6 +374,15 @@ def _print_expected_match_line(report: TestRunReport) -> None:
     the report carries an `expected` field -- printed before the assertion pass rate,
     since the assertion pass rate alone is exactly the number that read 100% for an
     adapter that was 10% correct (measurements/README.md, "Tool feedback" point 1).
+
+    A second line follows, only when unquoting a JSON string scalar would have matched
+    more cases than the strict count above (`expected_matched_unquoted >
+    expected_matched`): the strict rule stays the scored number (a quoted output is a
+    real defect for any consumer of the adapter), but a run where every wrong answer
+    was actually just quoted deserves to say so, rather than reading identically to a
+    run that was simply wrong (measurements/README.md, "Tool feedback": the fast
+    compiler's lookup adapter scored 0/300 this way while its unquoted answers were
+    right a third of the time).
     """
     if report.expected_total <= 0:
         return
@@ -381,6 +390,12 @@ def _print_expected_match_line(report: TestRunReport) -> None:
         f"[bold]Correct against expected:[/bold] {_e(report.expected_matched)}/"
         f"{_e(report.expected_total)} ({_e(round(report.expected_match_rate, 1))}%)"
     )
+    if report.expected_matched_unquoted > report.expected_matched:
+        console.print(
+            f"[bold]Correct after unquoting a JSON string:[/bold] {_e(report.expected_matched_unquoted)}/"
+            f"{_e(report.expected_total)} ({_e(round(report.expected_match_rate_unquoted, 1))}%) -- "
+            "the adapter wraps its answers in quotes"
+        )
 
 
 def _write_json_report(json_out: Optional[Path], data: dict) -> None:
@@ -671,7 +686,8 @@ def compare_cmd(
 
     # Finding 2: `differing_rows` (byte-level -- unchanged) splits into the differences
     # that actually matter (`genuinely_differing_rows`) and pairs that differ only in
-    # JSON/whitespace formatting (`equivalent_only_rows`). The latter get their own,
+    # JSON/whitespace formatting, or (quoted-scalar follow-up) only in one side being
+    # the other JSON-string-quoted (`equivalent_only_rows`). The latter get their own,
     # collapsed heading below instead of being silently folded into -- or dropped from
     # -- the main listing, which is what made "0 identical output" read as "these two
     # programs completely disagree" on a run where 37/60 pairs differed only in
@@ -696,18 +712,28 @@ def compare_cmd(
 
     if whitespace_only:
         console.print(
-            f"\n[bold]Whitespace-only differences ({_e(len(whitespace_only))}/{_e(report.total_cases)}):[/bold] "
+            f"\n[bold]Whitespace- or quoting-only differences "
+            f"({_e(len(whitespace_only))}/{_e(report.total_cases)}):[/bold] "
             "same value once parsed as JSON (or, if either side isn't JSON, once "
-            "Unicode-normalized and whitespace-collapsed) -- not byte-identical, but not "
-            "a real disagreement either. Collapsed to input only:\n"
+            "Unicode-normalized and whitespace-collapsed), or one side is the other as "
+            "a JSON string scalar -- not byte-identical, but not a real disagreement "
+            "either. Collapsed to input only:\n"
         )
         for row in whitespace_only:
             console.print(f"  {_e(row.input[:80])}")
 
+    # Quoted-scalar follow-up: only printed when unquoting widened the equivalent count
+    # -- otherwise it would just repeat equivalent_count with no new information.
+    equivalent_unquoted_segment = (
+        f", {_e(report.equivalent_unquoted_count)} equivalent output once unwrapped "
+        "(also counting a JSON-string-quoted/bare pair)"
+        if report.equivalent_unquoted_count > report.equivalent_count
+        else ""
+    )
     console.print(
         f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output "
         f"(byte-for-byte), {_e(report.equivalent_count)} equivalent output "
-        f"(byte-for-byte + JSON/whitespace-normalized), "
+        f"(byte-for-byte + JSON/whitespace-normalized){_e(equivalent_unquoted_segment)}, "
         f"{_e(label_a)} pass {_e(report.a_pass_count)}/{_e(report.total_cases)}, "
         f"{_e(label_b)} pass {_e(report.b_pass_count)}/{_e(report.total_cases)}, "
         f"only-{_e(label_a)}-pass {_e(report.only_a_pass_count)}, "

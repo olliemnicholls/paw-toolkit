@@ -215,6 +215,112 @@ def test_cli_check_omits_expected_line_when_no_case_has_expected(
     assert "Correct against expected" not in out
 
 
+# --- Quoted-scalar follow-up (measurements/README.md, "Tool feedback"): the fast
+# compiler's lookup adapter quoted every output, scoring 0/300 against `expected`
+# despite the unquoted answers being right a third of the time. `check` must surface
+# that gap, but only when it exists. -----------------------------------------------
+
+
+def test_cli_check_shows_unquoted_line_when_adapter_quotes_correct_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An adapter that answers every case correctly, but JSON-string-quoted, must
+    still score 0 against the strict "Correct against expected" line (a quoted output
+    is a real defect) but also print the new unquoted line showing the underlying
+    lookup was actually right."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = tmp_path / "quoted_sku.paw"
+    adapter_path.write_text(
+        json.dumps(
+            {
+                "backend": "mock",
+                "spec": "SKU lookup",
+                "examples": [],
+                "rules": {
+                    "widget-a": '"RG-M2"',
+                    "widget-b": '"RG-M3"',
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite_path = tmp_path / "sku_suite.yaml"
+    suite_path.write_text(
+        "task_name: sku_lookup\n"
+        'spec: "Look up the SKU for a product."\n'
+        f'adapter_path: "{adapter_path}"\n'
+        "standard_cases:\n"
+        '  - input: "widget-a"\n'
+        '    expected: "RG-M2"\n'
+        '  - input: "widget-b"\n'
+        '    expected: "RG-M3"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 100\n"
+        "active_learning:\n"
+        "  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check", str(suite_path)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 1
+    assert "Correct against expected: 0/2 (0.0%)" in out
+    # Rich word-wraps long lines at the console width, so compare against
+    # whitespace-collapsed output rather than the exact line.
+    collapsed = " ".join(out.split())
+    assert (
+        "Correct after unquoting a JSON string: 2/2 (100.0%) -- "
+        "the adapter wraps its answers in quotes" in collapsed
+    )
+
+
+def test_cli_check_omits_unquoted_line_when_it_would_add_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: when the unquoted count doesn't exceed the strict count (nothing
+    is actually quoted), the second line must not appear -- covers both the
+    already-fully-correct case and the still-fully-wrong-even-unquoted case."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = tmp_path / "plain_sku.paw"
+    adapter_path.write_text(
+        json.dumps(
+            {
+                "backend": "mock",
+                "spec": "SKU lookup",
+                "examples": [],
+                "rules": {"widget-a": "RG-M2"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite_path = tmp_path / "sku_suite.yaml"
+    suite_path.write_text(
+        "task_name: sku_lookup\n"
+        'spec: "Look up the SKU for a product."\n'
+        f'adapter_path: "{adapter_path}"\n'
+        "standard_cases:\n"
+        '  - input: "widget-a"\n'
+        '    expected: "RG-M2"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 100\n"
+        "active_learning:\n"
+        "  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check", str(suite_path)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 0
+    assert "Correct against expected: 1/1 (100.0%)" in out
+    assert "Correct after unquoting a JSON string" not in out
+
+
 def test_cli_check_adapter_flag_overrides_suite_adapter_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--adapter` runs the suite against a different compiled adapter, so one suite
     can be checked against several adapters without a near-identical suite.yaml per
