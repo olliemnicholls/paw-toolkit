@@ -79,13 +79,20 @@ USER app
 # Expose HTTP service port
 EXPOSE 8000
 
-# Health check (unauthenticated: /health does not require PAW_API_KEY)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \\
-    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+# Health check (unauthenticated: /ready does not require PAW_API_KEY). Checks
+# readiness, not just liveness: /health returns ok before any model is loaded, so a
+# container could report "healthy" while its single inference slot is still busy with
+# the cold model load. --start-period covers a first-run cold download of the ~600MB
+# base model plus load, measured up to ~110s worst case (see measurements/README.md);
+# 180s leaves headroom above that measurement rather than matching it exactly.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \\
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')" || exit 1
 
 # Launch microservice. PAW_API_KEY, if set in the container's environment, is
-# picked up automatically by paw-serve; no CLI flag is needed here for it.
-CMD ["paw-serve", "/app/{adapter_filename}", "--host", "0.0.0.0", "--port", "8000"]
+# picked up automatically by paw-serve; no CLI flag is needed here for it. --warm pays
+# the cold-load cost (base model download + load into memory) before the container
+# reports ready, instead of on whatever request happens to arrive first.
+CMD ["paw-serve", "/app/{adapter_filename}", "--host", "0.0.0.0", "--port", "8000", "--warm"]
 """
 
 def _requirements_txt_content() -> str:
@@ -138,9 +145,12 @@ services:
       - PAW_API_KEY=${PAW_API_KEY:-}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      # See the matching Dockerfile HEALTHCHECK comment: /ready (readiness), not
+      # /health (liveness), and a start_period that covers a cold base-model download.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
       interval: 30s
       timeout: 5s
+      start_period: 180s
       retries: 3
 """
 
@@ -197,9 +207,13 @@ curl -X POST http://localhost:8000/v1/messages \\
   -d '{{"messages": [{{"role": "user", "content": "Sample query"}}]}}'
 ```
 
-**Health Check** (unauthenticated by design):
+**Health Check** (unauthenticated by design): `/health` is liveness (process is up);
+`/ready` is readiness (the model has actually loaded and served one successful call --
+this container's HEALTHCHECK polls `/ready`, and `--warm` in its CMD pays that cold-load
+cost before the container reports ready, not on whatever request happens to arrive first):
 ```bash
 curl http://localhost:8000/health
+curl http://localhost:8000/ready
 ```
 """
 

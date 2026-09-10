@@ -1,6 +1,7 @@
 """Typer and Rich command-line interface for paw-toolkit."""
 
 import importlib
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -1145,6 +1146,56 @@ def clean(
     console.print("[bold green]Cache cleaned successfully.[/bold green]")
 
 
+@app.command(name="doctor")
+def doctor(
+    adapter: Optional[Path] = typer.Option(
+        None, "--adapter", help="A .paw manifest to also check offline-readiness for"
+    ),
+    offline: bool = typer.Option(
+        False, "--offline", help="Skip every check that touches the network"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print results as a JSON list instead of a table"
+    ),
+) -> None:
+    """Diagnose the local environment for running --backend real (ProgramAsWeightsBackend).
+
+    Checks the SDK and llama_cpp installs, GPU visibility, PAW_API_KEY, upstream service
+    health, the local base-model cache, and cached compiled programs -- each PASS / WARN
+    / FAIL with a one-line remedy. Exits 0 if nothing FAILed, 1 otherwise.
+    """
+    from paw_kit.doctor import run_checks
+
+    results = run_checks(offline=offline, adapter_path=str(adapter) if adapter else None)
+
+    if json_output:
+        # Deliberately the bare `print`, not `console.print`: this output is meant to be
+        # machine-parsed, so it must not be subject to Rich's markup parsing (a detail
+        # string containing "[" would otherwise be silently mangled) or its terminal-width
+        # line wrapping.
+        print(json.dumps([asdict(r) for r in results], indent=2))
+    else:
+        table = Table(title="paw-kit doctor")
+        table.add_column("Check", style="cyan", no_wrap=True)
+        table.add_column("Status")
+        table.add_column("Detail")
+        table.add_column("Remedy")
+        status_style = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
+        for res in results:
+            style = status_style.get(res.status, "white")
+            table.add_row(
+                _e(res.name),
+                f"[{style}]{_e(res.status)}[/{style}]",
+                _e(res.detail),
+                _e(res.remedy) if res.remedy else "[dim]-[/dim]",
+            )
+        console.print(table)
+
+    if any(res.status == "FAIL" for res in results):
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
 export_app = typer.Typer(help="Export PAW adapters and traces to external formats")
 app.add_typer(export_app, name="export")
 
@@ -1170,6 +1221,13 @@ def serve(
         help="Disable authentication entirely (PAW-SERVE-01). Without this flag, an "
         "ephemeral bearer token is generated and printed to stderr if no --api-key "
         "or PAW_API_KEY is configured.",
+    ),
+    warm: bool = typer.Option(
+        False,
+        "--warm/--no-warm",
+        help="Run one inference before binding so /ready is 200 from the start, "
+        "instead of 503 until the first real request completes (a cold Qwen3-0.6B "
+        "load can take up to ~110s -- see measurements/README.md).",
     ),
 ) -> None:
     """Serve an adapter over HTTP with OpenAI- and Anthropic-compatible endpoints."""
@@ -1206,7 +1264,7 @@ def serve(
         console.print("  [bold red]Authentication:[/bold red] DISABLED (--allow-anonymous)")
     else:
         console.print("  [yellow]Authentication:[/yellow] ephemeral token (see stderr on startup)")
-    console.print("  [dim]Endpoints: /v1/chat/completions, /v1/messages, /invoke, /health, /metrics[/dim]")
+    console.print("  [dim]Endpoints: /v1/chat/completions, /v1/messages, /invoke, /health, /ready, /metrics[/dim]")
 
     from paw_kit.serve.server import serve_adapter
 
@@ -1217,6 +1275,7 @@ def serve(
         backend=backend,
         api_key=api_key,
         allow_anonymous=allow_anonymous,
+        warm=warm,
     )
 
 

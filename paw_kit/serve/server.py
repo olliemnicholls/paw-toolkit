@@ -85,6 +85,12 @@ class ServerState:
         self.error_count = 0
         self.latencies: deque[float] = deque(maxlen=10000)
         self._lock = threading.Lock()
+        # `/ready` (readiness, distinct from `/health`'s liveness): flips permanently
+        # once true. `threading.Event` rather than a plain bool under `_lock` so
+        # `is_ready()` -- read on every request, including by the same liveness-style
+        # probe pattern PAW-SERVE-07 keeps lock-free for `get_uptime()` -- never
+        # contends with the request-recording lock above.
+        self._ready = threading.Event()
 
     def record_request(self, latency_ms: float, is_error: bool = False) -> None:
         with self._lock:
@@ -92,6 +98,15 @@ class ServerState:
             if is_error:
                 self.error_count += 1
             self.latencies.append(latency_ms)
+
+    def mark_ready(self) -> None:
+        """Flip `/ready` to 200. Called after the first successful inference (either a
+        real request or an explicit `--warm` warm-up); never unset afterward."""
+        self._ready.set()
+
+    def is_ready(self) -> bool:
+        """True once `mark_ready()` has been called at least once."""
+        return self._ready.is_set()
 
     def get_uptime(self) -> float:
         """PAW-SERVE-07: lock-free. `start_time` is set once in `__init__` and never
@@ -246,7 +261,11 @@ class PayloadSizeLimitMiddleware:
 
 _DEFAULT_RATE_LIMIT_PER_MINUTE = 120
 _MAX_RATE_LIMIT_BUCKETS = 10_000
-_RATE_LIMIT_EXEMPT_PATHS = frozenset({"/health"})
+# `/ready` gets the same exemption as `/health` and for the same reason: it is polled on
+# a fixed interval by container orchestration (Track 09's Dockerfile HEALTHCHECK now
+# polls `/ready` instead of `/health`, see `docker.py`) and does no inference work of
+# its own.
+_RATE_LIMIT_EXEMPT_PATHS = frozenset({"/health", "/ready"})
 
 
 class RateLimitMiddleware:
@@ -345,7 +364,39 @@ def _execute_with_telemetry(
         semaphore.release()
     latency = (time.perf_counter() - t0) * 1000.0
     state.record_request(latency, is_error=False)
+    # A real request just proved the adapter works end to end -- that satisfies /ready's
+    # contract (see ServerState.mark_ready) exactly as well as an explicit --warm
+    # warm-up would have, so this is the only other place that needs to set it.
+    state.mark_ready()
     return res, latency
+
+
+# Fixed, deliberately short: the point of a warm-up call is to pay the one-time cost of
+# loading the base model into memory (measured up to ~110s cold, see
+# measurements/README.md), not to exercise the adapter's actual task.
+_WARMUP_INPUT = "ping"
+
+
+def _run_warmup(exec_fn: Callable[[str], Any], state: "ServerState") -> None:
+    """Run one inference with a fixed short input so `/ready` is 200 before the server
+    starts accepting real traffic, instead of 503 until the first request completes.
+
+    A failure here is logged, not raised: `--warm` is a latency optimization, and a
+    broken warm-up must not crash `paw-serve` on startup -- it just leaves `/ready` at
+    503 until a real request succeeds (or never, if the backend is genuinely broken,
+    which every other endpoint will also report).
+    """
+    t0 = time.perf_counter()
+    try:
+        exec_fn(_WARMUP_INPUT)
+    except Exception as exc:
+        logger.warning(
+            "Warm-up inference failed after %.2fs: %s", time.perf_counter() - t0, exc
+        )
+        return
+    elapsed = time.perf_counter() - t0
+    logger.info("Warm-up inference completed in %.2fs", elapsed)
+    state.mark_ready()
 
 
 def create_app(
@@ -356,8 +407,14 @@ def create_app(
     api_key: Optional[str] = None,
     allow_anonymous: bool = False,
     requests_per_minute: Optional[int] = None,
+    warm: bool = False,
 ) -> FastAPI:
-    """Factory creating configured FastAPI microservice for the given .paw adapter."""
+    """Factory creating configured FastAPI microservice for the given .paw adapter.
+
+    `warm`, if True, runs one inference with a fixed short input before returning the
+    app (i.e. before `serve_adapter` binds the port), so `/ready` reports 200 from the
+    first request instead of 503 until a real inference succeeds. See `_run_warmup`.
+    """
     path_obj = Path(adapter_path)
     if not path_obj.exists():
         raise FileNotFoundError(f"Adapter file not found: {adapter_path}")
@@ -393,6 +450,9 @@ def create_app(
         )
     else:
         exec_fn = lambda inp: selected_backend.infer(str(path_obj), inp)
+
+    if warm:
+        _run_warmup(exec_fn, state)
 
     # PAW-SERVE-06: the default docs routes are disabled here and re-registered below,
     # behind the same `_verify_auth` gate as everything but `/health`.
@@ -483,6 +543,18 @@ def create_app(
     async def health_check() -> HealthResponse:
         # PAW-SERVE-06: status/uptime/version only — see HealthResponse's docstring.
         return HealthResponse(status="ok", uptime_seconds=state.get_uptime(), version="0.1.0")
+
+    @app.get("/ready", include_in_schema=False)
+    async def ready_check() -> JSONResponse:
+        # Readiness, distinct from `/health`'s liveness: 200 only once the adapter has
+        # completed one successful inference (a real request or an explicit `--warm`
+        # warm-up, see ServerState.mark_ready) -- not merely once the process is up and
+        # accepting connections. Same auth exemption (no `_verify_auth` call) and rate-
+        # limit exemption (`_RATE_LIMIT_EXEMPT_PATHS`) as `/health`, for orchestration
+        # to poll freely.
+        if state.is_ready():
+            return JSONResponse({"status": "ready"}, status_code=200)
+        return JSONResponse({"status": "loading"}, status_code=503)
 
     @app.get("/metrics", response_model=MetricsResponse)
     async def telemetry_metrics(request: Request) -> MetricsResponse:
@@ -656,8 +728,12 @@ def serve_adapter(
     api_key: Optional[str] = None,
     allow_anonymous: bool = False,
     requests_per_minute: Optional[int] = None,
+    warm: bool = False,
 ) -> None:
-    """Start Uvicorn web server hosting the compiled adapter."""
+    """Start Uvicorn web server hosting the compiled adapter.
+
+    `warm`: see `create_app`'s docstring -- runs a warm-up inference before binding.
+    """
     import uvicorn
 
     app = create_app(
@@ -667,5 +743,6 @@ def serve_adapter(
         api_key=api_key,
         allow_anonymous=allow_anonymous,
         requests_per_minute=requests_per_minute,
+        warm=warm,
     )
     uvicorn.run(app, host=host, port=port)

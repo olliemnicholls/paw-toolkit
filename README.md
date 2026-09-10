@@ -170,6 +170,11 @@ SDK. Compilation goes to the upstream service; inference runs locally through th
 llama.cpp runtime (GPU if available). The `.paw` file paw-kit writes is a small JSON
 manifest pointing at the upstream program ID; the weights live in the SDK's cache.
 
+Run `paw-kit doctor` first: most `--backend real` failures (a CPU-only `llama-cpp-python`
+wheel, an un-downloaded base model, an upstream compile service that returns a healthy
+`200` with no GPU workers behind it) are environment problems `doctor` catches up front,
+with a one-line remedy, rather than a confusing failure deep inside `compile()`/`infer()`.
+
 ```python
 from pydantic import BaseModel
 import paw_kit as paw
@@ -330,8 +335,12 @@ curl -X POST localhost:8000/invoke -H 'Content-Type: application/json' -d '{"inp
 
 `POST /v1/chat/completions` (OpenAI shape) and `POST /v1/messages` (Anthropic shape) are
 also exposed, so the official OpenAI and Anthropic client libraries work with
-`baseURL` pointed at the server. Only `GET /health` is unauthenticated; `GET /metrics` and
-every inference route require the bearer token.
+`baseURL` pointed at the server. `GET /health` (liveness) and `GET /ready` (readiness --
+200 only once the adapter has served one successful call, or after `--warm`; useful
+because a cold Qwen3-0.6B load can take up to ~110s, see `measurements/README.md`) are
+the only unauthenticated routes; `GET /metrics` and every inference route require the
+bearer token. `paw-kit export docker`'s generated container HEALTHCHECK polls `/ready`
+and passes `--warm` in its CMD.
 
 ```bash
 uv run paw-kit export docker .paw/triage.paw --out-dir ./docker   # Dockerfile + compose
@@ -345,10 +354,11 @@ paw-kit demo [--scenario pii]         mock-backend walkthroughs
 paw-test check suite.yaml             run a suite (--backend real runs the upstream SDK, read-only)
 paw-test compare A.paw B.paw suite.yaml   diff two adapters' outputs, per case
 paw-test judge report.json --spec ".."    score a compare/check report with an LLM judge
+paw-kit doctor [--adapter a.paw]      diagnose the local environment for --backend real
 paw-inspect adapter.paw               show an adapter manifest
 paw-kit history adapter.paw           show every past compile of an adapter, oldest first
 paw-clean [--dry-run]                 remove cached adapters and trace DB
-paw-serve adapter.paw --port 8000     HTTP server
+paw-serve adapter.paw --port 8000     HTTP server (--warm to pay cold-load cost before binding)
 paw-kit export docker|dataset ...     scaffolding and trace export
 paw-kit lint-spec "text"|--file f.txt static checks for spec-authoring mistakes measured against real adapters
 ```

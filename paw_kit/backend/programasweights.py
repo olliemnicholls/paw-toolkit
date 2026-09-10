@@ -57,6 +57,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 import warnings
 
+import httpx
+
 from paw_kit.atomicio import atomic_write_text
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.manifest_lineage import (
@@ -131,10 +133,17 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             it to `False` (see module docstring, Privacy). Pass `True` to opt in.
         ephemeral: Forwarded to upstream `compile`/`compile_async` as-is; see the SDK's
             own documentation for its effect.
+        compile_retries: Extra attempts for the actual `paw.compile`/`paw.compile_async`
+            HTTP call, after a timeout or 5xx (server-side, transient) response, with a
+            short backoff between attempts. A 4xx (bad request, invalid API key, rate
+            limit) is never retried -- retrying it changes nothing. `0` disables retrying.
         sdk: Test seam. Any object exposing `compile`, `compile_async`,
             `get_compile_status` and `function` with the upstream signatures. Defaults to
             the real `programasweights` module, imported lazily on first use.
     """
+
+    #: Base delay between compile retries, multiplied by the attempt number (1, 2, ...).
+    _COMPILE_RETRY_BACKOFF_S = 0.5
 
     def __init__(
         self,
@@ -149,6 +158,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         compile_timeout_s: float = 3600.0,
         public: bool = False,
         ephemeral: bool = False,
+        compile_retries: int = 1,
         sdk: Any = None,
     ) -> None:
         self.compiler = compiler
@@ -161,6 +171,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         self.compile_timeout_s = compile_timeout_s
         self.public = public
         self.ephemeral = ephemeral
+        self.compile_retries = compile_retries
         self._sdk = sdk
         self._functions: "OrderedDict[str, Callable[..., str]]" = OrderedDict()
         self._lock = threading.Lock()
@@ -246,13 +257,15 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
 
         compile_started = time.monotonic()
         if self.compiler == FINETUNE_COMPILER:
-            job = paw.compile_async(
-                full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral
+            job = self._invoke_compile(
+                paw.compile_async,
+                full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral,
             )
             program_id, slug, status, compiler_snapshot = self._wait_for_job(paw, job)
         else:
-            program = paw.compile(
-                full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral
+            program = self._invoke_compile(
+                paw.compile,
+                full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral,
             )
             program_id = getattr(program, "id", None) or (program.get("id") if isinstance(program, dict) else None)
             slug = getattr(program, "slug", None) or (program.get("slug") if isinstance(program, dict) else None)
@@ -292,6 +305,43 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         with self._lock:
             self._functions.pop(output_path, None)
         return output_path
+
+    def _invoke_compile(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Call `fn` (`paw.compile` or `paw.compile_async`), converting an httpx timeout
+        or HTTP error response into a `RuntimeError` naming the service, the status, and
+        `paw-kit doctor` -- rather than letting a raw httpx exception (whose message says
+        nothing about which call failed or what to do about it) reach the caller.
+
+        A timeout or 5xx (server-side, transient) response is retried up to
+        `self.compile_retries` additional times with a short backoff. A 4xx (bad
+        request, invalid API key, rate limit) is never retried -- retrying it wastes a
+        rate-limited attempt on something that will fail again identically.
+        """
+        attempt = 0
+        while True:
+            try:
+                return fn(*args, **kwargs)
+            except httpx.TimeoutException as exc:
+                if attempt < self.compile_retries:
+                    attempt += 1
+                    time.sleep(self._COMPILE_RETRY_BACKOFF_S * attempt)
+                    continue
+                raise RuntimeError(
+                    "ProgramAsWeights compile service timed out after "
+                    f"{attempt + 1} attempt(s). Run `paw-kit doctor` to check service "
+                    "health."
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code if exc.response is not None else None
+                if status_code is not None and status_code >= 500 and attempt < self.compile_retries:
+                    attempt += 1
+                    time.sleep(self._COMPILE_RETRY_BACKOFF_S * attempt)
+                    continue
+                raise RuntimeError(
+                    f"ProgramAsWeights compile service returned HTTP {status_code} "
+                    f"after {attempt + 1} attempt(s). Run `paw-kit doctor` to check "
+                    "service health."
+                ) from exc
 
     def _wait_for_job(self, paw: Any, job: Any) -> tuple[str, Optional[str], str, Any]:
         """Poll `get_compile_status` until the job reaches a terminal state."""

@@ -6,6 +6,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List
 
+import httpx
 import pytest
 
 from paw_kit import AbstractPAWBackend
@@ -391,3 +392,122 @@ def test_history_log_appended_once_per_compile(key: None, tmp_path: Path) -> Non
     assert lines[0]["program_id"] == "prog-fast"
     assert lines[1]["parent_program_id"] == "prog-fast"
     assert oct(history_path.stat().st_mode)[-3:] == "600"
+# ---------------------------------------------------------------- compile retry/error-wrap
+
+
+def _status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://programasweights.com/api/v1/compile")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
+
+
+class _FlakyCompileSDK(FakeSDK):
+    """`FakeSDK` variant whose `compile`/`compile_async` raise a scripted queue of
+    exceptions (one per call) before falling through to the real fake behaviour."""
+
+    def __init__(self, exceptions: List[Exception], **kwargs: Any):
+        super().__init__(**kwargs)
+        self._exceptions = list(exceptions)
+        self.attempts = 0
+
+    def compile(self, spec: str, compiler: str | None = None, **kw: Any):
+        self.attempts += 1
+        if self._exceptions:
+            raise self._exceptions.pop(0)
+        return super().compile(spec, compiler=compiler, **kw)
+
+    def compile_async(self, spec: str, compiler: str, **kw: Any):
+        self.attempts += 1
+        if self._exceptions:
+            raise self._exceptions.pop(0)
+        return super().compile_async(spec, compiler, **kw)
+
+
+def test_compile_5xx_exhausted_raises_runtime_error_naming_doctor(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 5xx that outlives every retry becomes a RuntimeError naming the service, the
+    status, and `paw-kit doctor` -- not a raw httpx.HTTPStatusError."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([_status_error(503), _status_error(503)])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=1)
+
+    with pytest.raises(RuntimeError, match="ProgramAsWeights compile service returned HTTP 503") as exc_info:
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert "paw-kit doctor" in str(exc_info.value)
+    assert sdk.attempts == 2  # initial attempt + 1 retry, then exhausted
+
+
+def test_compile_5xx_retried_then_succeeds(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 5xx followed by success is retried transparently -- compile() returns normally,
+    honouring `compile_retries`."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([_status_error(500)])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=2)
+
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    assert sdk.attempts == 2  # one failure, one success
+    assert json.loads(out.read_text())["program_id"] == "prog-fast"
+
+
+def test_compile_4xx_never_retried(key: None, tmp_path: Path) -> None:
+    """A 4xx (bad request / invalid key / rate limit) fails immediately, with no retry
+    -- retrying would waste a rate-limited attempt on something that fails identically."""
+    sdk = _FlakyCompileSDK([_status_error(422)])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=3)
+
+    with pytest.raises(RuntimeError, match="HTTP 422"):
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert sdk.attempts == 1
+
+
+def test_compile_timeout_exhausted_raises_runtime_error(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([httpx.ReadTimeout("timed out"), httpx.ReadTimeout("timed out")])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=1)
+
+    with pytest.raises(RuntimeError, match="timed out") as exc_info:
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert "paw-kit doctor" in str(exc_info.value)
+    assert sdk.attempts == 2
+
+
+def test_compile_retries_default_is_one(key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`compile_retries` defaults to 1: a single 5xx is absorbed transparently."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([_status_error(502)])
+    backend = ProgramAsWeightsBackend(sdk=sdk)  # compile_retries not passed
+
+    backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert sdk.attempts == 2
+
+
+def test_finetune_compile_submission_5xx_wrapped(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The async/finetune path gets the same error wrapping on the initial submission
+    call, without changing the polling behaviour in `_wait_for_job`."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([_status_error(503), _status_error(503)], statuses=["completed"])
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0, compile_retries=1
+    )
+
+    with pytest.raises(RuntimeError, match="ProgramAsWeights compile service returned HTTP 503"):
+        backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    assert sdk.attempts == 2

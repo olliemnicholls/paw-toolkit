@@ -806,6 +806,30 @@ def test_docker_exporter_pinned_requirements_txt_PAW_DOCKER_03(
     assert "uv pip install --system paw-kit fastapi uvicorn httpx" not in dockerfile
 
 
+def test_docker_exporter_healthcheck_hits_ready_with_cold_start_period(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """The generated HEALTHCHECK polls /ready (readiness), not /health (liveness --
+    true before the model has loaded), with a --start-period long enough to cover a
+    cold base-model download (measured up to ~110s, see measurements/README.md), and
+    --warm is passed in the CMD so the container pays that cost before reporting ready."""
+    out_dir = tmp_path / "docker_dist"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
+
+    dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
+    assert "urlopen('http://localhost:8000/ready')" in dockerfile
+    assert "urlopen('http://localhost:8000/health')" not in dockerfile
+    assert "--start-period=180s" in dockerfile
+    assert '"paw-serve", "/app/triage.paw", "--host", "0.0.0.0", "--port", "8000", "--warm"' in dockerfile
+
+    compose = (dest / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "urlopen('http://localhost:8000/ready')" in compose
+    assert "start_period: 180s" in compose
+
+    readme = (dest / "README.md").read_text(encoding="utf-8")
+    assert "/ready" in readme
+
+
 def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
     """Verify paw-kit export docker and paw-kit export dataset CLI commands."""
     runner = CliRunner()
@@ -912,6 +936,127 @@ def test_cli_serve_allow_anonymous_flag_PAW_SERVE_01(
     assert called_kwargs.get("allow_anonymous") is True
     assert called_kwargs.get("api_key") is None
     assert "DISABLED" in res.stdout
+
+
+def test_ready_503_before_warmup_and_200_after_success(mock_adapter: Path) -> None:
+    """Verify /ready: 503 {"status": "loading"} until the adapter has completed one
+    successful inference, then 200 {"status": "ready"} -- distinct from /health, which
+    is 200 immediately regardless."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    res_before = client.get("/ready")
+    assert res_before.status_code == 503
+    assert res_before.json() == {"status": "loading"}
+    # /health stays live throughout, unlike /ready.
+    assert client.get("/health").status_code == 200
+
+    res_invoke = client.post("/invoke", json={"input": "Urgent payment failure"})
+    assert res_invoke.status_code == 200
+
+    res_after = client.get("/ready")
+    assert res_after.status_code == 200
+    assert res_after.json() == {"status": "ready"}
+
+
+def test_ready_exempt_from_auth_and_rate_limit(mock_adapter: Path) -> None:
+    """/ready needs no bearer token and doesn't count against the rate limiter, same as
+    /health."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, api_key="secret", requests_per_minute=1
+    )
+    client = TestClient(fastapi_app)
+
+    # No Authorization header at all -- still answers (503, since not warmed/invoked).
+    assert client.get("/ready").status_code == 503
+
+    # Exhaust the rate limit budget on an authenticated endpoint...
+    assert (
+        client.get("/metrics", headers={"Authorization": "Bearer secret"}).status_code
+        == 200
+    )
+    assert (
+        client.get("/metrics", headers={"Authorization": "Bearer secret"}).status_code
+        == 429
+    )
+    # ...and /ready is still answered rather than 429ed.
+    assert client.get("/ready").status_code == 503
+
+
+def test_warm_true_runs_one_inference_before_binding_and_marks_ready(
+    mock_adapter: Path,
+) -> None:
+    """--warm (via create_app(warm=True)) calls the backend once with a fixed input
+    before the app is even handed back, so /ready is already 200 on the first request."""
+    calls = []
+
+    class RecordingBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+            calls.append(input_text)
+            return super().infer(adapter_path, input_text, grammar_constraint)
+
+    backend = RecordingBackend()
+    backend.compile(spec="Classify ticket priority", examples=[], output_path=str(mock_adapter))
+
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True, warm=True)
+    assert len(calls) == 1
+
+    client = TestClient(fastapi_app)
+    res = client.get("/ready")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ready"}
+
+    # /metrics' request/latency counters are untouched by the warm-up: it is not a
+    # real served request.
+    m = client.get("/metrics").json()
+    assert m["total_requests"] == 0
+
+
+def test_warm_failure_leaves_ready_503_and_does_not_raise(
+    mock_adapter: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A warm-up inference failure must not crash app creation; it's logged, and
+    /ready stays 503 until a real request succeeds."""
+
+    class FailingBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+            raise RuntimeError("model failed to load")
+
+    backend = FailingBackend()
+    backend.compile(spec="Classify ticket priority", examples=[], output_path=str(mock_adapter))
+
+    with caplog.at_level("WARNING", logger="paw_kit.serve"):
+        fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True, warm=True)
+
+    assert any("Warm-up inference failed" in rec.message for rec in caplog.records)
+
+    client = TestClient(fastapi_app)
+    assert client.get("/ready").status_code == 503
+
+
+def test_cli_serve_warm_flag_threads_through_PAW_SERVE_READY(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--warm on `paw-kit serve` reaches serve_adapter (default False when omitted)."""
+    from paw_kit.serve import server
+
+    called_kwargs = {}
+
+    def mock_serve_adapter(*args, **kwargs):
+        called_kwargs.update(kwargs)
+
+    monkeypatch.setattr(server, "serve_adapter", mock_serve_adapter)
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["serve", str(mock_adapter), "--allow-anonymous", "--warm"])
+    assert res.exit_code == 0
+    assert called_kwargs.get("warm") is True
+
+    res_default = runner.invoke(app, ["serve", str(mock_adapter), "--allow-anonymous"])
+    assert res_default.exit_code == 0
+    assert called_kwargs.get("warm") is False
 
 
 def test_server_backend_label_uses_stable_vocabulary():
