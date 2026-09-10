@@ -507,7 +507,7 @@ structural rate as `93.3%` while the run artifact it cites
 one. Corrected at the source (the table now reads `92.5%`); this section's own
 `92.5% (124/134)` fast-compiler row was already right throughout.
 
-## Finetune compiler on a task the fast compiler fails
+## Finetune compiler on a hard task (ticket triage): both compilers fail it
 
 The section above ends by naming its own blind spot: `paw-ft-bs48` had only ever been run
 on phone extraction, where an 8-example fast compile already sat at 93% and 132 of 134
@@ -521,8 +521,11 @@ document where the fast compiler is known to be *wrong* rather than near-saturat
 `paw-ft-bs48` scores 60.0% full agreement against a 91.7% teacher ceiling, versus the best
 fast-compiler arm's 53.3%. It closes 6.7 of the ~38-point gap — about a sixth — for 45x
 the compile wall time, and it buys that by trading department accuracy away for priority
-accuracy rather than by getting better at the task. On a task the fast compiler fails, the
-finetune compiler also fails, less badly.
+accuracy rather than by getting better at the task. On a task the finetune compiler fails, the
+fast compiler also fails, somewhat worse. What this run demonstrates is that neither
+compiler rescues this task; it does not show that the fast compiler matches the finetune
+compiler in general, and a task the finetune compiler can do and the fast one cannot is
+the next thing to look for.
 
 > **Note, 2026-09-10 (earlier the same day):** this section was first published as a
 > two-arm comparison because arm C could not be compiled at all. Async compile was refused
