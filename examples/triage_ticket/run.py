@@ -101,6 +101,10 @@ SPECIFICATION = (
     response_model=TriageResult,
     backend=backend,
     cache_dir=CACHE_DIR,
+    # Shadow mode is on by default; this 10-ticket example has nowhere near enough
+    # calls to fill an agreement window, so turn it off to keep the printed
+    # "routed to the local adapter" claim (and is_compiled()) true at call 6.
+    shadow_window=0,
 )
 def triage_ticket(ticket_body: str) -> TriageResult:
     return simulated_remote_llm(ticket_body)

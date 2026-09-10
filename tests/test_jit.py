@@ -110,6 +110,7 @@ def test_compile_on_hit_tracing_and_hotswap(tmp_path: Path) -> None:
         cache_dir=cache_dir,
         backend=backend,
         sync_compile=True,  # Synchronous compilation for deterministic test assertions
+        shadow_window=0,
     )
     def classify_text(text: str) -> str:
         nonlocal teacher_calls
@@ -159,6 +160,7 @@ def test_compile_on_hit_with_pydantic_model(tmp_path: Path) -> None:
         cache_dir=cache_dir,
         backend=backend,
         sync_compile=True,
+        shadow_window=0,
     )
     def analyze_sentiment(input_text: str) -> SentimentOutput:
         nonlocal teacher_invocations
@@ -200,6 +202,7 @@ def test_compile_on_hit_fail_open_safety(tmp_path: Path, caplog) -> None:
         cache_dir=cache_dir,
         backend=backend,
         sync_compile=True,
+        shadow_window=0,
     )
     def robust_service(input_text: str) -> SentimentOutput:
         nonlocal teacher_invocations
@@ -467,6 +470,7 @@ def test_compile_on_hit_cached_adapter_callable_still_fails_open_PAW_JIT_05(tmp_
         cache_dir=cache_dir,
         backend=backend,
         sync_compile=True,
+        shadow_window=0,
     )
     def svc(text: str) -> SentimentOutput:
         nonlocal teacher_calls
@@ -500,6 +504,7 @@ def test_compile_on_hit_deleted_adapter_falls_back_to_teacher_PAW_JIT_05(tmp_pat
         cache_dir=cache_dir,
         backend=backend,
         sync_compile=True,
+        shadow_window=0,
     )
     def svc(text: str) -> SentimentOutput:
         nonlocal teacher_calls
@@ -539,6 +544,7 @@ def test_compile_on_hit_sync_recompile_of_ready_task_bypasses_stale_cache_PAW_JI
         cache_dir=cache_dir,
         backend=backend,
         sync_compile=True,
+        shadow_window=0,
     )
     def svc(text: str) -> SentimentOutput:
         return SentimentOutput(sentiment="teacher", confidence=1.0)
@@ -620,6 +626,7 @@ def test_compile_on_hit_cached_callable_keyed_on_resolved_backend_PAW_JIT_05(tmp
             cache_dir=cache_dir,
             backend=None,  # resolved per-call via get_default_backend()
             sync_compile=True,
+            shadow_window=0,
         )
         def svc(text: str) -> SentimentOutput:
             return SentimentOutput(sentiment="orig", confidence=1.0)
@@ -646,7 +653,7 @@ def test_compile_on_hit_task_id_is_full_sha256_hash_PAW_JIT_06(tmp_path: Path) -
     """Verify task_id is the full 64 hex characters, not a 16-char truncation."""
     cache_dir = str(tmp_path / "paw_cache_jit06")
 
-    @compile_on_hit(spec="JIT-06 full hash test", cache_dir=cache_dir, backend=MockPAWBackend())
+    @compile_on_hit(spec="JIT-06 full hash test", cache_dir=cache_dir, backend=MockPAWBackend(), shadow_window=0)
     def svc(text: str) -> str:
         return text
 

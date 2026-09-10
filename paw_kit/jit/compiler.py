@@ -36,6 +36,7 @@ class BackgroundCompiler:
         backend: AbstractPAWBackend,
         output_path: str,
         sync: bool = False,
+        promote_to: str = "ready",
     ) -> Optional[threading.Thread]:
         """Initiate background compilation of traces into a .paw adapter.
 
@@ -46,13 +47,25 @@ class BackgroundCompiler:
             backend: AbstractPAWBackend implementation to perform compilation.
             output_path: Destination path for the compiled adapter.
             sync: If True, executes synchronously instead of in a background thread.
+            promote_to: Terminal status of a successful compile -- "shadow" (Track 14's
+                default routing, where the adapter runs alongside the teacher until it
+                has earned the traffic) or "ready" (hot-swap immediately, i.e.
+                `shadow_window=0`).
 
         Returns:
             The spawned Thread if asynchronous, or None if synchronous or already compiling.
         """
         with self._lock:
             status = db.get_status(task_id)
-            if status in ("compiling", "ready", "failed") and not sync:
+            # Track 14: "shadow" joins the guard. A caller whose routing snapshot
+            # predates the compile finishing would otherwise re-enter here for a task
+            # already in `shadow` and recompile underneath the running shadow worker,
+            # invalidating the callable cache and the epoch's pairs mid-window. Note
+            # this closes the *asynchronous* path only -- the guard is `... and not
+            # sync`, so it is skipped entirely when sync=True, both before and after
+            # this change. The protection for `sync_compile=True` is the fresh status
+            # read at the decorator's compile trigger, not this tuple.
+            if status in ("compiling", "shadow", "ready", "failed") and not sync:
                 return None
             db.set_status(task_id, "compiling")
 
@@ -68,7 +81,13 @@ class BackgroundCompiler:
                     examples=examples,
                     output_path=output_path,
                 )
-                db.set_status(task_id, "ready", adapter_path=compiled_path)
+                if promote_to == "shadow":
+                    # The adapter exists but does not serve: the teacher keeps the
+                    # request path until agreement over a full window clears the
+                    # threshold.
+                    db.set_shadow_started(task_id, compiled_path)
+                else:
+                    db.set_ready_from_compile(task_id, compiled_path)
             except Exception:
                 # PAW-JIT-03: bounded retry, not an unconditional reset to "tracing"
                 # (see _MAX_COMPILE_ATTEMPTS docstring) and not a permanent deadlock.

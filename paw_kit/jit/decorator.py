@@ -1,21 +1,25 @@
 """@compile_on_hit decorator implementing transparent tracing and JIT hot-swapping."""
 
-from functools import wraps
+from functools import partial, wraps
 import hashlib
 import json
 import logging
 import os
 from pathlib import Path
+import random
 import re
 import threading
 import time
+import types
 from typing import Any, Callable, Dict, Optional, Tuple, Type, TypeVar, Union
 from pydantic import BaseModel
 
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.mock import MockPAWBackend
+from paw_kit.jit.agreement import default_agreement_fn
 from paw_kit.jit.compiler import BackgroundCompiler
 from paw_kit.jit.db import TraceDB
+from paw_kit.jit.shadow import _GLOBAL_SHADOW_RUNNER, ShadowJob, serialize_answer
 from paw_kit.schema.loader import get_default_backend, load
 
 T = TypeVar("T")
@@ -34,7 +38,15 @@ _FAIL_OPEN_COUNTS: Dict[str, int] = {}
 _FAIL_OPEN_COUNTS_LOCK = threading.Lock()
 
 
-def _record_fail_open(task_id: str, exc: Exception) -> None:
+def _record_fail_open(task_id: str, exc: Exception, db: Optional[TraceDB] = None) -> None:
+    # Track 14: also bump the *persisted* counter, so `paw-kit report` -- a different
+    # process entirely -- can show the figure. The in-process counter below keeps its
+    # exact existing meaning and reset-on-restart semantics.
+    if db is not None:
+        try:
+            db.increment_fail_open(task_id)
+        except Exception:
+            pass
     with _FAIL_OPEN_COUNTS_LOCK:
         _FAIL_OPEN_COUNTS[task_id] = _FAIL_OPEN_COUNTS.get(task_id, 0) + 1
         count = _FAIL_OPEN_COUNTS[task_id]
@@ -107,12 +119,117 @@ _REDACTION_RULES = [
 ]
 
 
+# Hard cap on `audit_rate`: past this the "sampled fraction" stops being a sample and
+# starts being a second production workload paid for out of the caller's API budget.
+_MAX_AUDIT_RATE = 0.5
+
+
 def redact_sensitive_text(text: str) -> str:
     """Best-effort scrub of bearer tokens and password/secret/api_key/token values."""
     redacted = text
     for pattern, replacement in _REDACTION_RULES:
         redacted = pattern.sub(replacement, redacted)
     return redacted
+
+
+def _should_audit(rng: random.Random, rate: float) -> bool:
+    """Sample the post-promotion audit fraction.
+
+    Module-level so tests can monkeypatch it, and driven by a `random.Random` instance
+    owned by the wrapper closure rather than the global `random` module -- a caller who
+    seeds `random` for reproducibility must not have their stream perturbed by a
+    library's sampling decisions.
+    """
+    if rate <= 0:
+        return False
+    return rng.random() < rate
+
+
+def _make_adapter_runner(
+    task_id: str,
+    adapter_path: str,
+    response_model: Optional[Type[BaseModel]],
+    backend: AbstractPAWBackend,
+) -> Callable[[str], Any]:
+    """Build the zero-I/O closure that runs the compiled adapter on one input.
+
+    Constructing it does nothing; *calling* it performs the `os.stat`, the cache
+    lookup and the `load()`/`infer()`. The same closure serves the request path in
+    `ready` and the shadow worker in `shadow`, which is what lets `_ADAPTER_CALLABLE_CACHE`
+    and `_invalidate_adapter_cache` stay in this module (where `tests/test_jit.py`
+    reaches for them by name) while `shadow.py` imports nothing from here.
+    """
+
+    def _run(input_str: str) -> Any:
+        # PAW-JIT-05(b): a single os.stat call does double duty -- its
+        # FileNotFoundError *is* the existence check (subsuming the old
+        # Path.exists() pre-check, and falling open via the caller's except
+        # exactly like a stale-adapter inference failure would), and its
+        # (mtime, size, inode) triple is the cache key's staleness component
+        # when a response_model is in play.
+        stat_result = os.stat(adapter_path)
+        if response_model is not None:
+            cache_key = (
+                adapter_path,
+                (stat_result.st_mtime_ns, stat_result.st_size, stat_result.st_ino),
+                backend,
+            )
+            with _ADAPTER_CALLABLE_CACHE_LOCK:
+                cached_fn = _ADAPTER_CALLABLE_CACHE.get(task_id, {}).get(cache_key)
+            if cached_fn is None:
+                # PAW-JIT-05: cache the loaded adapter callable instead of
+                # re-load()-ing (recompiling the grammar regex, rebuilding
+                # the closure) on every single call.
+                cached_fn = load(
+                    adapter_path=adapter_path,
+                    response_model=response_model,
+                    backend=backend,
+                )
+                with _ADAPTER_CALLABLE_CACHE_LOCK:
+                    _ADAPTER_CALLABLE_CACHE.setdefault(task_id, {})[cache_key] = cached_fn
+            return cached_fn(input_str)
+        return backend.infer(adapter_path, input_str)
+
+    return _run
+
+
+def _validate_shadow_params(
+    shadow_window: int,
+    shadow_threshold: float,
+    audit_window: int,
+    audit_rate: float,
+    demote_threshold: float,
+    shadow_queue_size: int,
+    shadow_max_pairs: int,
+) -> None:
+    """Reject an unusable shadow configuration at decoration time, never at call time."""
+    if shadow_window < 0:
+        raise ValueError(f"shadow_window must be >= 0 (0 disables shadow mode), got {shadow_window}")
+    if not 0 < shadow_threshold <= 1:
+        raise ValueError(f"shadow_threshold must be in (0, 1], got {shadow_threshold}")
+    if audit_window < 1:
+        raise ValueError(f"audit_window must be >= 1, got {audit_window}")
+    if not 0 <= audit_rate <= _MAX_AUDIT_RATE:
+        raise ValueError(
+            f"audit_rate must be between 0 and {_MAX_AUDIT_RATE} (it spends real teacher "
+            f"calls after promotion), got {audit_rate}"
+        )
+    if not 0 <= demote_threshold < shadow_threshold:
+        raise ValueError(
+            "demote_threshold must satisfy 0 <= demote_threshold < shadow_threshold "
+            f"(strict hysteresis, so a task cannot flap on window noise), got "
+            f"demote_threshold={demote_threshold} shadow_threshold={shadow_threshold}"
+        )
+    if shadow_queue_size < 1:
+        raise ValueError(f"shadow_queue_size must be >= 1, got {shadow_queue_size}")
+    if shadow_max_pairs < max(shadow_window, audit_window):
+        raise ValueError(
+            "shadow_max_pairs must be >= max(shadow_window, audit_window): a retention cap "
+            "below the window prunes the table below a full window before it can ever fill, "
+            "so the task could never promote or demote. Got "
+            f"shadow_max_pairs={shadow_max_pairs}, shadow_window={shadow_window}, "
+            f"audit_window={audit_window}"
+        )
 
 
 def compile_on_hit(
@@ -123,13 +240,26 @@ def compile_on_hit(
     backend: Optional[AbstractPAWBackend] = None,
     sync_compile: bool = False,
     redact_trace: bool = False,
+    *,
+    shadow_window: int = 20,
+    shadow_threshold: float = 0.8,
+    audit_window: int = 20,
+    audit_rate: float = 0.0,
+    demote_threshold: float = 0.6,
+    agreement_fn: Optional[Callable[[Any, Any], bool]] = None,
+    shadow_queue_size: int = 8,
+    shadow_max_pairs: int = 500,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator converting production LLM API calls into local neural functions.
 
     During initial invocations (hits < threshold), transparently calls the decorated
     function and logs input/output traces to SQLite. Once threshold is reached,
-    background compilation triggers. Subsequent calls are automatically routed to
-    the local .paw adapter, falling back to the wrapped function upon error.
+    background compilation triggers -- and the task enters **shadow mode**: the wrapped
+    function keeps serving every call while the compiled adapter runs on the same
+    inputs off the request path and its answers are compared against the teacher's.
+    Only once agreement over a full window of real inputs clears `shadow_threshold`
+    does the adapter start serving; from then on it falls back to the wrapped function
+    upon error, exactly as before.
 
     Args:
         spec: Natural language task specification.
@@ -148,15 +278,73 @@ def compile_on_hit(
             PAW-JIT-01's restrictive file permissions on traces.db are the primary
             mitigation for unredacted trace data at rest; this is an explicit,
             quality-for-confidentiality trade-off for deployments that want it.
+            Track 14: it now also governs all three text columns of `shadow_pairs`.
+            The *comparison* still runs on the raw values -- the adapter is run on the
+            input production actually sent, and redaction is applied only on the way
+            to disk.
+        shadow_window: Comparisons that must agree, in one tumbling window, before the
+            adapter is promoted to serving. `0` disables shadow mode entirely and
+            restores the pre-Track-14 behaviour of hot-swapping the instant compilation
+            returns; it is the exact, tested escape hatch, and it also rescues a task
+            already sitting in `shadow` from an earlier run.
+        shadow_threshold: Agreement rate required to promote (default 0.8 = 16/20).
+        audit_window: Window size for post-promotion drift detection.
+        audit_rate: Fraction of served calls that additionally re-run the wrapped
+            function on a background thread for a fresh comparison. **Defaults to 0.0
+            (off).** It spends real teacher calls after the swap and re-invokes a
+            function that may not be thread-safe, so it is opt-in; `0.05` is the
+            recommended value when you want a drift signal. With the default, demotion
+            is unreachable and there is no post-promotion drift signal.
+        demote_threshold: Audit agreement below which a promoted task is demoted back
+            to `shadow`. Must be strictly below `shadow_threshold` (hysteresis).
+        agreement_fn: `(teacher, adapter) -> bool`. Defaults to `default_agreement_fn`,
+            which is deliberately conservative: strings must match exactly after NFC
+            normalisation and stripping, and are *not* casefolded. Without a
+            `response_model` there is nothing to normalise through, so agreement is
+            exact string equality of free-form model output -- which for anything but a
+            short closed-vocabulary label will essentially never hold, and such a task
+            will sit in `shadow` indefinitely with the teacher serving. Pass an
+            `agreement_fn` (see `field_tolerance_agreement`) for those.
+        shadow_queue_size: Bounded work-in-flight per task. On a full queue the newest
+            comparison is dropped; a dropped comparison is neither an agreement nor a
+            disagreement and never enters the window denominator.
+        shadow_max_pairs: Per-task retention cap on `shadow_pairs`, oldest-first.
 
     Returns:
         Decorated callable function with JIT execution and fail-open routing.
+
+    Raises:
+        ValueError: at decoration time, for an unusable shadow configuration.
     """
+    _validate_shadow_params(
+        shadow_window, shadow_threshold, audit_window, audit_rate,
+        demote_threshold, shadow_queue_size, shadow_max_pairs,
+    )
+    resolved_agreement_fn = agreement_fn or default_agreement_fn
     db_path = str(Path(cache_dir) / "traces.db")
     db = TraceDB(db_path=db_path)
-    # PAW-JIT-05: register the same-process invalidation backstop for every TraceDB
+    # PAW-JIT-05: register the same-place invalidation backstop for every TraceDB
     # this decorator creates -- see _invalidate_adapter_cache's docstring.
     db.register_status_listener(_invalidate_adapter_cache)
+
+    shadow_config = types.MappingProxyType({
+        "shadow_window": shadow_window,
+        "shadow_threshold": shadow_threshold,
+        "audit_window": audit_window,
+        "audit_rate": audit_rate,
+        "demote_threshold": demote_threshold,
+        "shadow_queue_size": shadow_queue_size,
+        "shadow_max_pairs": shadow_max_pairs,
+        "agreement_fn": getattr(resolved_agreement_fn, "__name__", repr(resolved_agreement_fn)),
+    })
+    # Only the four parameters the window arithmetic depends on are reconciled across
+    # runs -- see TraceDB.sync_shadow_config.
+    persisted_config = {
+        "shadow_window": shadow_window,
+        "shadow_threshold": shadow_threshold,
+        "audit_window": audit_window,
+        "demote_threshold": demote_threshold,
+    }
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         # Compute deterministic task ID from function signature and spec.
@@ -170,54 +358,99 @@ def compile_on_hit(
         qualname = f"{func.__module__}.{func.__qualname__}"
         task_id = hashlib.sha256(f"{qualname}:{spec}".encode("utf-8")).hexdigest()
 
+        # Owned by this closure, never the global `random` module: a caller who seeds
+        # `random` for reproducibility must not be perturbed by audit sampling.
+        rng = random.Random()
+
+        if shadow_window:
+            try:
+                db.sync_shadow_config(task_id, persisted_config)
+            except Exception:  # pragma: no cover - never break decoration
+                logger.debug("paw_kit.jit: could not persist shadow config for %s", task_id)
+
+        def _submit_shadow_job(**kwargs: Any) -> None:
+            """Enqueue one comparison. Swallows everything: shadow work never raises."""
+            try:
+                _GLOBAL_SHADOW_RUNNER.submit(
+                    ShadowJob(
+                        task_id=task_id,
+                        db_path=db_path,
+                        db=db,
+                        response_model=response_model,
+                        agreement_fn=resolved_agreement_fn,
+                        redact_fn=redact_sensitive_text if redact_trace else None,
+                        shadow_window=shadow_window,
+                        audit_window=audit_window,
+                        shadow_threshold=shadow_threshold,
+                        demote_threshold=demote_threshold,
+                        max_pairs=shadow_max_pairs,
+                        queue_size=shadow_queue_size,
+                        **kwargs,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defense in depth
+                logger.debug(
+                    "paw_kit.jit: task_id=%s could not enqueue a shadow comparison (%s: %s).",
+                    task_id, type(exc).__name__, exc,
+                )
+
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             active_backend = backend or get_default_backend()
             input_payload = _serialize_input(args, kwargs)
 
-            # 1. Check if adapter is compiled and ready
-            adapter_path = db.get_adapter_path(task_id)
-            if adapter_path:
+            # 1. One SELECT decides how this call is routed.
+            status, adapter_path, state_epoch = db.get_task_routing(task_id)
+
+            # Escape hatch. `shadow_window=0` must also rescue a task that a previous
+            # run left sitting in `shadow`: otherwise the opt-out strands exactly the
+            # users who tried the default first -- teacher forever, adapter compiled
+            # and never used.
+            if shadow_window == 0 and status == "shadow" and adapter_path:
                 try:
-                    # PAW-JIT-05(b): a single os.stat call does double duty -- its
-                    # FileNotFoundError *is* the existence check (subsuming the old
-                    # Path.exists() pre-check, and falling open via the except below
-                    # exactly like a stale-adapter inference failure would), and its
-                    # (mtime, size, inode) triple is the cache key's staleness
-                    # component when a response_model is in play.
-                    stat_result = os.stat(adapter_path)
-                    if response_model is not None:
-                        cache_key = (
-                            adapter_path,
-                            (stat_result.st_mtime_ns, stat_result.st_size, stat_result.st_ino),
-                            active_backend,
-                        )
-                        with _ADAPTER_CALLABLE_CACHE_LOCK:
-                            cached_fn = _ADAPTER_CALLABLE_CACHE.get(task_id, {}).get(cache_key)
-                        if cached_fn is None:
-                            # PAW-JIT-05: cache the loaded adapter callable instead of
-                            # re-load()-ing (recompiling the grammar regex, rebuilding
-                            # the closure) on every single call.
-                            cached_fn = load(
-                                adapter_path=adapter_path,
-                                response_model=response_model,
-                                backend=active_backend,
-                            )
-                            with _ADAPTER_CALLABLE_CACHE_LOCK:
-                                _ADAPTER_CALLABLE_CACHE.setdefault(task_id, {})[cache_key] = cached_fn
-                        return cached_fn(input_payload)  # type: ignore[return-value]
-                    else:
-                        output_str = active_backend.infer(adapter_path, input_payload)
-                        return output_str  # type: ignore[return-value]
+                    db.try_promote(task_id, state_epoch, None, 0, reason="shadow_disabled")
+                except Exception:  # pragma: no cover - never break the request path
+                    pass
+                status, adapter_path, state_epoch = db.get_task_routing(task_id)
+
+            # 2. Promoted: the adapter serves, with the fail-open path unchanged.
+            if status == "ready" and adapter_path:
+                run_adapter = _make_adapter_runner(
+                    task_id, adapter_path, response_model, active_backend
+                )
+                try:
+                    served_start = time.perf_counter()
+                    result = run_adapter(input_payload)
+                    served_latency_ms = (time.perf_counter() - served_start) * 1000
                 except Exception as exc:
                     # Fail-Open Safety: transparently route to wrapped function on local failure.
                     # Transparent to the *caller* deliberately stays true -- this only adds a
                     # log line and a counter a developer has to go looking for, not any change
-                    # to the return value or exception behavior on this path.
-                    _record_fail_open(task_id, exc)
+                    # to the return value or exception behavior on this path. A fail-open is an
+                    # infrastructure fault, not semantic drift: it never enters the audit
+                    # window and never counts toward demotion.
+                    _record_fail_open(task_id, exc, db)
                     return func(*args, **kwargs)
 
-            # 2. Adapter not ready: invoke wrapped function (teacher)
+                if shadow_window and _should_audit(rng, audit_rate):
+                    try:
+                        _submit_shadow_job(
+                            state_epoch=state_epoch,
+                            phase="audit",
+                            input_payload=input_payload,
+                            adapter_output=serialize_answer(result),
+                            adapter_latency_ms=served_latency_ms,
+                            # Deliberately holds the caller's own args/kwargs by
+                            # reference and calls func on a worker thread: the wrapped
+                            # function must be thread-safe, and arguments mutated after
+                            # this call returns will be seen in their mutated form.
+                            run_teacher=partial(func, *args, **kwargs),
+                        )
+                    except Exception:  # pragma: no cover - defense in depth
+                        pass
+                return result  # type: ignore[return-value]
+
+            # 3. Adapter not serving: invoke wrapped function (teacher)
             start_time = time.perf_counter()
             teacher_result = func(*args, **kwargs)
             latency_ms = (time.perf_counter() - start_time) * 1000
@@ -230,7 +463,7 @@ def compile_on_hit(
             else:
                 teacher_output_str = str(teacher_result)
 
-            # 3. Record trace and increment counter
+            # 4. Record trace and increment counter
             # PAW-JIT-02: redaction (opt-in, see redact_trace docstring above) is
             # applied only to what gets persisted -- input_payload/teacher_result
             # above are untouched, so the function's actual return value to the
@@ -244,7 +477,28 @@ def compile_on_hit(
                 latency_ms=latency_ms,
             )
 
-            # 4. Trigger background compilation once threshold reached
+            # 5. In shadow, hand the same input to the adapter off the request path.
+            #    One put_nowait of a frozen dataclass: no I/O on this thread.
+            if status == "shadow" and shadow_window and adapter_path:
+                _submit_shadow_job(
+                    state_epoch=state_epoch,
+                    phase="shadow",
+                    input_payload=input_payload,
+                    teacher_output=teacher_output_str,
+                    teacher_latency_ms=latency_ms,
+                    run_adapter=_make_adapter_runner(
+                        task_id, adapter_path, response_model, active_backend
+                    ),
+                )
+
+            # 6. Trigger background compilation once threshold reached.
+            #    The status here must be a *fresh* read, not the routing snapshot
+            #    above: that snapshot predates the teacher call, which can take
+            #    seconds, and a background compile finishing during it would leave the
+            #    snapshot reading "tracing" and re-trigger compilation underneath a
+            #    running shadow worker (compiler.py's duplicate guard is skipped
+            #    entirely when sync=True). One extra SELECT, on a path already gated
+            #    behind call_count >= threshold, is the correct price.
             if call_count >= threshold and db.get_status(task_id) == "tracing":
                 target_adapter_path = str(Path(cache_dir) / f"{task_id}.paw")
                 _GLOBAL_COMPILER.trigger_compilation(
@@ -254,15 +508,46 @@ def compile_on_hit(
                     backend=active_backend,
                     output_path=target_adapter_path,
                     sync=sync_compile,
+                    promote_to="shadow" if shadow_window else "ready",
                 )
 
             return teacher_result
+
+        def _get_agreement(n: int = 5) -> Dict[str, Any]:
+            report = db.get_task_report(task_id)
+            block = report["agreement"]
+            runner_stats = _GLOBAL_SHADOW_RUNNER.stats(task_id, db_path)
+            return {
+                "state": report["status"],
+                "phase": block["phase"],
+                "rate": block["rate"],
+                "window": block["window"],
+                "samples": block["samples"],
+                "agree": block["agree"],
+                "disagree": block["disagree"],
+                "error": block["error"],
+                "teacher_error": block["teacher_error"],
+                # In-process, since process start, and per-process only: two processes
+                # running the same decorated function share the database (and therefore
+                # the promotion decision) but not these.
+                "dropped": runner_stats["dropped"],
+                "stalled": runner_stats["stalled"],
+                "pending": runner_stats["pending"],
+                # The *persisted* (therefore possibly redacted) text.
+                "last_disagreements": db.get_recent_disagreements(task_id, n),
+            }
 
         # Expose testing and inspection metadata
         wrapper.task_id = task_id  # type: ignore[attr-defined]
         wrapper.db = db  # type: ignore[attr-defined]
         wrapper.get_call_count = lambda: db.get_call_count(task_id)  # type: ignore[attr-defined]
+        # Deliberately unchanged: "the compiled adapter is serving this call". In
+        # `shadow` the adapter exists but is not serving, so this is False -- which is
+        # exactly why the demo and the README example pass shadow_window=0.
         wrapper.is_compiled = lambda: db.get_adapter_path(task_id) is not None  # type: ignore[attr-defined]
+        wrapper.has_adapter = lambda: db.get_task_routing(task_id)[0] in ("shadow", "ready")  # type: ignore[attr-defined]
+        wrapper.get_agreement = _get_agreement  # type: ignore[attr-defined]
+        wrapper.shadow_config = shadow_config  # type: ignore[attr-defined]
         # PAW-JIT: see _record_fail_open -- in-process count of "no signal" fail-opens
         # for this task since process start, not persisted across restarts.
         wrapper.get_fail_open_count = lambda: _FAIL_OPEN_COUNTS.get(task_id, 0)  # type: ignore[attr-defined]

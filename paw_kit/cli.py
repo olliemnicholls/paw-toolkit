@@ -229,6 +229,10 @@ def _run_triage_demo() -> None:
             response_model=TriageResult,
             backend=backend,
             cache_dir=temp_dir,
+            # Shadow mode is on by default; this 6-ticket demo has nowhere near
+            # enough calls to fill an agreement window, so turn it off to keep the
+            # hot-swap deterministic.
+            shadow_window=0,
             sync_compile=True,
         )
         def triage_ticket(ticket_body: str) -> TriageResult:

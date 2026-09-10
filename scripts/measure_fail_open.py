@@ -65,7 +65,14 @@ def main() -> int:
     backend = ProgramAsWeightsBackend(compiler="paw-4b-qwen3-0.6b", max_spec_examples=16)
     threshold = 3
     decorated = compile_on_hit(
-        spec=SPEC, threshold=threshold, backend=backend, cache_dir=cache_dir, sync_compile=True
+        spec=SPEC,
+        threshold=threshold,
+        backend=backend,
+        cache_dir=cache_dir,
+        sync_compile=True,
+        # Track 14: this measurement is about the fail-open path *after* a hot-swap, so
+        # it needs the swap to happen at the threshold exactly as the recorded run did.
+        shadow_window=0,
     )(teacher)
 
     print("=== phase 1: trace to threshold, real synchronous compile ===")
@@ -103,6 +110,7 @@ def main() -> int:
             backend=backend2,
             cache_dir=cache_dir2,
             sync_compile=True,
+            shadow_window=0,  # see the note on the first decoration above
         )(teacher)
 
         all_ok = True

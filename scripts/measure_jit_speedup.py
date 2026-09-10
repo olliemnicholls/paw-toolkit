@@ -146,6 +146,12 @@ def main() -> int:
         backend=backend,
         cache_dir=args.cache_dir,
         sync_compile=True,  # exact hot-swap point for a clean before/after split
+        # Track 14: pinned so this script keeps the hot-swap-immediately behaviour the
+        # numbers in measurements/README.md were produced under. With the default
+        # shadow_window this adapter (60% agreement, measured) would never promote and
+        # the recorded run would not be reproducible. Measuring shadow mode itself is a
+        # separate measurement.
+        shadow_window=0,
     )(teacher_fn)
 
     calls: list[dict] = []
