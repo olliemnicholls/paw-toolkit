@@ -1,0 +1,616 @@
+task_name: region_code
+spec: "Assign an internal region code to a sales message.\n\nEvery country we operate in belongs to exactly one internal region. The regions are an internal grouping: they are not continents, not trading blocs, and not anything you can work out from geography. The only way to get the answer right is to look the country up in the table below.\n\nThe table:\n\nRG-K7\n  Brazil\n  Vietnam\n  Thailand\n  Egypt\n  Sweden\n\nRG-M2\n  Kenya\n  Poland\n  Peru\n  Mexico\n  Malaysia\n\nRG-Q9\n  Norway\n  Chile\n  Australia\n  Nigeria\n  Indonesia\n\nRG-T4\n  Japan\n  Finland\n  Denmark\n  Argentina\n  Philippines\n\nRG-V1\n  Ireland\n  Turkey\n  India\n  Colombia\n  Greece\n\nRG-X6\n  Portugal\n  New Zealand\n  Canada\n  Morocco\n  Hungary\n\nThe input is a single short sentence from our order and support systems. It mentions exactly one of the thirty countries above, written out in full. It may also mention a city; the city is irrelevant, and it may well be a city in some other country. Match on the country name only. The country name may appear in lower case.\n\nOutput exactly one region code and nothing else: one of RG-K7, RG-M2, RG-Q9, RG-T4, RG-V1, RG-X6. No explanation, no punctuation, no country name.\n\nWorked example one. The input is \"Ship this order to Porto, Portugal.\" The country is Portugal. Portugal is listed under RG-X6. The output is RG-X6.\n\nWorked example two. The input is \"Our Osaka office handled the call, but the customer is in Kenya.\" Two places are mentioned, but Osaka is a city and Kenya is the country. Kenya is listed under RG-M2. The output is RG-M2.\n"
+adapter_path: measurements/finetune_lookup_A-paw-4b-qwen3-0.6b.paw
+standard_cases:
+- input: please route the shipment to sweden.
+  expected: RG-K7
+- input: We are opening a second depot in Greece next quarter.
+  expected: RG-V1
+- input: Invoice for the Rosario office (Argentina) attached.
+  expected: RG-T4
+- input: Our reseller in Portugal needs the report.
+  expected: RG-X6
+- input: please route the shipment to morocco.
+  expected: RG-X6
+- input: 'Warehouse transfer: destination Sweden.'
+  expected: RG-K7
+- input: Customer billing address is in Turkey.
+  expected: RG-V1
+- input: Invoice for the Rio de Janeiro office (Brazil) attached.
+  expected: RG-K7
+- input: Support ticket opened by a customer in Greece; escalate to the regional desk.
+  expected: RG-V1
+- input: Our reseller in Canada needs the report.
+  expected: RG-X6
+- input: We are opening a second depot in Malaysia next quarter.
+  expected: RG-M2
+- input: Support ticket opened by a customer in Finland; escalate to the regional desk.
+  expected: RG-T4
+- input: Ship this order to Gothenburg, Sweden.
+  expected: RG-K7
+- input: Routed via Rio de Janeiro, final delivery Vietnam.
+  expected: RG-K7
+- input: Invoice for the Medellin office (Colombia) attached.
+  expected: RG-V1
+- input: Our Arequipa office handled the call, but the customer is in Portugal.
+  expected: RG-X6
+- input: please route the shipment to india.
+  expected: RG-V1
+- input: Routed via Tampere, final delivery Norway.
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Denmark; escalate to the regional desk.
+  expected: RG-T4
+- input: Customer billing address is in Peru.
+  expected: RG-M2
+- input: Our Brisbane office handled the call, but the customer is in Mexico.
+  expected: RG-M2
+- input: We are opening a second depot in New Zealand next quarter.
+  expected: RG-X6
+- input: Ship this order to Guadalajara, Mexico.
+  expected: RG-M2
+- input: Support ticket opened by a customer in Poland; escalate to the regional desk.
+  expected: RG-M2
+- input: Invoice for the Gothenburg office (Sweden) attached.
+  expected: RG-K7
+- input: 'Warehouse transfer: destination Indonesia.'
+  expected: RG-Q9
+- input: Customer billing address is in Norway.
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Indonesia; escalate to the regional desk.
+  expected: RG-Q9
+- input: 'Warehouse transfer: destination Vietnam.'
+  expected: RG-K7
+- input: Our reseller in Chile needs the report.
+  expected: RG-Q9
+- input: We are opening a second depot in Finland next quarter.
+  expected: RG-T4
+- input: Customer billing address is in Thailand.
+  expected: RG-K7
+- input: Our Lagos office handled the call, but the customer is in Chile.
+  expected: RG-Q9
+- input: Our reseller in Greece needs the report.
+  expected: RG-V1
+- input: We are opening a second depot in Brazil next quarter.
+  expected: RG-K7
+- input: 'Warehouse transfer: destination Argentina.'
+  expected: RG-T4
+- input: Customer billing address is in Greece.
+  expected: RG-V1
+- input: Our Brisbane office handled the call, but the customer is in Ireland.
+  expected: RG-V1
+- input: Our reseller in Colombia needs the report.
+  expected: RG-V1
+- input: Our Penang office handled the call, but the customer is in Philippines.
+  expected: RG-T4
+- input: Our reseller in Egypt needs the report.
+  expected: RG-K7
+- input: We are opening a second depot in Philippines next quarter.
+  expected: RG-T4
+- input: Ship this order to Thessaloniki, Greece.
+  expected: RG-V1
+- input: We are opening a second depot in Sweden next quarter.
+  expected: RG-K7
+- input: 'Warehouse transfer: destination Nigeria.'
+  expected: RG-Q9
+- input: please route the shipment to brazil.
+  expected: RG-K7
+- input: Routed via Medellin, final delivery New Zealand.
+  expected: RG-X6
+- input: 'Warehouse transfer: destination Egypt.'
+  expected: RG-K7
+- input: Our reseller in Brazil needs the report.
+  expected: RG-K7
+- input: 'Warehouse transfer: destination Chile.'
+  expected: RG-Q9
+- input: Invoice for the Surabaya office (Indonesia) attached.
+  expected: RG-Q9
+- input: Invoice for the Valparaiso office (Chile) attached.
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Australia; escalate to the regional desk.
+  expected: RG-Q9
+- input: please route the shipment to mexico.
+  expected: RG-M2
+- input: Our reseller in Kenya needs the report.
+  expected: RG-M2
+- input: Our Auckland office handled the call, but the customer is in Thailand.
+  expected: RG-K7
+- input: Routed via Brisbane, final delivery Canada.
+  expected: RG-X6
+- input: Support ticket opened by a customer in Peru; escalate to the regional desk.
+  expected: RG-M2
+- input: 'Warehouse transfer: destination India.'
+  expected: RG-V1
+- input: We are opening a second depot in Chile next quarter.
+  expected: RG-Q9
+- input: Our Alexandria office handled the call, but the customer is in Sweden.
+  expected: RG-K7
+- input: Ship this order to Osaka, Japan.
+  expected: RG-T4
+- input: please route the shipment to turkey.
+  expected: RG-V1
+- input: Invoice for the Arequipa office (Peru) attached.
+  expected: RG-M2
+- input: Routed via Gothenburg, final delivery Philippines.
+  expected: RG-T4
+- input: please route the shipment to hungary.
+  expected: RG-X6
+- input: Our reseller in Turkey needs the report.
+  expected: RG-V1
+- input: Ship this order to Cork, Ireland.
+  expected: RG-V1
+- input: Routed via Osaka, final delivery Denmark.
+  expected: RG-T4
+- input: Invoice for the Bergen office (Norway) attached.
+  expected: RG-Q9
+- input: Our Gothenburg office handled the call, but the customer is in Finland.
+  expected: RG-T4
+- input: 'Warehouse transfer: destination Peru.'
+  expected: RG-M2
+- input: 'Warehouse transfer: destination Canada.'
+  expected: RG-X6
+- input: Ship this order to Chiang Mai, Thailand.
+  expected: RG-K7
+- input: We are opening a second depot in Mexico next quarter.
+  expected: RG-M2
+- input: Ship this order to Pune, India.
+  expected: RG-V1
+- input: 'Warehouse transfer: destination Norway.'
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Turkey; escalate to the regional desk.
+  expected: RG-V1
+- input: Support ticket opened by a customer in New Zealand; escalate to the regional desk.
+  expected: RG-X6
+- input: Our Aarhus office handled the call, but the customer is in Colombia.
+  expected: RG-V1
+- input: Support ticket opened by a customer in Vietnam; escalate to the regional desk.
+  expected: RG-K7
+- input: please route the shipment to ireland.
+  expected: RG-V1
+- input: Support ticket opened by a customer in Japan; escalate to the regional desk.
+  expected: RG-T4
+- input: Invoice for the Osaka office (Japan) attached.
+  expected: RG-T4
+- input: Customer billing address is in Colombia.
+  expected: RG-V1
+- input: Invoice for the Brisbane office (Australia) attached.
+  expected: RG-Q9
+- input: Customer billing address is in Ireland.
+  expected: RG-V1
+- input: Ship this order to Nairobi, Kenya.
+  expected: RG-M2
+- input: 'Warehouse transfer: destination Thailand.'
+  expected: RG-K7
+- input: Our reseller in Thailand needs the report.
+  expected: RG-K7
+- input: Support ticket opened by a customer in Malaysia; escalate to the regional desk.
+  expected: RG-M2
+- input: Routed via Guadalajara, final delivery Thailand.
+  expected: RG-K7
+- input: Ship this order to Tampere, Finland.
+  expected: RG-T4
+- input: Customer billing address is in Denmark.
+  expected: RG-T4
+- input: Invoice for the Porto office (Portugal) attached.
+  expected: RG-X6
+- input: Support ticket opened by a customer in Hungary; escalate to the regional desk.
+  expected: RG-X6
+- input: Ship this order to Cebu, Philippines.
+  expected: RG-T4
+- input: Our Gothenburg office handled the call, but the customer is in Turkey.
+  expected: RG-V1
+- input: 'Warehouse transfer: destination Japan.'
+  expected: RG-T4
+- input: Ship this order to Medellin, Colombia.
+  expected: RG-V1
+- input: Routed via Lagos, final delivery Brazil.
+  expected: RG-K7
+- input: We are opening a second depot in Canada next quarter.
+  expected: RG-X6
+- input: Routed via Alexandria, final delivery Ireland.
+  expected: RG-V1
+- input: please route the shipment to canada.
+  expected: RG-X6
+- input: please route the shipment to peru.
+  expected: RG-M2
+- input: Ship this order to Rosario, Argentina.
+  expected: RG-T4
+- input: Support ticket opened by a customer in Kenya; escalate to the regional desk.
+  expected: RG-M2
+- input: Customer billing address is in Hungary.
+  expected: RG-X6
+- input: Invoice for the Chiang Mai office (Thailand) attached.
+  expected: RG-K7
+- input: Invoice for the Tampere office (Finland) attached.
+  expected: RG-T4
+- input: Ship this order to Da Nang, Vietnam.
+  expected: RG-K7
+- input: Our Chiang Mai office handled the call, but the customer is in Kenya.
+  expected: RG-M2
+- input: Our reseller in Mexico needs the report.
+  expected: RG-M2
+- input: Invoice for the Da Nang office (Vietnam) attached.
+  expected: RG-K7
+- input: Invoice for the Thessaloniki office (Greece) attached.
+  expected: RG-V1
+- input: Ship this order to Rio de Janeiro, Brazil.
+  expected: RG-K7
+- input: Customer billing address is in Portugal.
+  expected: RG-X6
+- input: Our reseller in Norway needs the report.
+  expected: RG-Q9
+- input: Routed via Surabaya, final delivery Nigeria.
+  expected: RG-Q9
+- input: Our Casablanca office handled the call, but the customer is in Argentina.
+  expected: RG-T4
+- input: Invoice for the Cork office (Ireland) attached.
+  expected: RG-V1
+- input: please route the shipment to japan.
+  expected: RG-T4
+- input: Support ticket opened by a customer in Morocco; escalate to the regional desk.
+  expected: RG-X6
+- input: Customer billing address is in Malaysia.
+  expected: RG-M2
+- input: Support ticket opened by a customer in Mexico; escalate to the regional desk.
+  expected: RG-M2
+- input: Invoice for the Izmir office (Turkey) attached.
+  expected: RG-V1
+- input: Customer billing address is in Philippines.
+  expected: RG-T4
+- input: Our Gothenburg office handled the call, but the customer is in India.
+  expected: RG-V1
+- input: Our Rosario office handled the call, but the customer is in Australia.
+  expected: RG-Q9
+- input: Routed via Lagos, final delivery Australia.
+  expected: RG-Q9
+- input: Ship this order to Izmir, Turkey.
+  expected: RG-V1
+- input: Support ticket opened by a customer in Thailand; escalate to the regional desk.
+  expected: RG-K7
+- input: Ship this order to Montreal, Canada.
+  expected: RG-X6
+- input: We are opening a second depot in Morocco next quarter.
+  expected: RG-X6
+- input: Ship this order to Surabaya, Indonesia.
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Canada; escalate to the regional desk.
+  expected: RG-X6
+- input: Invoice for the Penang office (Malaysia) attached.
+  expected: RG-M2
+- input: Invoice for the Alexandria office (Egypt) attached.
+  expected: RG-K7
+- input: We are opening a second depot in Poland next quarter.
+  expected: RG-M2
+- input: Our reseller in New Zealand needs the report.
+  expected: RG-X6
+- input: please route the shipment to indonesia.
+  expected: RG-Q9
+- input: Ship this order to Arequipa, Peru.
+  expected: RG-M2
+- input: Routed via Aarhus, final delivery Poland.
+  expected: RG-M2
+- input: please route the shipment to poland.
+  expected: RG-M2
+- input: Support ticket opened by a customer in Chile; escalate to the regional desk.
+  expected: RG-Q9
+- input: please route the shipment to argentina.
+  expected: RG-T4
+- input: Our reseller in Sweden needs the report.
+  expected: RG-K7
+- input: please route the shipment to australia.
+  expected: RG-Q9
+- input: We are opening a second depot in Vietnam next quarter.
+  expected: RG-K7
+- input: Our reseller in India needs the report.
+  expected: RG-V1
+- input: Our reseller in Australia needs the report.
+  expected: RG-Q9
+- input: Invoice for the Debrecen office (Hungary) attached.
+  expected: RG-X6
+- input: Support ticket opened by a customer in Brazil; escalate to the regional desk.
+  expected: RG-K7
+- input: Our Cork office handled the call, but the customer is in Norway.
+  expected: RG-Q9
+- input: Customer billing address is in Poland.
+  expected: RG-M2
+- input: Customer billing address is in Egypt.
+  expected: RG-K7
+- input: We are opening a second depot in Kenya next quarter.
+  expected: RG-M2
+- input: Invoice for the Aarhus office (Denmark) attached.
+  expected: RG-T4
+- input: Invoice for the Guadalajara office (Mexico) attached.
+  expected: RG-M2
+- input: Our Tampere office handled the call, but the customer is in Peru.
+  expected: RG-M2
+- input: Routed via Montreal, final delivery Colombia.
+  expected: RG-V1
+- input: please route the shipment to new zealand.
+  expected: RG-X6
+- input: please route the shipment to greece.
+  expected: RG-V1
+- input: Customer billing address is in India.
+  expected: RG-V1
+- input: Our reseller in Denmark needs the report.
+  expected: RG-T4
+- input: Our Porto office handled the call, but the customer is in New Zealand.
+  expected: RG-X6
+- input: Our reseller in Philippines needs the report.
+  expected: RG-T4
+- input: Support ticket opened by a customer in Colombia; escalate to the regional desk.
+  expected: RG-V1
+- input: Ship this order to Porto, Portugal.
+  expected: RG-X6
+- input: Invoice for the Nairobi office (Kenya) attached.
+  expected: RG-M2
+- input: Support ticket opened by a customer in Egypt; escalate to the regional desk.
+  expected: RG-K7
+- input: Customer billing address is in Argentina.
+  expected: RG-T4
+- input: Customer billing address is in Finland.
+  expected: RG-T4
+- input: Ship this order to Brisbane, Australia.
+  expected: RG-Q9
+- input: Ship this order to Valparaiso, Chile.
+  expected: RG-Q9
+- input: Our reseller in Nigeria needs the report.
+  expected: RG-Q9
+- input: Ship this order to Aarhus, Denmark.
+  expected: RG-T4
+- input: We are opening a second depot in Japan next quarter.
+  expected: RG-T4
+- input: Customer billing address is in Sweden.
+  expected: RG-K7
+- input: Our Da Nang office handled the call, but the customer is in Malaysia.
+  expected: RG-M2
+- input: Our Alexandria office handled the call, but the customer is in Greece.
+  expected: RG-V1
+- input: Customer billing address is in Australia.
+  expected: RG-Q9
+- input: Invoice for the Krakow office (Poland) attached.
+  expected: RG-M2
+- input: Customer billing address is in Morocco.
+  expected: RG-X6
+- input: Routed via Surabaya, final delivery Malaysia.
+  expected: RG-M2
+- input: Support ticket opened by a customer in Argentina; escalate to the regional desk.
+  expected: RG-T4
+- input: please route the shipment to portugal.
+  expected: RG-X6
+- input: We are opening a second depot in Argentina next quarter.
+  expected: RG-T4
+- input: Our reseller in Argentina needs the report.
+  expected: RG-T4
+- input: please route the shipment to egypt.
+  expected: RG-K7
+- input: We are opening a second depot in Denmark next quarter.
+  expected: RG-T4
+- input: Support ticket opened by a customer in Portugal; escalate to the regional desk.
+  expected: RG-X6
+- input: Ship this order to Penang, Malaysia.
+  expected: RG-M2
+- input: We are opening a second depot in India next quarter.
+  expected: RG-V1
+- input: Routed via Medellin, final delivery Peru.
+  expected: RG-M2
+- input: Routed via Nairobi, final delivery Mexico.
+  expected: RG-M2
+- input: We are opening a second depot in Norway next quarter.
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Norway; escalate to the regional desk.
+  expected: RG-Q9
+- input: Customer billing address is in Brazil.
+  expected: RG-K7
+- input: Invoice for the Lagos office (Nigeria) attached.
+  expected: RG-Q9
+- input: We are opening a second depot in Ireland next quarter.
+  expected: RG-V1
+- input: Our reseller in Ireland needs the report.
+  expected: RG-V1
+- input: Routed via Penang, final delivery Portugal.
+  expected: RG-X6
+- input: We are opening a second depot in Portugal next quarter.
+  expected: RG-X6
+- input: Customer billing address is in Nigeria.
+  expected: RG-Q9
+- input: We are opening a second depot in Nigeria next quarter.
+  expected: RG-Q9
+- input: Routed via Pune, final delivery Egypt.
+  expected: RG-K7
+- input: 'Warehouse transfer: destination Brazil.'
+  expected: RG-K7
+- input: Our reseller in Finland needs the report.
+  expected: RG-T4
+- input: please route the shipment to malaysia.
+  expected: RG-M2
+- input: Customer billing address is in Vietnam.
+  expected: RG-K7
+- input: Our Krakow office handled the call, but the customer is in Vietnam.
+  expected: RG-K7
+- input: please route the shipment to norway.
+  expected: RG-Q9
+- input: Customer billing address is in Mexico.
+  expected: RG-M2
+- input: Ship this order to Auckland, New Zealand.
+  expected: RG-X6
+- input: Ship this order to Casablanca, Morocco.
+  expected: RG-X6
+- input: Ship this order to Bergen, Norway.
+  expected: RG-Q9
+- input: Our Guadalajara office handled the call, but the customer is in Morocco.
+  expected: RG-X6
+- input: Customer billing address is in New Zealand.
+  expected: RG-X6
+- input: Customer billing address is in Japan.
+  expected: RG-T4
+- input: Customer billing address is in Chile.
+  expected: RG-Q9
+- input: Routed via Rosario, final delivery India.
+  expected: RG-V1
+- input: Support ticket opened by a customer in India; escalate to the regional desk.
+  expected: RG-V1
+- input: 'Warehouse transfer: destination New Zealand.'
+  expected: RG-X6
+- input: We are opening a second depot in Egypt next quarter.
+  expected: RG-K7
+- input: please route the shipment to kenya.
+  expected: RG-M2
+- input: Routed via Rio de Janeiro, final delivery Greece.
+  expected: RG-V1
+- input: Routed via Osaka, final delivery Kenya.
+  expected: RG-M2
+- input: 'Warehouse transfer: destination Australia.'
+  expected: RG-Q9
+- input: Our Chiang Mai office handled the call, but the customer is in Denmark.
+  expected: RG-T4
+- input: We are opening a second depot in Colombia next quarter.
+  expected: RG-V1
+- input: please route the shipment to nigeria.
+  expected: RG-Q9
+- input: please route the shipment to chile.
+  expected: RG-Q9
+- input: Customer billing address is in Canada.
+  expected: RG-X6
+- input: Routed via Valparaiso, final delivery Turkey.
+  expected: RG-V1
+- input: 'Warehouse transfer: destination Kenya.'
+  expected: RG-M2
+- input: Our reseller in Peru needs the report.
+  expected: RG-M2
+- input: Invoice for the Cebu office (Philippines) attached.
+  expected: RG-T4
+- input: Our reseller in Vietnam needs the report.
+  expected: RG-K7
+- input: 'Warehouse transfer: destination Mexico.'
+  expected: RG-M2
+- input: Routed via Izmir, final delivery Indonesia.
+  expected: RG-Q9
+- input: Our Rosario office handled the call, but the customer is in Japan.
+  expected: RG-T4
+- input: We are opening a second depot in Peru next quarter.
+  expected: RG-M2
+- input: 'Warehouse transfer: destination Morocco.'
+  expected: RG-X6
+- input: Support ticket opened by a customer in Ireland; escalate to the regional desk.
+  expected: RG-V1
+- input: 'Warehouse transfer: destination Colombia.'
+  expected: RG-V1
+- input: We are opening a second depot in Indonesia next quarter.
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Sweden; escalate to the regional desk.
+  expected: RG-K7
+- input: Invoice for the Montreal office (Canada) attached.
+  expected: RG-X6
+- input: please route the shipment to colombia.
+  expected: RG-V1
+- input: 'Warehouse transfer: destination Philippines.'
+  expected: RG-T4
+- input: We are opening a second depot in Thailand next quarter.
+  expected: RG-K7
+- input: Our reseller in Japan needs the report.
+  expected: RG-T4
+- input: Our reseller in Hungary needs the report.
+  expected: RG-X6
+- input: We are opening a second depot in Turkey next quarter.
+  expected: RG-V1
+- input: Our Izmir office handled the call, but the customer is in Egypt.
+  expected: RG-K7
+- input: Our Surabaya office handled the call, but the customer is in Nigeria.
+  expected: RG-Q9
+- input: Invoice for the Casablanca office (Morocco) attached.
+  expected: RG-X6
+- input: 'Warehouse transfer: destination Portugal.'
+  expected: RG-X6
+- input: please route the shipment to vietnam.
+  expected: RG-K7
+- input: We are opening a second depot in Australia next quarter.
+  expected: RG-Q9
+- input: Routed via Lagos, final delivery Hungary.
+  expected: RG-X6
+- input: 'Warehouse transfer: destination Greece.'
+  expected: RG-V1
+- input: Ship this order to Debrecen, Hungary.
+  expected: RG-X6
+- input: Ship this order to Lagos, Nigeria.
+  expected: RG-Q9
+- input: Customer billing address is in Kenya.
+  expected: RG-M2
+- input: Routed via Aarhus, final delivery Sweden.
+  expected: RG-K7
+- input: Routed via Aarhus, final delivery Morocco.
+  expected: RG-X6
+- input: please route the shipment to denmark.
+  expected: RG-T4
+- input: please route the shipment to philippines.
+  expected: RG-T4
+- input: 'Warehouse transfer: destination Finland.'
+  expected: RG-T4
+- input: Our Bergen office handled the call, but the customer is in Brazil.
+  expected: RG-K7
+- input: Invoice for the Pune office (India) attached.
+  expected: RG-V1
+- input: 'Warehouse transfer: destination Malaysia.'
+  expected: RG-M2
+- input: please route the shipment to finland.
+  expected: RG-T4
+- input: 'Warehouse transfer: destination Denmark.'
+  expected: RG-T4
+- input: please route the shipment to thailand.
+  expected: RG-K7
+- input: Our reseller in Malaysia needs the report.
+  expected: RG-M2
+- input: Routed via Izmir, final delivery Finland.
+  expected: RG-T4
+- input: Routed via Pune, final delivery Argentina.
+  expected: RG-T4
+- input: Our reseller in Indonesia needs the report.
+  expected: RG-Q9
+- input: Our reseller in Morocco needs the report.
+  expected: RG-X6
+- input: 'Warehouse transfer: destination Ireland.'
+  expected: RG-V1
+- input: Ship this order to Alexandria, Egypt.
+  expected: RG-K7
+- input: 'Warehouse transfer: destination Turkey.'
+  expected: RG-V1
+- input: Our Cebu office handled the call, but the customer is in Canada.
+  expected: RG-X6
+- input: Our reseller in Poland needs the report.
+  expected: RG-M2
+- input: Customer billing address is in Indonesia.
+  expected: RG-Q9
+- input: Support ticket opened by a customer in Philippines; escalate to the regional desk.
+  expected: RG-T4
+- input: Our Nairobi office handled the call, but the customer is in Hungary.
+  expected: RG-X6
+- input: Our Casablanca office handled the call, but the customer is in Poland.
+  expected: RG-M2
+- input: Our Debrecen office handled the call, but the customer is in Indonesia.
+  expected: RG-Q9
+- input: Routed via Porto, final delivery Chile.
+  expected: RG-Q9
+- input: 'Warehouse transfer: destination Hungary.'
+  expected: RG-X6
+- input: Invoice for the Auckland office (New Zealand) attached.
+  expected: RG-X6
+- input: Support ticket opened by a customer in Nigeria; escalate to the regional desk.
+  expected: RG-Q9
+- input: Routed via Gothenburg, final delivery Japan.
+  expected: RG-T4
+- input: 'Warehouse transfer: destination Poland.'
+  expected: RG-M2
+- input: Ship this order to Krakow, Poland.
+  expected: RG-M2
+- input: We are opening a second depot in Hungary next quarter.
+  expected: RG-X6
+assertions:
+- rule: regex_match
+  pattern: RG-[A-Z]\d
+- rule: max_length
+  value: 200
+- rule: not_contains
+  value: ERROR
+fuzzing:
+  inject_unicode: false
+  empty_inputs: false
+  whitespace_flood: false
+  payload_extremes: false

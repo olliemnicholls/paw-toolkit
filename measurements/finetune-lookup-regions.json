@@ -1,0 +1,3009 @@
+{
+  "task": "region_code_lookup",
+  "spec": "Assign an internal region code to a sales message.\n\nEvery country we operate in belongs to exactly one internal region. The regions are an internal grouping: they are not continents, not trading blocs, and not anything you can work out from geography. The only way to get the answer right is to look the country up in the table below.\n\nThe table:\n\nRG-K7\n  Brazil\n  Vietnam\n  Thailand\n  Egypt\n  Sweden\n\nRG-M2\n  Kenya\n  Poland\n  Peru\n  Mexico\n  Malaysia\n\nRG-Q9\n  Norway\n  Chile\n  Australia\n  Nigeria\n  Indonesia\n\nRG-T4\n  Japan\n  Finland\n  Denmark\n  Argentina\n  Philippines\n\nRG-V1\n  Ireland\n  Turkey\n  India\n  Colombia\n  Greece\n\nRG-X6\n  Portugal\n  New Zealand\n  Canada\n  Morocco\n  Hungary\n\nThe input is a single short sentence from our order and support systems. It mentions exactly one of the thirty countries above, written out in full. It may also mention a city; the city is irrelevant, and it may well be a city in some other country. Match on the country name only. The country name may appear in lower case.\n\nOutput exactly one region code and nothing else: one of RG-K7, RG-M2, RG-Q9, RG-T4, RG-V1, RG-X6. No explanation, no punctuation, no country name.\n\nWorked example one. The input is \"Ship this order to Porto, Portugal.\" The country is Portugal. Portugal is listed under RG-X6. The output is RG-X6.\n\nWorked example two. The input is \"Our Osaka office handled the call, but the customer is in Kenya.\" Two places are mentioned, but Osaka is a city and Kenya is the country. Kenya is listed under RG-M2. The output is RG-M2.\n",
+  "rule": "Thirty countries are assigned to six made-up region codes by a seeded shuffle. The answer for a sentence is the code of the one country it names. Ground truth is a dict lookup -- no arithmetic anywhere in the task.",
+  "ground_truth": "computed by scripts/measure_finetune_lookup.py:region_code -- no model, no judge",
+  "seed": 20260910,
+  "codes": [
+    "RG-K7",
+    "RG-M2",
+    "RG-Q9",
+    "RG-T4",
+    "RG-V1",
+    "RG-X6"
+  ],
+  "table": {
+    "Sweden": "RG-K7",
+    "Thailand": "RG-K7",
+    "Brazil": "RG-K7",
+    "Vietnam": "RG-K7",
+    "Egypt": "RG-K7",
+    "Malaysia": "RG-M2",
+    "Poland": "RG-M2",
+    "Kenya": "RG-M2",
+    "Peru": "RG-M2",
+    "Mexico": "RG-M2",
+    "Chile": "RG-Q9",
+    "Australia": "RG-Q9",
+    "Norway": "RG-Q9",
+    "Nigeria": "RG-Q9",
+    "Indonesia": "RG-Q9",
+    "Finland": "RG-T4",
+    "Denmark": "RG-T4",
+    "Argentina": "RG-T4",
+    "Japan": "RG-T4",
+    "Philippines": "RG-T4",
+    "Turkey": "RG-V1",
+    "Greece": "RG-V1",
+    "Colombia": "RG-V1",
+    "Ireland": "RG-V1",
+    "India": "RG-V1",
+    "Canada": "RG-X6",
+    "Portugal": "RG-X6",
+    "Morocco": "RG-X6",
+    "New Zealand": "RG-X6",
+    "Hungary": "RG-X6"
+  },
+  "table_by_code": {
+    "RG-K7": [
+      "Brazil",
+      "Vietnam",
+      "Thailand",
+      "Egypt",
+      "Sweden"
+    ],
+    "RG-M2": [
+      "Kenya",
+      "Poland",
+      "Peru",
+      "Mexico",
+      "Malaysia"
+    ],
+    "RG-Q9": [
+      "Norway",
+      "Chile",
+      "Australia",
+      "Nigeria",
+      "Indonesia"
+    ],
+    "RG-T4": [
+      "Japan",
+      "Finland",
+      "Denmark",
+      "Argentina",
+      "Philippines"
+    ],
+    "RG-V1": [
+      "Ireland",
+      "Turkey",
+      "India",
+      "Colombia",
+      "Greece"
+    ],
+    "RG-X6": [
+      "Portugal",
+      "New Zealand",
+      "Canada",
+      "Morocco",
+      "Hungary"
+    ]
+  },
+  "countries": [
+    "Japan",
+    "Kenya",
+    "Portugal",
+    "New Zealand",
+    "Brazil",
+    "Canada",
+    "Norway",
+    "Vietnam",
+    "Morocco",
+    "Poland",
+    "Chile",
+    "Ireland",
+    "Thailand",
+    "Egypt",
+    "Australia",
+    "Peru",
+    "Finland",
+    "Nigeria",
+    "Turkey",
+    "Mexico",
+    "Sweden",
+    "India",
+    "Colombia",
+    "Greece",
+    "Indonesia",
+    "Denmark",
+    "Argentina",
+    "Philippines",
+    "Hungary",
+    "Malaysia"
+  ],
+  "cities": {
+    "Japan": "Osaka",
+    "Kenya": "Nairobi",
+    "Portugal": "Porto",
+    "New Zealand": "Auckland",
+    "Brazil": "Rio de Janeiro",
+    "Canada": "Montreal",
+    "Norway": "Bergen",
+    "Vietnam": "Da Nang",
+    "Morocco": "Casablanca",
+    "Poland": "Krakow",
+    "Chile": "Valparaiso",
+    "Ireland": "Cork",
+    "Thailand": "Chiang Mai",
+    "Egypt": "Alexandria",
+    "Australia": "Brisbane",
+    "Peru": "Arequipa",
+    "Finland": "Tampere",
+    "Nigeria": "Lagos",
+    "Turkey": "Izmir",
+    "Mexico": "Guadalajara",
+    "Sweden": "Gothenburg",
+    "India": "Pune",
+    "Colombia": "Medellin",
+    "Greece": "Thessaloniki",
+    "Indonesia": "Surabaya",
+    "Denmark": "Aarhus",
+    "Argentina": "Rosario",
+    "Philippines": "Cebu",
+    "Hungary": "Debrecen",
+    "Malaysia": "Penang"
+  },
+  "templates": [
+    {
+      "id": "ship_city",
+      "text": "Ship this order to {city}, {country}.",
+      "misleading": false,
+      "lowercase": false
+    },
+    {
+      "id": "billing",
+      "text": "Customer billing address is in {country}.",
+      "misleading": false,
+      "lowercase": false
+    },
+    {
+      "id": "invoice_office",
+      "text": "Invoice for the {city} office ({country}) attached.",
+      "misleading": false,
+      "lowercase": false
+    },
+    {
+      "id": "reseller",
+      "text": "Our reseller in {country} needs the report.",
+      "misleading": false,
+      "lowercase": false
+    },
+    {
+      "id": "warehouse",
+      "text": "Warehouse transfer: destination {country}.",
+      "misleading": false,
+      "lowercase": false
+    },
+    {
+      "id": "misleading_office",
+      "text": "Our {other_city} office handled the call, but the customer is in {country}.",
+      "misleading": true,
+      "lowercase": false
+    },
+    {
+      "id": "lowercase",
+      "text": "please route the shipment to {country}.",
+      "misleading": false,
+      "lowercase": true
+    },
+    {
+      "id": "support",
+      "text": "Support ticket opened by a customer in {country}; escalate to the regional desk.",
+      "misleading": false,
+      "lowercase": false
+    },
+    {
+      "id": "misleading_route",
+      "text": "Routed via {other_city}, final delivery {country}.",
+      "misleading": true,
+      "lowercase": false
+    },
+    {
+      "id": "depot",
+      "text": "We are opening a second depot in {country} next quarter.",
+      "misleading": false,
+      "lowercase": false
+    }
+  ],
+  "fold_templates": [
+    {
+      "id": "fold_confirm",
+      "text": "Please confirm the regional code for a shipment going to {country}."
+    },
+    {
+      "id": "fold_registered",
+      "text": "The account is registered in {country}."
+    },
+    {
+      "id": "fold_dispatch",
+      "text": "Dispatch note: {city}, {country}."
+    },
+    {
+      "id": "fold_partner",
+      "text": "Our partner office in {country} raised the request."
+    }
+  ],
+  "n_evaluation": 300,
+  "n_folding": 8,
+  "n_misleading": 60,
+  "folding_countries": [
+    "Sweden",
+    "Poland",
+    "Australia",
+    "Philippines",
+    "India",
+    "Portugal",
+    "Turkey",
+    "Denmark"
+  ],
+  "folding_codes": [
+    "RG-K7",
+    "RG-M2",
+    "RG-Q9",
+    "RG-T4",
+    "RG-V1",
+    "RG-X6"
+  ],
+  "folding_examples": [
+    {
+      "country": "Sweden",
+      "template": "fold_confirm",
+      "input": "Please confirm the regional code for a shipment going to Sweden.",
+      "expected": "RG-K7"
+    },
+    {
+      "country": "Poland",
+      "template": "fold_registered",
+      "input": "The account is registered in Poland.",
+      "expected": "RG-M2"
+    },
+    {
+      "country": "Australia",
+      "template": "fold_dispatch",
+      "input": "Dispatch note: Brisbane, Australia.",
+      "expected": "RG-Q9"
+    },
+    {
+      "country": "Philippines",
+      "template": "fold_partner",
+      "input": "Our partner office in Philippines raised the request.",
+      "expected": "RG-T4"
+    },
+    {
+      "country": "India",
+      "template": "fold_confirm",
+      "input": "Please confirm the regional code for a shipment going to India.",
+      "expected": "RG-V1"
+    },
+    {
+      "country": "Portugal",
+      "template": "fold_registered",
+      "input": "The account is registered in Portugal.",
+      "expected": "RG-X6"
+    },
+    {
+      "country": "Turkey",
+      "template": "fold_dispatch",
+      "input": "Dispatch note: Izmir, Turkey.",
+      "expected": "RG-V1"
+    },
+    {
+      "country": "Denmark",
+      "template": "fold_partner",
+      "input": "Our partner office in Denmark raised the request.",
+      "expected": "RG-T4"
+    }
+  ],
+  "evaluation": [
+    {
+      "country": "Sweden",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to sweden.",
+      "expected": "RG-K7",
+      "id": "r000"
+    },
+    {
+      "country": "Greece",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Greece next quarter.",
+      "expected": "RG-V1",
+      "id": "r001"
+    },
+    {
+      "country": "Argentina",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Rosario office (Argentina) attached.",
+      "expected": "RG-T4",
+      "id": "r002"
+    },
+    {
+      "country": "Portugal",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Portugal needs the report.",
+      "expected": "RG-X6",
+      "id": "r003"
+    },
+    {
+      "country": "Morocco",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to morocco.",
+      "expected": "RG-X6",
+      "id": "r004"
+    },
+    {
+      "country": "Sweden",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Sweden.",
+      "expected": "RG-K7",
+      "id": "r005"
+    },
+    {
+      "country": "Turkey",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Turkey.",
+      "expected": "RG-V1",
+      "id": "r006"
+    },
+    {
+      "country": "Brazil",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Rio de Janeiro office (Brazil) attached.",
+      "expected": "RG-K7",
+      "id": "r007"
+    },
+    {
+      "country": "Greece",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Greece; escalate to the regional desk.",
+      "expected": "RG-V1",
+      "id": "r008"
+    },
+    {
+      "country": "Canada",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Canada needs the report.",
+      "expected": "RG-X6",
+      "id": "r009"
+    },
+    {
+      "country": "Malaysia",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Malaysia next quarter.",
+      "expected": "RG-M2",
+      "id": "r010"
+    },
+    {
+      "country": "Finland",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Finland; escalate to the regional desk.",
+      "expected": "RG-T4",
+      "id": "r011"
+    },
+    {
+      "country": "Sweden",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Gothenburg, Sweden.",
+      "expected": "RG-K7",
+      "id": "r012"
+    },
+    {
+      "country": "Vietnam",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Rio de Janeiro, final delivery Vietnam.",
+      "expected": "RG-K7",
+      "id": "r013"
+    },
+    {
+      "country": "Colombia",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Medellin office (Colombia) attached.",
+      "expected": "RG-V1",
+      "id": "r014"
+    },
+    {
+      "country": "Portugal",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Arequipa office handled the call, but the customer is in Portugal.",
+      "expected": "RG-X6",
+      "id": "r015"
+    },
+    {
+      "country": "India",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to india.",
+      "expected": "RG-V1",
+      "id": "r016"
+    },
+    {
+      "country": "Norway",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Tampere, final delivery Norway.",
+      "expected": "RG-Q9",
+      "id": "r017"
+    },
+    {
+      "country": "Denmark",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Denmark; escalate to the regional desk.",
+      "expected": "RG-T4",
+      "id": "r018"
+    },
+    {
+      "country": "Peru",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Peru.",
+      "expected": "RG-M2",
+      "id": "r019"
+    },
+    {
+      "country": "Mexico",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Brisbane office handled the call, but the customer is in Mexico.",
+      "expected": "RG-M2",
+      "id": "r020"
+    },
+    {
+      "country": "New Zealand",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in New Zealand next quarter.",
+      "expected": "RG-X6",
+      "id": "r021"
+    },
+    {
+      "country": "Mexico",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Guadalajara, Mexico.",
+      "expected": "RG-M2",
+      "id": "r022"
+    },
+    {
+      "country": "Poland",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Poland; escalate to the regional desk.",
+      "expected": "RG-M2",
+      "id": "r023"
+    },
+    {
+      "country": "Sweden",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Gothenburg office (Sweden) attached.",
+      "expected": "RG-K7",
+      "id": "r024"
+    },
+    {
+      "country": "Indonesia",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Indonesia.",
+      "expected": "RG-Q9",
+      "id": "r025"
+    },
+    {
+      "country": "Norway",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Norway.",
+      "expected": "RG-Q9",
+      "id": "r026"
+    },
+    {
+      "country": "Indonesia",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Indonesia; escalate to the regional desk.",
+      "expected": "RG-Q9",
+      "id": "r027"
+    },
+    {
+      "country": "Vietnam",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Vietnam.",
+      "expected": "RG-K7",
+      "id": "r028"
+    },
+    {
+      "country": "Chile",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Chile needs the report.",
+      "expected": "RG-Q9",
+      "id": "r029"
+    },
+    {
+      "country": "Finland",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Finland next quarter.",
+      "expected": "RG-T4",
+      "id": "r030"
+    },
+    {
+      "country": "Thailand",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Thailand.",
+      "expected": "RG-K7",
+      "id": "r031"
+    },
+    {
+      "country": "Chile",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Lagos office handled the call, but the customer is in Chile.",
+      "expected": "RG-Q9",
+      "id": "r032"
+    },
+    {
+      "country": "Greece",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Greece needs the report.",
+      "expected": "RG-V1",
+      "id": "r033"
+    },
+    {
+      "country": "Brazil",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Brazil next quarter.",
+      "expected": "RG-K7",
+      "id": "r034"
+    },
+    {
+      "country": "Argentina",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Argentina.",
+      "expected": "RG-T4",
+      "id": "r035"
+    },
+    {
+      "country": "Greece",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Greece.",
+      "expected": "RG-V1",
+      "id": "r036"
+    },
+    {
+      "country": "Ireland",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Brisbane office handled the call, but the customer is in Ireland.",
+      "expected": "RG-V1",
+      "id": "r037"
+    },
+    {
+      "country": "Colombia",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Colombia needs the report.",
+      "expected": "RG-V1",
+      "id": "r038"
+    },
+    {
+      "country": "Philippines",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Penang office handled the call, but the customer is in Philippines.",
+      "expected": "RG-T4",
+      "id": "r039"
+    },
+    {
+      "country": "Egypt",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Egypt needs the report.",
+      "expected": "RG-K7",
+      "id": "r040"
+    },
+    {
+      "country": "Philippines",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Philippines next quarter.",
+      "expected": "RG-T4",
+      "id": "r041"
+    },
+    {
+      "country": "Greece",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Thessaloniki, Greece.",
+      "expected": "RG-V1",
+      "id": "r042"
+    },
+    {
+      "country": "Sweden",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Sweden next quarter.",
+      "expected": "RG-K7",
+      "id": "r043"
+    },
+    {
+      "country": "Nigeria",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Nigeria.",
+      "expected": "RG-Q9",
+      "id": "r044"
+    },
+    {
+      "country": "Brazil",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to brazil.",
+      "expected": "RG-K7",
+      "id": "r045"
+    },
+    {
+      "country": "New Zealand",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Medellin, final delivery New Zealand.",
+      "expected": "RG-X6",
+      "id": "r046"
+    },
+    {
+      "country": "Egypt",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Egypt.",
+      "expected": "RG-K7",
+      "id": "r047"
+    },
+    {
+      "country": "Brazil",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Brazil needs the report.",
+      "expected": "RG-K7",
+      "id": "r048"
+    },
+    {
+      "country": "Chile",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Chile.",
+      "expected": "RG-Q9",
+      "id": "r049"
+    },
+    {
+      "country": "Indonesia",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Surabaya office (Indonesia) attached.",
+      "expected": "RG-Q9",
+      "id": "r050"
+    },
+    {
+      "country": "Chile",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Valparaiso office (Chile) attached.",
+      "expected": "RG-Q9",
+      "id": "r051"
+    },
+    {
+      "country": "Australia",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Australia; escalate to the regional desk.",
+      "expected": "RG-Q9",
+      "id": "r052"
+    },
+    {
+      "country": "Mexico",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to mexico.",
+      "expected": "RG-M2",
+      "id": "r053"
+    },
+    {
+      "country": "Kenya",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Kenya needs the report.",
+      "expected": "RG-M2",
+      "id": "r054"
+    },
+    {
+      "country": "Thailand",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Auckland office handled the call, but the customer is in Thailand.",
+      "expected": "RG-K7",
+      "id": "r055"
+    },
+    {
+      "country": "Canada",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Brisbane, final delivery Canada.",
+      "expected": "RG-X6",
+      "id": "r056"
+    },
+    {
+      "country": "Peru",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Peru; escalate to the regional desk.",
+      "expected": "RG-M2",
+      "id": "r057"
+    },
+    {
+      "country": "India",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination India.",
+      "expected": "RG-V1",
+      "id": "r058"
+    },
+    {
+      "country": "Chile",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Chile next quarter.",
+      "expected": "RG-Q9",
+      "id": "r059"
+    },
+    {
+      "country": "Sweden",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Alexandria office handled the call, but the customer is in Sweden.",
+      "expected": "RG-K7",
+      "id": "r060"
+    },
+    {
+      "country": "Japan",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Osaka, Japan.",
+      "expected": "RG-T4",
+      "id": "r061"
+    },
+    {
+      "country": "Turkey",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to turkey.",
+      "expected": "RG-V1",
+      "id": "r062"
+    },
+    {
+      "country": "Peru",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Arequipa office (Peru) attached.",
+      "expected": "RG-M2",
+      "id": "r063"
+    },
+    {
+      "country": "Philippines",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Gothenburg, final delivery Philippines.",
+      "expected": "RG-T4",
+      "id": "r064"
+    },
+    {
+      "country": "Hungary",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to hungary.",
+      "expected": "RG-X6",
+      "id": "r065"
+    },
+    {
+      "country": "Turkey",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Turkey needs the report.",
+      "expected": "RG-V1",
+      "id": "r066"
+    },
+    {
+      "country": "Ireland",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Cork, Ireland.",
+      "expected": "RG-V1",
+      "id": "r067"
+    },
+    {
+      "country": "Denmark",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Osaka, final delivery Denmark.",
+      "expected": "RG-T4",
+      "id": "r068"
+    },
+    {
+      "country": "Norway",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Bergen office (Norway) attached.",
+      "expected": "RG-Q9",
+      "id": "r069"
+    },
+    {
+      "country": "Finland",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Gothenburg office handled the call, but the customer is in Finland.",
+      "expected": "RG-T4",
+      "id": "r070"
+    },
+    {
+      "country": "Peru",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Peru.",
+      "expected": "RG-M2",
+      "id": "r071"
+    },
+    {
+      "country": "Canada",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Canada.",
+      "expected": "RG-X6",
+      "id": "r072"
+    },
+    {
+      "country": "Thailand",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Chiang Mai, Thailand.",
+      "expected": "RG-K7",
+      "id": "r073"
+    },
+    {
+      "country": "Mexico",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Mexico next quarter.",
+      "expected": "RG-M2",
+      "id": "r074"
+    },
+    {
+      "country": "India",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Pune, India.",
+      "expected": "RG-V1",
+      "id": "r075"
+    },
+    {
+      "country": "Norway",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Norway.",
+      "expected": "RG-Q9",
+      "id": "r076"
+    },
+    {
+      "country": "Turkey",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Turkey; escalate to the regional desk.",
+      "expected": "RG-V1",
+      "id": "r077"
+    },
+    {
+      "country": "New Zealand",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in New Zealand; escalate to the regional desk.",
+      "expected": "RG-X6",
+      "id": "r078"
+    },
+    {
+      "country": "Colombia",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Aarhus office handled the call, but the customer is in Colombia.",
+      "expected": "RG-V1",
+      "id": "r079"
+    },
+    {
+      "country": "Vietnam",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Vietnam; escalate to the regional desk.",
+      "expected": "RG-K7",
+      "id": "r080"
+    },
+    {
+      "country": "Ireland",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to ireland.",
+      "expected": "RG-V1",
+      "id": "r081"
+    },
+    {
+      "country": "Japan",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Japan; escalate to the regional desk.",
+      "expected": "RG-T4",
+      "id": "r082"
+    },
+    {
+      "country": "Japan",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Osaka office (Japan) attached.",
+      "expected": "RG-T4",
+      "id": "r083"
+    },
+    {
+      "country": "Colombia",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Colombia.",
+      "expected": "RG-V1",
+      "id": "r084"
+    },
+    {
+      "country": "Australia",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Brisbane office (Australia) attached.",
+      "expected": "RG-Q9",
+      "id": "r085"
+    },
+    {
+      "country": "Ireland",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Ireland.",
+      "expected": "RG-V1",
+      "id": "r086"
+    },
+    {
+      "country": "Kenya",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Nairobi, Kenya.",
+      "expected": "RG-M2",
+      "id": "r087"
+    },
+    {
+      "country": "Thailand",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Thailand.",
+      "expected": "RG-K7",
+      "id": "r088"
+    },
+    {
+      "country": "Thailand",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Thailand needs the report.",
+      "expected": "RG-K7",
+      "id": "r089"
+    },
+    {
+      "country": "Malaysia",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Malaysia; escalate to the regional desk.",
+      "expected": "RG-M2",
+      "id": "r090"
+    },
+    {
+      "country": "Thailand",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Guadalajara, final delivery Thailand.",
+      "expected": "RG-K7",
+      "id": "r091"
+    },
+    {
+      "country": "Finland",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Tampere, Finland.",
+      "expected": "RG-T4",
+      "id": "r092"
+    },
+    {
+      "country": "Denmark",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Denmark.",
+      "expected": "RG-T4",
+      "id": "r093"
+    },
+    {
+      "country": "Portugal",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Porto office (Portugal) attached.",
+      "expected": "RG-X6",
+      "id": "r094"
+    },
+    {
+      "country": "Hungary",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Hungary; escalate to the regional desk.",
+      "expected": "RG-X6",
+      "id": "r095"
+    },
+    {
+      "country": "Philippines",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Cebu, Philippines.",
+      "expected": "RG-T4",
+      "id": "r096"
+    },
+    {
+      "country": "Turkey",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Gothenburg office handled the call, but the customer is in Turkey.",
+      "expected": "RG-V1",
+      "id": "r097"
+    },
+    {
+      "country": "Japan",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Japan.",
+      "expected": "RG-T4",
+      "id": "r098"
+    },
+    {
+      "country": "Colombia",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Medellin, Colombia.",
+      "expected": "RG-V1",
+      "id": "r099"
+    },
+    {
+      "country": "Brazil",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Lagos, final delivery Brazil.",
+      "expected": "RG-K7",
+      "id": "r100"
+    },
+    {
+      "country": "Canada",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Canada next quarter.",
+      "expected": "RG-X6",
+      "id": "r101"
+    },
+    {
+      "country": "Ireland",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Alexandria, final delivery Ireland.",
+      "expected": "RG-V1",
+      "id": "r102"
+    },
+    {
+      "country": "Canada",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to canada.",
+      "expected": "RG-X6",
+      "id": "r103"
+    },
+    {
+      "country": "Peru",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to peru.",
+      "expected": "RG-M2",
+      "id": "r104"
+    },
+    {
+      "country": "Argentina",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Rosario, Argentina.",
+      "expected": "RG-T4",
+      "id": "r105"
+    },
+    {
+      "country": "Kenya",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Kenya; escalate to the regional desk.",
+      "expected": "RG-M2",
+      "id": "r106"
+    },
+    {
+      "country": "Hungary",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Hungary.",
+      "expected": "RG-X6",
+      "id": "r107"
+    },
+    {
+      "country": "Thailand",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Chiang Mai office (Thailand) attached.",
+      "expected": "RG-K7",
+      "id": "r108"
+    },
+    {
+      "country": "Finland",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Tampere office (Finland) attached.",
+      "expected": "RG-T4",
+      "id": "r109"
+    },
+    {
+      "country": "Vietnam",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Da Nang, Vietnam.",
+      "expected": "RG-K7",
+      "id": "r110"
+    },
+    {
+      "country": "Kenya",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Chiang Mai office handled the call, but the customer is in Kenya.",
+      "expected": "RG-M2",
+      "id": "r111"
+    },
+    {
+      "country": "Mexico",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Mexico needs the report.",
+      "expected": "RG-M2",
+      "id": "r112"
+    },
+    {
+      "country": "Vietnam",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Da Nang office (Vietnam) attached.",
+      "expected": "RG-K7",
+      "id": "r113"
+    },
+    {
+      "country": "Greece",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Thessaloniki office (Greece) attached.",
+      "expected": "RG-V1",
+      "id": "r114"
+    },
+    {
+      "country": "Brazil",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Rio de Janeiro, Brazil.",
+      "expected": "RG-K7",
+      "id": "r115"
+    },
+    {
+      "country": "Portugal",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Portugal.",
+      "expected": "RG-X6",
+      "id": "r116"
+    },
+    {
+      "country": "Norway",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Norway needs the report.",
+      "expected": "RG-Q9",
+      "id": "r117"
+    },
+    {
+      "country": "Nigeria",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Surabaya, final delivery Nigeria.",
+      "expected": "RG-Q9",
+      "id": "r118"
+    },
+    {
+      "country": "Argentina",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Casablanca office handled the call, but the customer is in Argentina.",
+      "expected": "RG-T4",
+      "id": "r119"
+    },
+    {
+      "country": "Ireland",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Cork office (Ireland) attached.",
+      "expected": "RG-V1",
+      "id": "r120"
+    },
+    {
+      "country": "Japan",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to japan.",
+      "expected": "RG-T4",
+      "id": "r121"
+    },
+    {
+      "country": "Morocco",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Morocco; escalate to the regional desk.",
+      "expected": "RG-X6",
+      "id": "r122"
+    },
+    {
+      "country": "Malaysia",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Malaysia.",
+      "expected": "RG-M2",
+      "id": "r123"
+    },
+    {
+      "country": "Mexico",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Mexico; escalate to the regional desk.",
+      "expected": "RG-M2",
+      "id": "r124"
+    },
+    {
+      "country": "Turkey",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Izmir office (Turkey) attached.",
+      "expected": "RG-V1",
+      "id": "r125"
+    },
+    {
+      "country": "Philippines",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Philippines.",
+      "expected": "RG-T4",
+      "id": "r126"
+    },
+    {
+      "country": "India",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Gothenburg office handled the call, but the customer is in India.",
+      "expected": "RG-V1",
+      "id": "r127"
+    },
+    {
+      "country": "Australia",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Rosario office handled the call, but the customer is in Australia.",
+      "expected": "RG-Q9",
+      "id": "r128"
+    },
+    {
+      "country": "Australia",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Lagos, final delivery Australia.",
+      "expected": "RG-Q9",
+      "id": "r129"
+    },
+    {
+      "country": "Turkey",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Izmir, Turkey.",
+      "expected": "RG-V1",
+      "id": "r130"
+    },
+    {
+      "country": "Thailand",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Thailand; escalate to the regional desk.",
+      "expected": "RG-K7",
+      "id": "r131"
+    },
+    {
+      "country": "Canada",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Montreal, Canada.",
+      "expected": "RG-X6",
+      "id": "r132"
+    },
+    {
+      "country": "Morocco",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Morocco next quarter.",
+      "expected": "RG-X6",
+      "id": "r133"
+    },
+    {
+      "country": "Indonesia",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Surabaya, Indonesia.",
+      "expected": "RG-Q9",
+      "id": "r134"
+    },
+    {
+      "country": "Canada",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Canada; escalate to the regional desk.",
+      "expected": "RG-X6",
+      "id": "r135"
+    },
+    {
+      "country": "Malaysia",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Penang office (Malaysia) attached.",
+      "expected": "RG-M2",
+      "id": "r136"
+    },
+    {
+      "country": "Egypt",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Alexandria office (Egypt) attached.",
+      "expected": "RG-K7",
+      "id": "r137"
+    },
+    {
+      "country": "Poland",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Poland next quarter.",
+      "expected": "RG-M2",
+      "id": "r138"
+    },
+    {
+      "country": "New Zealand",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in New Zealand needs the report.",
+      "expected": "RG-X6",
+      "id": "r139"
+    },
+    {
+      "country": "Indonesia",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to indonesia.",
+      "expected": "RG-Q9",
+      "id": "r140"
+    },
+    {
+      "country": "Peru",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Arequipa, Peru.",
+      "expected": "RG-M2",
+      "id": "r141"
+    },
+    {
+      "country": "Poland",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Aarhus, final delivery Poland.",
+      "expected": "RG-M2",
+      "id": "r142"
+    },
+    {
+      "country": "Poland",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to poland.",
+      "expected": "RG-M2",
+      "id": "r143"
+    },
+    {
+      "country": "Chile",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Chile; escalate to the regional desk.",
+      "expected": "RG-Q9",
+      "id": "r144"
+    },
+    {
+      "country": "Argentina",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to argentina.",
+      "expected": "RG-T4",
+      "id": "r145"
+    },
+    {
+      "country": "Sweden",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Sweden needs the report.",
+      "expected": "RG-K7",
+      "id": "r146"
+    },
+    {
+      "country": "Australia",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to australia.",
+      "expected": "RG-Q9",
+      "id": "r147"
+    },
+    {
+      "country": "Vietnam",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Vietnam next quarter.",
+      "expected": "RG-K7",
+      "id": "r148"
+    },
+    {
+      "country": "India",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in India needs the report.",
+      "expected": "RG-V1",
+      "id": "r149"
+    },
+    {
+      "country": "Australia",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Australia needs the report.",
+      "expected": "RG-Q9",
+      "id": "r150"
+    },
+    {
+      "country": "Hungary",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Debrecen office (Hungary) attached.",
+      "expected": "RG-X6",
+      "id": "r151"
+    },
+    {
+      "country": "Brazil",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Brazil; escalate to the regional desk.",
+      "expected": "RG-K7",
+      "id": "r152"
+    },
+    {
+      "country": "Norway",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Cork office handled the call, but the customer is in Norway.",
+      "expected": "RG-Q9",
+      "id": "r153"
+    },
+    {
+      "country": "Poland",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Poland.",
+      "expected": "RG-M2",
+      "id": "r154"
+    },
+    {
+      "country": "Egypt",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Egypt.",
+      "expected": "RG-K7",
+      "id": "r155"
+    },
+    {
+      "country": "Kenya",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Kenya next quarter.",
+      "expected": "RG-M2",
+      "id": "r156"
+    },
+    {
+      "country": "Denmark",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Aarhus office (Denmark) attached.",
+      "expected": "RG-T4",
+      "id": "r157"
+    },
+    {
+      "country": "Mexico",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Guadalajara office (Mexico) attached.",
+      "expected": "RG-M2",
+      "id": "r158"
+    },
+    {
+      "country": "Peru",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Tampere office handled the call, but the customer is in Peru.",
+      "expected": "RG-M2",
+      "id": "r159"
+    },
+    {
+      "country": "Colombia",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Montreal, final delivery Colombia.",
+      "expected": "RG-V1",
+      "id": "r160"
+    },
+    {
+      "country": "New Zealand",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to new zealand.",
+      "expected": "RG-X6",
+      "id": "r161"
+    },
+    {
+      "country": "Greece",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to greece.",
+      "expected": "RG-V1",
+      "id": "r162"
+    },
+    {
+      "country": "India",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in India.",
+      "expected": "RG-V1",
+      "id": "r163"
+    },
+    {
+      "country": "Denmark",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Denmark needs the report.",
+      "expected": "RG-T4",
+      "id": "r164"
+    },
+    {
+      "country": "New Zealand",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Porto office handled the call, but the customer is in New Zealand.",
+      "expected": "RG-X6",
+      "id": "r165"
+    },
+    {
+      "country": "Philippines",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Philippines needs the report.",
+      "expected": "RG-T4",
+      "id": "r166"
+    },
+    {
+      "country": "Colombia",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Colombia; escalate to the regional desk.",
+      "expected": "RG-V1",
+      "id": "r167"
+    },
+    {
+      "country": "Portugal",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Porto, Portugal.",
+      "expected": "RG-X6",
+      "id": "r168"
+    },
+    {
+      "country": "Kenya",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Nairobi office (Kenya) attached.",
+      "expected": "RG-M2",
+      "id": "r169"
+    },
+    {
+      "country": "Egypt",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Egypt; escalate to the regional desk.",
+      "expected": "RG-K7",
+      "id": "r170"
+    },
+    {
+      "country": "Argentina",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Argentina.",
+      "expected": "RG-T4",
+      "id": "r171"
+    },
+    {
+      "country": "Finland",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Finland.",
+      "expected": "RG-T4",
+      "id": "r172"
+    },
+    {
+      "country": "Australia",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Brisbane, Australia.",
+      "expected": "RG-Q9",
+      "id": "r173"
+    },
+    {
+      "country": "Chile",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Valparaiso, Chile.",
+      "expected": "RG-Q9",
+      "id": "r174"
+    },
+    {
+      "country": "Nigeria",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Nigeria needs the report.",
+      "expected": "RG-Q9",
+      "id": "r175"
+    },
+    {
+      "country": "Denmark",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Aarhus, Denmark.",
+      "expected": "RG-T4",
+      "id": "r176"
+    },
+    {
+      "country": "Japan",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Japan next quarter.",
+      "expected": "RG-T4",
+      "id": "r177"
+    },
+    {
+      "country": "Sweden",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Sweden.",
+      "expected": "RG-K7",
+      "id": "r178"
+    },
+    {
+      "country": "Malaysia",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Da Nang office handled the call, but the customer is in Malaysia.",
+      "expected": "RG-M2",
+      "id": "r179"
+    },
+    {
+      "country": "Greece",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Alexandria office handled the call, but the customer is in Greece.",
+      "expected": "RG-V1",
+      "id": "r180"
+    },
+    {
+      "country": "Australia",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Australia.",
+      "expected": "RG-Q9",
+      "id": "r181"
+    },
+    {
+      "country": "Poland",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Krakow office (Poland) attached.",
+      "expected": "RG-M2",
+      "id": "r182"
+    },
+    {
+      "country": "Morocco",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Morocco.",
+      "expected": "RG-X6",
+      "id": "r183"
+    },
+    {
+      "country": "Malaysia",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Surabaya, final delivery Malaysia.",
+      "expected": "RG-M2",
+      "id": "r184"
+    },
+    {
+      "country": "Argentina",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Argentina; escalate to the regional desk.",
+      "expected": "RG-T4",
+      "id": "r185"
+    },
+    {
+      "country": "Portugal",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to portugal.",
+      "expected": "RG-X6",
+      "id": "r186"
+    },
+    {
+      "country": "Argentina",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Argentina next quarter.",
+      "expected": "RG-T4",
+      "id": "r187"
+    },
+    {
+      "country": "Argentina",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Argentina needs the report.",
+      "expected": "RG-T4",
+      "id": "r188"
+    },
+    {
+      "country": "Egypt",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to egypt.",
+      "expected": "RG-K7",
+      "id": "r189"
+    },
+    {
+      "country": "Denmark",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Denmark next quarter.",
+      "expected": "RG-T4",
+      "id": "r190"
+    },
+    {
+      "country": "Portugal",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Portugal; escalate to the regional desk.",
+      "expected": "RG-X6",
+      "id": "r191"
+    },
+    {
+      "country": "Malaysia",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Penang, Malaysia.",
+      "expected": "RG-M2",
+      "id": "r192"
+    },
+    {
+      "country": "India",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in India next quarter.",
+      "expected": "RG-V1",
+      "id": "r193"
+    },
+    {
+      "country": "Peru",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Medellin, final delivery Peru.",
+      "expected": "RG-M2",
+      "id": "r194"
+    },
+    {
+      "country": "Mexico",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Nairobi, final delivery Mexico.",
+      "expected": "RG-M2",
+      "id": "r195"
+    },
+    {
+      "country": "Norway",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Norway next quarter.",
+      "expected": "RG-Q9",
+      "id": "r196"
+    },
+    {
+      "country": "Norway",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Norway; escalate to the regional desk.",
+      "expected": "RG-Q9",
+      "id": "r197"
+    },
+    {
+      "country": "Brazil",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Brazil.",
+      "expected": "RG-K7",
+      "id": "r198"
+    },
+    {
+      "country": "Nigeria",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Lagos office (Nigeria) attached.",
+      "expected": "RG-Q9",
+      "id": "r199"
+    },
+    {
+      "country": "Ireland",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Ireland next quarter.",
+      "expected": "RG-V1",
+      "id": "r200"
+    },
+    {
+      "country": "Ireland",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Ireland needs the report.",
+      "expected": "RG-V1",
+      "id": "r201"
+    },
+    {
+      "country": "Portugal",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Penang, final delivery Portugal.",
+      "expected": "RG-X6",
+      "id": "r202"
+    },
+    {
+      "country": "Portugal",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Portugal next quarter.",
+      "expected": "RG-X6",
+      "id": "r203"
+    },
+    {
+      "country": "Nigeria",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Nigeria.",
+      "expected": "RG-Q9",
+      "id": "r204"
+    },
+    {
+      "country": "Nigeria",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Nigeria next quarter.",
+      "expected": "RG-Q9",
+      "id": "r205"
+    },
+    {
+      "country": "Egypt",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Pune, final delivery Egypt.",
+      "expected": "RG-K7",
+      "id": "r206"
+    },
+    {
+      "country": "Brazil",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Brazil.",
+      "expected": "RG-K7",
+      "id": "r207"
+    },
+    {
+      "country": "Finland",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Finland needs the report.",
+      "expected": "RG-T4",
+      "id": "r208"
+    },
+    {
+      "country": "Malaysia",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to malaysia.",
+      "expected": "RG-M2",
+      "id": "r209"
+    },
+    {
+      "country": "Vietnam",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Vietnam.",
+      "expected": "RG-K7",
+      "id": "r210"
+    },
+    {
+      "country": "Vietnam",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Krakow office handled the call, but the customer is in Vietnam.",
+      "expected": "RG-K7",
+      "id": "r211"
+    },
+    {
+      "country": "Norway",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to norway.",
+      "expected": "RG-Q9",
+      "id": "r212"
+    },
+    {
+      "country": "Mexico",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Mexico.",
+      "expected": "RG-M2",
+      "id": "r213"
+    },
+    {
+      "country": "New Zealand",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Auckland, New Zealand.",
+      "expected": "RG-X6",
+      "id": "r214"
+    },
+    {
+      "country": "Morocco",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Casablanca, Morocco.",
+      "expected": "RG-X6",
+      "id": "r215"
+    },
+    {
+      "country": "Norway",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Bergen, Norway.",
+      "expected": "RG-Q9",
+      "id": "r216"
+    },
+    {
+      "country": "Morocco",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Guadalajara office handled the call, but the customer is in Morocco.",
+      "expected": "RG-X6",
+      "id": "r217"
+    },
+    {
+      "country": "New Zealand",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in New Zealand.",
+      "expected": "RG-X6",
+      "id": "r218"
+    },
+    {
+      "country": "Japan",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Japan.",
+      "expected": "RG-T4",
+      "id": "r219"
+    },
+    {
+      "country": "Chile",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Chile.",
+      "expected": "RG-Q9",
+      "id": "r220"
+    },
+    {
+      "country": "India",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Rosario, final delivery India.",
+      "expected": "RG-V1",
+      "id": "r221"
+    },
+    {
+      "country": "India",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in India; escalate to the regional desk.",
+      "expected": "RG-V1",
+      "id": "r222"
+    },
+    {
+      "country": "New Zealand",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination New Zealand.",
+      "expected": "RG-X6",
+      "id": "r223"
+    },
+    {
+      "country": "Egypt",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Egypt next quarter.",
+      "expected": "RG-K7",
+      "id": "r224"
+    },
+    {
+      "country": "Kenya",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to kenya.",
+      "expected": "RG-M2",
+      "id": "r225"
+    },
+    {
+      "country": "Greece",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Rio de Janeiro, final delivery Greece.",
+      "expected": "RG-V1",
+      "id": "r226"
+    },
+    {
+      "country": "Kenya",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Osaka, final delivery Kenya.",
+      "expected": "RG-M2",
+      "id": "r227"
+    },
+    {
+      "country": "Australia",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Australia.",
+      "expected": "RG-Q9",
+      "id": "r228"
+    },
+    {
+      "country": "Denmark",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Chiang Mai office handled the call, but the customer is in Denmark.",
+      "expected": "RG-T4",
+      "id": "r229"
+    },
+    {
+      "country": "Colombia",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Colombia next quarter.",
+      "expected": "RG-V1",
+      "id": "r230"
+    },
+    {
+      "country": "Nigeria",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to nigeria.",
+      "expected": "RG-Q9",
+      "id": "r231"
+    },
+    {
+      "country": "Chile",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to chile.",
+      "expected": "RG-Q9",
+      "id": "r232"
+    },
+    {
+      "country": "Canada",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Canada.",
+      "expected": "RG-X6",
+      "id": "r233"
+    },
+    {
+      "country": "Turkey",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Valparaiso, final delivery Turkey.",
+      "expected": "RG-V1",
+      "id": "r234"
+    },
+    {
+      "country": "Kenya",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Kenya.",
+      "expected": "RG-M2",
+      "id": "r235"
+    },
+    {
+      "country": "Peru",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Peru needs the report.",
+      "expected": "RG-M2",
+      "id": "r236"
+    },
+    {
+      "country": "Philippines",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Cebu office (Philippines) attached.",
+      "expected": "RG-T4",
+      "id": "r237"
+    },
+    {
+      "country": "Vietnam",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Vietnam needs the report.",
+      "expected": "RG-K7",
+      "id": "r238"
+    },
+    {
+      "country": "Mexico",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Mexico.",
+      "expected": "RG-M2",
+      "id": "r239"
+    },
+    {
+      "country": "Indonesia",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Izmir, final delivery Indonesia.",
+      "expected": "RG-Q9",
+      "id": "r240"
+    },
+    {
+      "country": "Japan",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Rosario office handled the call, but the customer is in Japan.",
+      "expected": "RG-T4",
+      "id": "r241"
+    },
+    {
+      "country": "Peru",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Peru next quarter.",
+      "expected": "RG-M2",
+      "id": "r242"
+    },
+    {
+      "country": "Morocco",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Morocco.",
+      "expected": "RG-X6",
+      "id": "r243"
+    },
+    {
+      "country": "Ireland",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Ireland; escalate to the regional desk.",
+      "expected": "RG-V1",
+      "id": "r244"
+    },
+    {
+      "country": "Colombia",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Colombia.",
+      "expected": "RG-V1",
+      "id": "r245"
+    },
+    {
+      "country": "Indonesia",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Indonesia next quarter.",
+      "expected": "RG-Q9",
+      "id": "r246"
+    },
+    {
+      "country": "Sweden",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Sweden; escalate to the regional desk.",
+      "expected": "RG-K7",
+      "id": "r247"
+    },
+    {
+      "country": "Canada",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Montreal office (Canada) attached.",
+      "expected": "RG-X6",
+      "id": "r248"
+    },
+    {
+      "country": "Colombia",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to colombia.",
+      "expected": "RG-V1",
+      "id": "r249"
+    },
+    {
+      "country": "Philippines",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Philippines.",
+      "expected": "RG-T4",
+      "id": "r250"
+    },
+    {
+      "country": "Thailand",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Thailand next quarter.",
+      "expected": "RG-K7",
+      "id": "r251"
+    },
+    {
+      "country": "Japan",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Japan needs the report.",
+      "expected": "RG-T4",
+      "id": "r252"
+    },
+    {
+      "country": "Hungary",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Hungary needs the report.",
+      "expected": "RG-X6",
+      "id": "r253"
+    },
+    {
+      "country": "Turkey",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Turkey next quarter.",
+      "expected": "RG-V1",
+      "id": "r254"
+    },
+    {
+      "country": "Egypt",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Izmir office handled the call, but the customer is in Egypt.",
+      "expected": "RG-K7",
+      "id": "r255"
+    },
+    {
+      "country": "Nigeria",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Surabaya office handled the call, but the customer is in Nigeria.",
+      "expected": "RG-Q9",
+      "id": "r256"
+    },
+    {
+      "country": "Morocco",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Casablanca office (Morocco) attached.",
+      "expected": "RG-X6",
+      "id": "r257"
+    },
+    {
+      "country": "Portugal",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Portugal.",
+      "expected": "RG-X6",
+      "id": "r258"
+    },
+    {
+      "country": "Vietnam",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to vietnam.",
+      "expected": "RG-K7",
+      "id": "r259"
+    },
+    {
+      "country": "Australia",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Australia next quarter.",
+      "expected": "RG-Q9",
+      "id": "r260"
+    },
+    {
+      "country": "Hungary",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Lagos, final delivery Hungary.",
+      "expected": "RG-X6",
+      "id": "r261"
+    },
+    {
+      "country": "Greece",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Greece.",
+      "expected": "RG-V1",
+      "id": "r262"
+    },
+    {
+      "country": "Hungary",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Debrecen, Hungary.",
+      "expected": "RG-X6",
+      "id": "r263"
+    },
+    {
+      "country": "Nigeria",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Lagos, Nigeria.",
+      "expected": "RG-Q9",
+      "id": "r264"
+    },
+    {
+      "country": "Kenya",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Kenya.",
+      "expected": "RG-M2",
+      "id": "r265"
+    },
+    {
+      "country": "Sweden",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Aarhus, final delivery Sweden.",
+      "expected": "RG-K7",
+      "id": "r266"
+    },
+    {
+      "country": "Morocco",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Aarhus, final delivery Morocco.",
+      "expected": "RG-X6",
+      "id": "r267"
+    },
+    {
+      "country": "Denmark",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to denmark.",
+      "expected": "RG-T4",
+      "id": "r268"
+    },
+    {
+      "country": "Philippines",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to philippines.",
+      "expected": "RG-T4",
+      "id": "r269"
+    },
+    {
+      "country": "Finland",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Finland.",
+      "expected": "RG-T4",
+      "id": "r270"
+    },
+    {
+      "country": "Brazil",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Bergen office handled the call, but the customer is in Brazil.",
+      "expected": "RG-K7",
+      "id": "r271"
+    },
+    {
+      "country": "India",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Pune office (India) attached.",
+      "expected": "RG-V1",
+      "id": "r272"
+    },
+    {
+      "country": "Malaysia",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Malaysia.",
+      "expected": "RG-M2",
+      "id": "r273"
+    },
+    {
+      "country": "Finland",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to finland.",
+      "expected": "RG-T4",
+      "id": "r274"
+    },
+    {
+      "country": "Denmark",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Denmark.",
+      "expected": "RG-T4",
+      "id": "r275"
+    },
+    {
+      "country": "Thailand",
+      "template": "lowercase",
+      "misleading_city": false,
+      "lowercase": true,
+      "input": "please route the shipment to thailand.",
+      "expected": "RG-K7",
+      "id": "r276"
+    },
+    {
+      "country": "Malaysia",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Malaysia needs the report.",
+      "expected": "RG-M2",
+      "id": "r277"
+    },
+    {
+      "country": "Finland",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Izmir, final delivery Finland.",
+      "expected": "RG-T4",
+      "id": "r278"
+    },
+    {
+      "country": "Argentina",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Pune, final delivery Argentina.",
+      "expected": "RG-T4",
+      "id": "r279"
+    },
+    {
+      "country": "Indonesia",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Indonesia needs the report.",
+      "expected": "RG-Q9",
+      "id": "r280"
+    },
+    {
+      "country": "Morocco",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Morocco needs the report.",
+      "expected": "RG-X6",
+      "id": "r281"
+    },
+    {
+      "country": "Ireland",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Ireland.",
+      "expected": "RG-V1",
+      "id": "r282"
+    },
+    {
+      "country": "Egypt",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Alexandria, Egypt.",
+      "expected": "RG-K7",
+      "id": "r283"
+    },
+    {
+      "country": "Turkey",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Turkey.",
+      "expected": "RG-V1",
+      "id": "r284"
+    },
+    {
+      "country": "Canada",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Cebu office handled the call, but the customer is in Canada.",
+      "expected": "RG-X6",
+      "id": "r285"
+    },
+    {
+      "country": "Poland",
+      "template": "reseller",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Our reseller in Poland needs the report.",
+      "expected": "RG-M2",
+      "id": "r286"
+    },
+    {
+      "country": "Indonesia",
+      "template": "billing",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Customer billing address is in Indonesia.",
+      "expected": "RG-Q9",
+      "id": "r287"
+    },
+    {
+      "country": "Philippines",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Philippines; escalate to the regional desk.",
+      "expected": "RG-T4",
+      "id": "r288"
+    },
+    {
+      "country": "Hungary",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Nairobi office handled the call, but the customer is in Hungary.",
+      "expected": "RG-X6",
+      "id": "r289"
+    },
+    {
+      "country": "Poland",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Casablanca office handled the call, but the customer is in Poland.",
+      "expected": "RG-M2",
+      "id": "r290"
+    },
+    {
+      "country": "Indonesia",
+      "template": "misleading_office",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Our Debrecen office handled the call, but the customer is in Indonesia.",
+      "expected": "RG-Q9",
+      "id": "r291"
+    },
+    {
+      "country": "Chile",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Porto, final delivery Chile.",
+      "expected": "RG-Q9",
+      "id": "r292"
+    },
+    {
+      "country": "Hungary",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Hungary.",
+      "expected": "RG-X6",
+      "id": "r293"
+    },
+    {
+      "country": "New Zealand",
+      "template": "invoice_office",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Invoice for the Auckland office (New Zealand) attached.",
+      "expected": "RG-X6",
+      "id": "r294"
+    },
+    {
+      "country": "Nigeria",
+      "template": "support",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Support ticket opened by a customer in Nigeria; escalate to the regional desk.",
+      "expected": "RG-Q9",
+      "id": "r295"
+    },
+    {
+      "country": "Japan",
+      "template": "misleading_route",
+      "misleading_city": true,
+      "lowercase": false,
+      "input": "Routed via Gothenburg, final delivery Japan.",
+      "expected": "RG-T4",
+      "id": "r296"
+    },
+    {
+      "country": "Poland",
+      "template": "warehouse",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Warehouse transfer: destination Poland.",
+      "expected": "RG-M2",
+      "id": "r297"
+    },
+    {
+      "country": "Poland",
+      "template": "ship_city",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "Ship this order to Krakow, Poland.",
+      "expected": "RG-M2",
+      "id": "r298"
+    },
+    {
+      "country": "Hungary",
+      "template": "depot",
+      "misleading_city": false,
+      "lowercase": false,
+      "input": "We are opening a second depot in Hungary next quarter.",
+      "expected": "RG-X6",
+      "id": "r299"
+    }
+  ],
+  "built_at": "2026-09-10T18:14:56Z"
+}

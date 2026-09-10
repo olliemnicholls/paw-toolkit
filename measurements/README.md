@@ -1324,6 +1324,440 @@ sections: everything `paw-ft-bs48` costs, it costs once, at compile.
   compiler is not separable by one pool — though C's 41.1% on the 219 non-boundary dates,
   against B's 2.7%, is hard to attribute to three boundary examples.
 
+## Finetune compiler on an arbitrary lookup table (region codes): the gap is not about arithmetic
+
+The fiscal-week section above found the first task the finetune compiler can do and the
+fast one cannot — but on a rule whose whole content is multi-step arithmetic, which left
+two readings open. Either the gap is about **computation** (the fast compiler's single
+forward pass cannot produce an adapter that *computes*, and would be fine on a rule with
+no arithmetic), or it is about **spec-defined mappings the base model lacks** (anything
+stated in the spec and absent from pretraining, arithmetic or not).
+
+This section separates them with a task that has no arithmetic anywhere: an arbitrary
+region-code lookup table. **It is the second reading.** `paw-ft-bs48` scores 97.7%
+(293/300) against the fast compiler's 33.0% and 29.0%, on a task where every answer is a
+single dictionary lookup and a frontier model scores 100%. Arm A never emits two of the
+six codes at all — 100 of the 300 cases are unwinnable by its own output vocabulary — and
+arm B, given the eight folded examples, learns those eight countries (87.5%) and drops
+*below chance* on the other twenty-two (7.7%, against 16.7% for guessing).
+
+Unlike fiscal weeks, this one also produces a **usable** adapter: 97.7% exact at 32 ms a
+call, against 100% at 750 ms for `claude-haiku-4-5`, with 293 of the 300 outputs
+byte-identical to Haiku's.
+
+### The rule
+
+Thirty real countries are assigned to six made-up internal region codes, five countries
+each, by a seeded shuffle. In, a short sales-system sentence naming exactly one of the
+thirty; out, that country's code.
+
+```
+RG-K7  Brazil, Vietnam, Thailand, Egypt, Sweden
+RG-M2  Kenya, Poland, Peru, Mexico, Malaysia
+RG-Q9  Norway, Chile, Australia, Nigeria, Indonesia
+RG-T4  Japan, Finland, Denmark, Argentina, Philippines
+RG-V1  Ireland, Turkey, India, Colombia, Greece
+RG-X6  Portugal, New Zealand, Canada, Morocco, Hungary
+```
+
+The grouping is deliberately not geographic, not alphabetical and not anything a
+pretrained model could infer — Brazil sits with Vietnam and Sweden, Japan with Argentina.
+The spec states the rule, prints the table as a plain list one country per line, and gives
+two worked examples (Portugal and Kenya, which are therefore given away to every arm).
+
+The task was chosen to keep everything the fiscal-week task had **except** the arithmetic.
+The rule is arbitrary; the ground truth is computable, so there is no judge, no teacher and
+no label noise; and the answer is a fixed six-character string. What it removes is
+computation: `scripts/measure_finetune_lookup.py:region_code` is a `dict` subscript.
+
+### The data
+
+```
+300 evaluation sentences, seed 20260910
+  30 countries x 10 templates, so every country appears exactly 10 times and every
+     template exactly 30 times -- both cuts are balanced by construction, no sampling noise
+  10 templates, including:
+     "Ship this order to Osaka, Japan."
+     "Customer billing address is in Kenya."
+     "Invoice for the Rosario office (Argentina) attached."
+     "Our reseller in New Zealand needs the report."
+     "Our Chiang Mai office handled the call, but the customer is in Denmark."   <- misleading city
+     "Routed via Izmir, final delivery Indonesia."                               <- misleading city
+     "please route the shipment to morocco."                                    <- lower case
+  60 of the 300 name a city belonging to a *different* country than the one to look up
+  30 of the 300 write the country name in lower case
+  the country name always appears verbatim -- no demonyms, no abbreviations, so the
+     difficulty is the table and not the parsing
+8 folding examples, covering 8 different countries and all 6 codes, built from four
+  phrasings that appear nowhere in the evaluation set, so the two sets are disjoint by
+  construction. The eight folded *countries* do appear in the evaluation set, 10 times
+  each -- which is what makes "does this arm only know the folded countries?" answerable,
+  and it turned out to be the whole story for arm B.
+```
+
+Folded: Sweden (RG-K7), Poland (RG-M2), Australia (RG-Q9), Philippines and Denmark
+(RG-T4), India and Turkey (RG-V1), Portugal (RG-X6). Committed as
+`measurements/finetune-lookup-regions.json`; rebuilt deterministically, no model involved.
+
+Guessing at random scores 16.7% (each code is the right answer exactly 50 times in 300).
+That is the number to compare the fast compiler against, not zero.
+
+### The commands
+
+```bash
+# Fixture is built on first run. Three compiles, one arm at a time, public=False.
+uv run python scripts/measure_finetune_lookup.py --label 3080 --no-run --arms A
+uv run python scripts/measure_finetune_lookup.py --label 3080 --no-run --arms B
+uv run python scripts/measure_finetune_lookup.py --label 3080 --no-run --arms C
+
+# 300 sentences x 3 adapters on the 3080 at temperature 0, plus 300 Haiku calls for arm D.
+uv run python scripts/measure_finetune_lookup.py --label 3080 --skip-compile --arms A,B,C,D
+
+# paw-kit's own tools, read-only, on the same 300 cases.
+uv run paw-test check measurements/finetune-lookup-suite-A.yaml --backend real \
+    --json measurements/finetune-lookup-check-A.json          # and -B, -C
+
+uv run paw-test compare \
+    measurements/finetune_lookup_A-paw-4b-qwen3-0.6b.paw \
+    measurements/finetune_lookup_C-paw-ft-bs48.paw \
+    measurements/finetune-lookup-suite.yaml \
+    --backend real --no-fuzz --json measurements/finetune-lookup-compare-AC.json
+
+uv run paw-test compare \
+    measurements/finetune_lookup_B-paw-4b-qwen3-0.6b.paw \
+    measurements/finetune_lookup_C-paw-ft-bs48.paw \
+    measurements/finetune-lookup-suite.yaml \
+    --backend real --no-fuzz --json measurements/finetune-lookup-compare-BC.json
+```
+
+Run artifact: `measurements/finetune-lookup-3080-20260910-192159.json` (every per-case row
+— input, raw output, parsed code, latency — plus each arm's manifest fields mirrored in,
+since the `.paw` files are gitignored).
+
+**Compile calls made: three.** Arms A, B and C, one each, all `cache_hit: false`, all
+`public=False`. Health before the run was `{"status":"healthy","queue_depth":0,
+"warnings":[]}` — no `redis_unavailable` — and all three compiles went through on the
+first attempt, including the async finetune one. `paw-kit doctor` was clean apart from the
+familiar `WARN — 200 OK but gpu_services is empty`, which for the fourth section running
+predicted nothing. The inference run reports `compiles_made_this_run: 0` (it ran under
+`--skip-compile`); `check` and `compare` compile nothing; arm D compiles nothing.
+
+### The arms
+
+| Arm | Compiler | Snapshot | Examples | Program id | `full_spec_sha256` | Compile wall |
+|---|---|---|---|---|---|---|
+| A | `paw-4b-qwen3-0.6b` | `paw-4b-qwen3-0.6b-20260407` | 0 | `ab2f646b90aee687127d` | `8bb378d8f95378ed…` | 3.86 s |
+| B | `paw-4b-qwen3-0.6b` | `paw-4b-qwen3-0.6b-20260407` | 8 folded | `a60100720070b1ffdee4` | `72a918df07342585…` | 4.04 s |
+| C | `paw-ft-bs48` | `paw-ft-bs48-20260530` | 8 folded | `be5fc2427459c392556b` | `72a918df07342585…` | **96.08 s** |
+| D | `claude-haiku-4-5-20251001` | n/a | 0 (spec text only) | n/a | n/a | none |
+
+B and C share `full_spec_sha256` exactly, so **those two arms differ in the compiler and in
+nothing else**. A differs only in having no folded examples (its `spec_sha256` and
+`full_spec_sha256` are equal, as they must be). C's 96.08 s is a real, uncached finetune
+compile — 24x arm B's, and the fastest finetune compile recorded in this document (against
+133.07 s, 180.8 s and 223.3 s in the three earlier sections).
+
+### Results
+
+All 300 cases, all arms, temperature 0. Ground truth is exact, so 100% is the ceiling.
+"Exact" is scored on the region code parsed out of the output, so an arm that answers
+correctly but decorates the answer is not penalised twice — that lands in the next column
+instead.
+
+| Arm | Exact | Whole output is just the code | Distinct codes emitted | Top code's share | Countries whose modal answer is right | Latency/call (median) |
+|---|---|---|---|---|---|---|
+| A — fast, 0 examples | 33.0% (99/300) | **0% (0/300)** | **4 of 6** | 38.3% | 9/30 | 39.3 ms |
+| B — fast, 8 examples | 29.0% (87/300) | **0% (0/300)** | 6 of 6 | 24.3% | 8/30 | 40.8 ms |
+| C — finetune, 8 examples | **97.7% (293/300)** | 100% (300/300) | 6 of 6 | 17.7% | **30/30** | **32.2 ms** |
+| D — Haiku 4.5, no compile | **100% (300/300)** | 100% (300/300) | 6 of 6 | 16.7% | 30/30 | 750.1 ms |
+
+Random guessing scores 16.7%. Every arm parsed as a code on 300/300 and produced a code
+from the six-code vocabulary on 300/300; there were no errors and no refusals in 1200
+calls.
+
+Folded countries against the rest, and the deliberately hard slices:
+
+| Arm | Folded 8 countries (80) | Other 22 countries (220) | Misleading city (60) | Plain (240) | Lower case (30) |
+|---|---|---|---|---|---|
+| A | 31.2% (25/80) | 33.6% (74/220) | 36.7% (22/60) | 32.1% (77/240) | 33.3% (10/30) |
+| B | **87.5% (70/80)** | **7.7% (17/220)** | 26.7% (16/60) | 29.6% (71/240) | 30.0% (9/30) |
+| C | 96.2% (77/80) | 98.2% (216/220) | 98.3% (59/60) | 97.5% (234/240) | 93.3% (28/30) |
+| D | 100% (80/80) | 100% (220/220) | 100% (60/60) | 100% (240/240) | 100% (30/30) |
+
+By template (exact matches out of 30 each):
+
+| Template | A | B | C | D |
+|---|---|---|---|---|
+| `Ship this order to {city}, {country}.` | 12 | 10 | 30 | 30 |
+| `Customer billing address is in {country}.` | 9 | 8 | 29 | 30 |
+| `Invoice for the {city} office ({country}) attached.` | 9 | 10 | 27 | 30 |
+| `Our reseller in {country} needs the report.` | 9 | 9 | 30 | 30 |
+| `Warehouse transfer: destination {country}.` | 10 | 8 | 30 | 30 |
+| `Our {other city} office handled the call, but the customer is in {country}.` | 11 | 8 | 30 | 30 |
+| `please route the shipment to {country in lower case}.` | 10 | 9 | 28 | 30 |
+| `Support ticket opened by a customer in {country}; escalate…` | 9 | 8 | 30 | 30 |
+| `Routed via {other city}, final delivery {country}.` | 11 | 8 | 29 | 30 |
+| `We are opening a second depot in {country} next quarter.` | 9 | 9 | 30 | 30 |
+
+**No arm is beaten by a phrasing.** The spread across ten templates is 3 cases for A, 2 for
+B and 3 for C. The misleading city mostly does not mislead: A answers the *city's*
+country's code on 7 of its 60 misleading cases and C on 11, against 10 expected under a
+uniform guess and 8.6 and 10.0 under each arm's own output distribution. **Arm B is the one
+exception** — 18 of 60, against 10.3 expected under its own marginal. That is 8 cases and
+the only trace of geographic pull anywhere in the run, so it is reported rather than
+leaned on. Lower case costs nothing for A and B and two cases for C. As on fiscal weeks,
+the difficulty is the rule, not the input.
+
+### Error patterns
+
+**1. Arm A can only say four things.** Across 300 sentences naming 30 different countries,
+arm A emits `RG-M2` 115 times, `RG-V1` 78, `RG-X6` 59 and `RG-K7` 48 — and **`RG-Q9` and
+`RG-T4` zero times each**. Ten of the thirty countries are in those two regions, so 100 of
+the 300 cases were unwinnable before the first token: arm A scored **0 of 100** on them.
+
+| Input | Expected | A |
+|---|---|---|
+| `Ship this order to Osaka, Japan.` | `RG-T4` | `"RG-K7"` |
+| `Customer billing address is in Norway.` | `RG-Q9` | `"RG-X6"` |
+| `Routed via Tampere, final delivery Norway.` | `RG-Q9` | `"RG-K7"` |
+| `We are opening a second depot in Brazil next quarter.` | `RG-K7` | `"RG-M2"` |
+| `Support ticket opened by a customer in Japan; escalate to the regional desk.` | `RG-T4` | `"RG-V1"` |
+
+This is the fiscal-week collapse in a new shape. There it was a fixed vocabulary of *week
+numbers* (43 distinct labels for arm A, of which W40 and W01 covered 59% of outputs); here
+it is a fixed vocabulary of *codes*, two of the six simply missing. Arm A is not reading
+the table. It is not entirely ignoring the input either — 33.0% is twice the 16.7% chance
+rate, and it gets eight countries right 10 times out of 10 (Greece, India, Kenya, Mexico,
+New Zealand, Peru, Portugal, Thailand) — but its modal answer is correct for only **9 of
+30** countries, and 14 countries it gets wrong every single time.
+
+**2. Folding turns the fast compiler into a memoriser of exactly the folded rows — and
+nothing else.** This is the cleanest demonstration of it anywhere in this document. Arm B
+gets **70 of 80** on the eight folded countries and **17 of 220** on the other twenty-two.
+17/220 is 7.7%: **below the 16.7% you get by guessing.** The eight examples did not teach
+arm B the table; they taught it eight answers and actively degraded everything else, which
+is why arm B is 4 points *worse overall* than arm A (29.0% vs 33.0%) despite being the arm
+that was given the answers.
+
+| Input | Expected | B | C |
+|---|---|---|---|
+| `Warehouse transfer: destination Sweden.` (Sweden is folded) | `RG-K7` | **`"RG-K7"`** | `RG-K7` |
+| `Our reseller in Portugal needs the report.` (Portugal is folded) | `RG-X6` | **`"RG-X6"`** | `RG-X6` |
+| `We are opening a second depot in Greece next quarter.` | `RG-V1` | `"RG-K7"` | `RG-V1` |
+| `Invoice for the Rosario office (Argentina) attached.` | `RG-T4` | `"RG-K7"` | `RG-T4` |
+| `please route the shipment to morocco.` | `RG-X6` | `"RG-K7"` | `RG-X6` |
+| `Invoice for the Rio de Janeiro office (Brazil) attached.` | `RG-K7` | `"RG-X6"` | `RG-K7` |
+
+**3. Denmark: the folded example arm B ignored, and arm A never had a chance at.** Denmark
+is in the folding pool (`Our partner office in Denmark raised the request.` → `RG-T4`) and
+is one of the ten countries whose code arm A never emits. All ten Denmark sentences, all
+four arms:
+
+| Input | A | B | C | D |
+|---|---|---|---|---|
+| `Ship this order to Aarhus, Denmark.` | `"RG-K7"` | `"RG-K7"` | **`RG-T4`** | **`RG-T4`** |
+| `Customer billing address is in Denmark.` | `"RG-M2"` | `"RG-K7"` | `RG-X6` | **`RG-T4`** |
+| `Invoice for the Aarhus office (Denmark) attached.` | `"RG-X6"` | `"RG-K7"` | **`RG-T4`** | **`RG-T4`** |
+| `Our reseller in Denmark needs the report.` | `"RG-K7"` | `"RG-K7"` | **`RG-T4`** | **`RG-T4`** |
+| `Warehouse transfer: destination Denmark.` | `"RG-M2"` | `"RG-K7"` | **`RG-T4`** | **`RG-T4`** |
+| `Our Chiang Mai office handled the call, but the customer is in Denmark.` | `"RG-M2"` | `"RG-M2"` | **`RG-T4`** | **`RG-T4`** |
+| `please route the shipment to denmark.` | `"RG-K7"` | `"RG-K7"` | `RG-X6` | **`RG-T4`** |
+| `Support ticket opened by a customer in Denmark; escalate to the regional desk.` | `"RG-V1"` | `"RG-K7"` | **`RG-T4`** | **`RG-T4`** |
+| `Routed via Osaka, final delivery Denmark.` | `"RG-M2"` | `"RG-K7"` | **`RG-T4`** | **`RG-T4`** |
+| `We are opening a second depot in Denmark next quarter.` | `"RG-X6"` | `"RG-K7"` | **`RG-T4`** | **`RG-T4`** |
+
+The expected answer is `RG-T4` on every row. Arm B answers `"RG-K7"` on nine of ten —
+a country whose answer was **handed to it in the spec text** — and arm A produces four
+different wrong codes without once landing on the right one. Arm C gets 8 of 10.
+
+**4. Arm C's seven errors, in full.** There is no pattern worth a paragraph, which is
+itself the finding — 293 right, and the misses do not cluster by code, by country group or
+by whether the country was folded (3 of the 7 are folded countries):
+
+| Input | Expected | C |
+|---|---|---|
+| `Invoice for the Surabaya office (Indonesia) attached.` | `RG-Q9` | `RG-V1` |
+| `Routed via Izmir, final delivery Indonesia.` | `RG-Q9` | `RG-V1` |
+| `Invoice for the Arequipa office (Peru) attached.` | `RG-M2` | `RG-V1` |
+| `Invoice for the Penang office (Malaysia) attached.` | `RG-M2` | `RG-X6` |
+| `Customer billing address is in Denmark.` | `RG-T4` | `RG-X6` |
+| `please route the shipment to denmark.` | `RG-T4` | `RG-X6` |
+| `please route the shipment to turkey.` | `RG-V1` | `RG-K7` |
+
+Four of the seven are two countries seen twice (Indonesia, Denmark) and three of the seven
+sit in the `Invoice for the {city} office ({country}) attached.` template — the one that
+puts the country in parentheses after a city. C's output distribution is near-uniform
+(53/52/51/48/48/48 against a ground truth of exactly 50 each), which is the opposite of a
+collapse.
+
+**5. The fast compiler quotes its answer; the finetune compiler does not.** Every one of
+arm A's 300 outputs and every one of arm B's arrives wrapped in double quotes — `"RG-X6"`,
+not `RG-X6`. Every one of arm C's 300 and arm D's 300 is the bare code. The spec says "Output exactly one region code
+and nothing else: … No explanation, no punctuation". **Arms A and B satisfy that on 0 of
+300 cases; arms C and D on 300 of 300.** This exactly reverses the fiscal-week result,
+where every compiled adapter was 300/300 on output shape and Haiku managed 1/300. It also
+has teeth: it is the entire reason `paw-test check` scores arms A and B at zero (below),
+and it means a caller doing `json.loads` and a caller doing `==` on this adapter's output
+disagree about whether it works.
+
+### Using paw-kit's own tools, and what got in the way
+
+**A note on which code ran.** The measurement script imports `paw_kit` from this worktree
+(`8b57b8d`). `paw-test` is a console script and resolves to the editable install in the
+shared checkout, whose `main` moved to `952b4db` — *"fix(test): paw-test check now compares
+output to expected"* — while this run was in flight. So the `check` numbers below are from
+the **fixed** `check`, not the one the fiscal-week section complained about.
+
+```
+paw-test check, --backend real, 300 cases, at paw_kit 952b4db:
+  arm A   passed 0/300     correct against expected   0/300
+  arm B   passed 0/300     correct against expected   0/300
+  arm C   passed 293/300   correct against expected 293/300
+```
+
+**The fix works, and it immediately found something my own scoring hides.** `check` now
+reads each case's `expected` and compares it to the output under
+`paw_kit/test/matching.py:values_equivalent`, so arm C's seven failures are exactly the
+seven errors listed above — the tool and the script agree case for case. Arms A and B score
+**0/300**, not 33.0% and 29.0%, because `values_equivalent('"RG-M2"', 'RG-M2')` is false:
+`"RG-M2"` parses as JSON, `RG-M2` does not, so the function falls through to a whitespace
+comparison of two different strings. Both numbers are defensible — the spec did say "no
+punctuation" — but they are 33 points apart on the same 300 outputs, so **which one you
+quote has to be stated, and this section quotes the parsed-code one as the headline and
+the 0/300 here.**
+
+`paw-test compare` inherits the same normalisation and the same blind spot, which makes its
+headline number useless on this pair:
+
+```
+A vs C: 300 cases, 0 identical (byte-for-byte), 0 equivalent, A pass 300/300, C pass 300/300, errored 0/300
+B vs C: 300 cases, 0 identical (byte-for-byte), 0 equivalent, B pass 300/300, C pass 300/300, errored 0/300
+```
+
+**0 of 300 equivalent is true and misleading.** Scoring the parsed code instead, A and C
+give the same answer on **101 of 300 (33.7%)** and B and C on **88 of 300 (29.3%)** — real
+disagreement, and comparable to the 31/300 the fiscal-week section recorded, but nothing
+like zero. The `pass 300/300` on both sides is the older complaint restated: the suite's
+assertions can only constrain the *shape* of the output, and `"RG-M2"` matches
+`regex_match: RG-[A-Z]\d` just as well as `RG-M2` does.
+
+The one comparison that needed no tooling at all is the most striking: **arm C and arm D
+produce byte-identical output on 293 of 300 cases (97.7%)**. A 96-second compile and a
+32 ms local call reproduce `claude-haiku-4-5` exactly, on every case but seven.
+
+Three things recorded and not fixed:
+
+1. **`values_equivalent` does not unwrap a JSON scalar against a bare string.** Two
+   adapters that agree on every answer read as 0% equivalent if one of them quotes. The
+   docstring says "both parse as JSON to equal values, or (when they don't both parse as
+   JSON) equal after `normalize_whitespace`" — the missing case is *one* side parsing to a
+   JSON string whose value equals the other side. This is now load-bearing in two places
+   (`compare`'s equivalence and `check`'s `expected`), so it is worth a decision rather
+   than a default.
+2. **`paw-test check` still has no `--adapter` flag.** The adapter is `adapter_path` inside
+   the YAML, so checking three arms on one case set still means three near-identical suite
+   files (`finetune-lookup-suite-A.yaml`, `-B`, `-C`) differing in one line, while
+   `paw-test compare` takes both adapters as arguments and ignores the suite's
+   `adapter_path`. The fiscal-week section raised this; `952b4db` did not touch it.
+3. **`paw-kit doctor`'s `gpu_services is empty` WARN was again not predictive.** Fourth
+   section in a row: all three compiles succeeded, the finetune one included.
+
+### What the fiscal-week section predicted, and what happened
+
+The fiscal-week section's hypothesis was that the fast compiler is a single forward pass
+from spec text to adapter weights and can only produce adapters of a kind its training
+covered, while the finetune compiler trains on teacher-generated examples and so can learn
+an arbitrary procedure stated in the spec. It confirmed that on a task made of arithmetic,
+and left open whether **arithmetic** was the operative word.
+
+**It was not.** Strip the arithmetic out entirely — leave a rule whose execution is one
+dictionary lookup — and the fast compiler still cannot represent it, in the same two ways
+it failed on fiscal weeks:
+
+- **it collapses to a fixed output vocabulary** — there, 43 distinct labels with W40/W01
+  covering 59%; here, four of six codes, with two never emitted at all across 300 calls;
+- **folding examples in makes it worse, by regurgitation** — there, `FY2024-W43` (a folded
+  example's own answer) 129 times out of 300 and a 1.0-point drop; here, 87.5% on the eight
+  folded countries against 7.7% on the rest and a 4.0-point drop.
+
+Two things came out differently from the fiscal-week run. **The finetune compiler does not
+merely win here, it succeeds**: 97.7% against 49.0% there, because there is nothing left to
+get arithmetically wrong once the mapping is learned. And **the output-shape result
+inverts**: on fiscal weeks the adapters obeyed "output only the label" 300/300 and the
+frontier model 1/300; here the fast compiler's adapters obey it 0/300 (they quote) and the
+frontier model 300/300.
+
+One prediction of mine was wrong. The misleading cities were built to catch an arm doing
+geographic association rather than table lookup, and **almost nothing was caught**: arms A
+and C answer the mentioned city's country's code no more often than their own output
+distributions predict, and the misleading templates are arm A's two best. Arm B does it 18
+times in 60 against 10.3 expected — the single hint that anything in this run is doing
+geography, and small enough at n=60 to be worth no more than a sentence. Whatever the fast
+compiler is doing, it is mostly not reasoning about geography either.
+
+### Conclusion
+
+**The finetune compiler's advantage over the fast compiler is not about arithmetic; it is
+about whether a mapping stated in the spec makes it into the adapter at all.** On a task
+with no computation in it whatsoever — thirty countries, six arbitrary codes, the table
+printed in the spec, the answer a single lookup — `paw-ft-bs48` scores 97.7% (293/300)
+while `paw-4b-qwen3-0.6b` scores 33.0% with no examples and 29.0% with eight, against a
+16.7% chance baseline. The fast compiler fails the same two ways it failed on fiscal weeks:
+arm A collapses to four of the six codes and never once emits the other two, making a third
+of the evaluation set unwinnable by construction, and arm B — handed eight worked answers —
+learns those eight countries (87.5%) and falls *below chance* on the remaining twenty-two
+(7.7%), scoring worse overall than the arm that got no examples. That reproduces the
+fiscal-week regurgitation result on a task that shares none of its content, which is what
+makes it a generalisation rather than a second anecdote: the gap is spec-defined mappings
+the base model lacks, arithmetic or not. What is new here is that the finetune compiler
+does not just win, it *works*: 97.7% exact, all six codes emitted at near-uniform
+frequency, every one of the thirty countries right more often than not, and 293 of 300
+outputs byte-identical to `claude-haiku-4-5`'s — which scores 100% on the same spec and
+takes 750 ms a call against the adapter's 32 ms. Ninety-six seconds of compile buys a 23x
+faster program that agrees with a frontier model, character for character, on 293 of 300
+inputs. (Whether `claude-haiku-4-5` is in fact `paw-ft-bs48`'s teacher is not something
+this measurement can see; the agreement is an observation, not a lineage claim.) Against
+that: the task is one a frontier model finds trivial, 97.7% is still not 100% and the seven
+misses are silent, the fast compiler's adapters quote their output on 300 of 300 calls so
+`paw-test check` scores them zero rather than a third, and this is one task, one seed, one
+run. The honest headline is narrow and worth having: **the fast compiler cannot put an
+arbitrary spec-stated table into an adapter, at any example count, and the finetune
+compiler can.**
+
+### Limitations
+
+- **One task, one run, one seed, one machine** (RTX 3080), one compile per arm. The
+  A-vs-C gap (65 points) is far too large to be sampling noise at n=300, but the precise
+  figures are one run's.
+- **The task was designed to isolate one variable** — an arbitrary stated mapping with the
+  arithmetic removed — after the fiscal-week task confounded the two. That is the honest
+  framing: this is evidence about what the separating property *is*, not evidence about
+  how often real work has this shape.
+- **Two of the thirty countries are given away in the spec's worked examples** (Portugal →
+  `RG-X6`, Kenya → `RG-M2`), identically for all four arms. Both arms A and B get both of
+  them right 10/10, which is 20 of their 99 and 87 correct answers — strip them and A falls
+  to 28.2% and B to 23.9%.
+- **The folding pool uses four phrasings the evaluation set never repeats.** That is what
+  makes the two sets disjoint by construction, and it means arm B's 87.5% on folded
+  countries is transfer of an *answer* across a phrasing change, not sentence memorisation
+  — but it also means no arm was tested on a folded sentence verbatim.
+- **`W53`-style unreachable cases have no analogue here** — every code is reachable and
+  every country is tested 10 times — but the flip side is that the evaluation is perfectly
+  balanced in a way real traffic would not be.
+- **Arm D is a reference, not a ceiling.** It scored 100%, so on this task the reference
+  and the ceiling coincide, which they did not on fiscal weeks. `max_tokens` was 30 rather
+  than 400: the answer is six characters, so the truncation failure that cost arm D 39
+  cases in the fiscal-week section is structurally impossible here.
+- **The comparison between arm D and the adapters is not like-for-like** in cost. D is a
+  750 ms API call per input; A, B and C are 32–41 ms local calls.
+- **Adapter temperature is 0 by inheritance, not by choice**, exactly as in the three
+  sections above: `programasweights`' `PawFunction` defaults to `temperature=0.0` and
+  `ProgramAsWeightsBackend.infer` accepts no temperature or seed argument.
+- **`check` and `compare` ran against a different commit of `paw_kit` than the measurement
+  script did** — `952b4db` versus this worktree's `8b57b8d` — because `paw-test` resolves
+  to the editable install. The adapters, the fixture and the 1200 inference calls are
+  unaffected; only the tool-output numbers in the tools section come from `952b4db`.
+
 ## Constrained decoding against the real upstream adapter: the hook wasn't missing
 
 Every claim in this project about grammar-constrained decoding has carried the same

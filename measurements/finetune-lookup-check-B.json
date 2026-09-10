@@ -1,0 +1,4211 @@
+{
+  "task_name": "region_code",
+  "adapter_path": "measurements/finetune_lookup_B-paw-4b-qwen3-0.6b.paw",
+  "total_cases": 300,
+  "passed_cases": 0,
+  "failed_cases": 300,
+  "expected_total": 300,
+  "expected_matched": 0,
+  "results": [
+    {
+      "input": "please route the shipment to sweden.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 1946.3700640480965,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Greece next quarter.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 45.75458914041519,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Rosario office (Argentina) attached.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 45.01573904417455,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Portugal needs the report.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 43.33308199420571,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to morocco.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.246242985129356,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Sweden.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.01150988228619,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Turkey.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.96670115925372,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Rio de Janeiro office (Brazil) attached.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.635061079636216,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Greece; escalate to the regional desk.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.043599067255855,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Canada needs the report.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.61153600923717,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Malaysia next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.20891501568258,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Finland; escalate to the regional desk.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.187316946685314,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Gothenburg, Sweden.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.97147688642144,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Rio de Janeiro, final delivery Vietnam.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.89108698442578,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Medellin office (Colombia) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.225883945822716,
+      "execution_error": null
+    },
+    {
+      "input": "Our Arequipa office handled the call, but the customer is in Portugal.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.233368054032326,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to india.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.8631921056658,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Tampere, final delivery Norway.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 43.09631185606122,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Denmark; escalate to the regional desk.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.445782106369734,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Peru.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.12776492163539,
+      "execution_error": null
+    },
+    {
+      "input": "Our Brisbane office handled the call, but the customer is in Mexico.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.491823107004166,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in New Zealand next quarter.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.048744063824415,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Guadalajara, Mexico.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.17508891411126,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Poland; escalate to the regional desk.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.379969170317054,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Gothenburg office (Sweden) attached.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.42995581403375,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Indonesia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.15563800930977,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Norway.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.03370003961027,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Indonesia; escalate to the regional desk.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.353703174740076,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Vietnam.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.595700895413756,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Chile needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.37561104632914,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Finland next quarter.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.06281099282205,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Thailand.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.84395693987608,
+      "execution_error": null
+    },
+    {
+      "input": "Our Lagos office handled the call, but the customer is in Chile.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.444704005494714,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Greece needs the report.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.824782870709896,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Brazil next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.023373905569315,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Argentina.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.34372791647911,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Greece.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.96526017040014,
+      "execution_error": null
+    },
+    {
+      "input": "Our Brisbane office handled the call, but the customer is in Ireland.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.445385828614235,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Colombia needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.47834191098809,
+      "execution_error": null
+    },
+    {
+      "input": "Our Penang office handled the call, but the customer is in Philippines.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.26429005898535,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Egypt needs the report.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.99713296070695,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Philippines next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.2144561521709,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Thessaloniki, Greece.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.15522706322372,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Sweden next quarter.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.990239078179,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Nigeria.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.02487799152732,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to brazil.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.928847854956985,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Medellin, final delivery New Zealand.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.245798045769334,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Egypt.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.70171916484833,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Brazil needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.32162593305111,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Chile.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.71071494743228,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Surabaya office (Indonesia) attached.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.082110023126006,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Valparaiso office (Chile) attached.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.33605894073844,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Australia; escalate to the regional desk.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.64804897643626,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to mexico.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.05997092463076,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Kenya needs the report.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.85652786307037,
+      "execution_error": null
+    },
+    {
+      "input": "Our Auckland office handled the call, but the customer is in Thailand.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.804068023338914,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Brisbane, final delivery Canada.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.51483594998717,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Peru; escalate to the regional desk.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.2353211324662,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination India.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.08438012190163,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Chile next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.03607505001128,
+      "execution_error": null
+    },
+    {
+      "input": "Our Alexandria office handled the call, but the customer is in Sweden.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.24208406917751,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Osaka, Japan.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.14707589522004,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to turkey.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.22535006515682,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Arequipa office (Peru) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.41103599593043,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Gothenburg, final delivery Philippines.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.35011981613934,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to hungary.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.957839857786894,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Turkey needs the report.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.88133007846773,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Cork, Ireland.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.149378918111324,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Osaka, final delivery Denmark.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.23751709610224,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Bergen office (Norway) attached.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.14359996654093,
+      "execution_error": null
+    },
+    {
+      "input": "Our Gothenburg office handled the call, but the customer is in Finland.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.51046306267381,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Peru.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.79742317460477,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Canada.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.86861207522452,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Chiang Mai, Thailand.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.90798001177609,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Mexico next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.82443721219897,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Pune, India.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.87428904697299,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Norway.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.75077495165169,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Turkey; escalate to the regional desk.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.010864010080695,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in New Zealand; escalate to the regional desk.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.44564091600478,
+      "execution_error": null
+    },
+    {
+      "input": "Our Aarhus office handled the call, but the customer is in Colombia.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.42850690893829,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Vietnam; escalate to the regional desk.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.17389798536897,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to ireland.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.281655034050345,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Japan; escalate to the regional desk.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.30857793986797,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Osaka office (Japan) attached.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.92026299238205,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Colombia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.75630887039006,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Brisbane office (Australia) attached.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.82036384008825,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Ireland.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.90615494735539,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Nairobi, Kenya.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.792526841163635,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Thailand.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.142874931916595,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Thailand needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.939973037689924,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Malaysia; escalate to the regional desk.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.476227877661586,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Guadalajara, final delivery Thailand.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.28408112935722,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Tampere, Finland.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.17450590617955,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Denmark.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.1373989880085,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Porto office (Portugal) attached.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.946591110900044,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Hungary; escalate to the regional desk.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.25385305471718,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Cebu, Philippines.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.970600141212344,
+      "execution_error": null
+    },
+    {
+      "input": "Our Gothenburg office handled the call, but the customer is in Turkey.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.68533510528505,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Japan.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.82662409543991,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Medellin, Colombia.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.32861301675439,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Lagos, final delivery Brazil.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.239325957372785,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Canada next quarter.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.12606083415449,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Alexandria, final delivery Ireland.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.57029681280255,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to canada.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.86202406324446,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to peru.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.739383013918996,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Rosario, Argentina.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.86734207905829,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Kenya; escalate to the regional desk.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.24155400879681,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Hungary.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.486731031909585,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Chiang Mai office (Thailand) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.682854829356074,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Tampere office (Finland) attached.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.39545310661197,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Da Nang, Vietnam.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.89853314124048,
+      "execution_error": null
+    },
+    {
+      "input": "Our Chiang Mai office handled the call, but the customer is in Kenya.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.30018695630133,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Mexico needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.014066034927964,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Da Nang office (Vietnam) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.95882100611925,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Thessaloniki office (Greece) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.70345182158053,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Rio de Janeiro, Brazil.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.92807711660862,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Portugal.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.88290284946561,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Norway needs the report.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.80302617512643,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Surabaya, final delivery Nigeria.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.957424858585,
+      "execution_error": null
+    },
+    {
+      "input": "Our Casablanca office handled the call, but the customer is in Argentina.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.4017991386354,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Cork office (Ireland) attached.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.852599147707224,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to japan.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.6560721565038,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Morocco; escalate to the regional desk.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.52892490290105,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Malaysia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.33037484623492,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Mexico; escalate to the regional desk.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.25578817911446,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Izmir office (Turkey) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.168692918494344,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Philippines.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.004327988252044,
+      "execution_error": null
+    },
+    {
+      "input": "Our Gothenburg office handled the call, but the customer is in India.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.36242810636759,
+      "execution_error": null
+    },
+    {
+      "input": "Our Rosario office handled the call, but the customer is in Australia.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.28815682977438,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Lagos, final delivery Australia.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.90483493544161,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Izmir, Turkey.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.187865030020475,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Thailand; escalate to the regional desk.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.2243509888649,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Montreal, Canada.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.97074905782938,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Morocco next quarter.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.17651407048106,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Surabaya, Indonesia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.13166104070842,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Canada; escalate to the regional desk.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.43818181566894,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Penang office (Malaysia) attached.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.19822189770639,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Alexandria office (Egypt) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.22555099800229,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Poland next quarter.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.17549513466656,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in New Zealand needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.838568937033415,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to indonesia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.305875008925796,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Arequipa, Peru.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.505788987502456,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Aarhus, final delivery Poland.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.23589310236275,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to poland.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.21709505468607,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Chile; escalate to the regional desk.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.213727021589875,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to argentina.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.036274913698435,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Sweden needs the report.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.96568112820387,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to australia.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.057533886283636,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Vietnam next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.071776835247874,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in India needs the report.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.13667395338416,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Australia needs the report.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.11540883220732,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Debrecen office (Hungary) attached.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.363257052376866,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Brazil; escalate to the regional desk.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.279441978782415,
+      "execution_error": null
+    },
+    {
+      "input": "Our Cork office handled the call, but the customer is in Norway.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.881486842408776,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Poland.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.06681088544428,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Egypt.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.854555951431394,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Kenya next quarter.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.87740804627538,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Aarhus office (Denmark) attached.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.17463605850935,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Guadalajara office (Mexico) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.257456013932824,
+      "execution_error": null
+    },
+    {
+      "input": "Our Tampere office handled the call, but the customer is in Peru.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.30012502335012,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Montreal, final delivery Colombia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.226096054539084,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to new zealand.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.183197939768434,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to greece.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.14231893233955,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in India.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.02135100401938,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Denmark needs the report.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.29527595452964,
+      "execution_error": null
+    },
+    {
+      "input": "Our Porto office handled the call, but the customer is in New Zealand.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.60377096943557,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Philippines needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.69860598631203,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Colombia; escalate to the regional desk.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.67739984020591,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Porto, Portugal.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.98636198230088,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Nairobi office (Kenya) attached.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.24083400145173,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Egypt; escalate to the regional desk.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.323685854673386,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Argentina.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.941570023074746,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Finland.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.35675502382219,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Brisbane, Australia.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.815216885879636,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Valparaiso, Chile.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.24088089540601,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Nigeria needs the report.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.18603880144656,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Aarhus, Denmark.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.607056045904756,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Japan next quarter.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.9927468970418,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Sweden.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.18784291110933,
+      "execution_error": null
+    },
+    {
+      "input": "Our Da Nang office handled the call, but the customer is in Malaysia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.65406508743763,
+      "execution_error": null
+    },
+    {
+      "input": "Our Alexandria office handled the call, but the customer is in Greece.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.679636877030134,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Australia.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.85490114428103,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Krakow office (Poland) attached.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.396171156316996,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Morocco.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.02327900566161,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Surabaya, final delivery Malaysia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.12745791301131,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Argentina; escalate to the regional desk.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 43.044596910476685,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to portugal.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.855564039200544,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Argentina next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.830960031598806,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Argentina needs the report.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.17119901254773,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to egypt.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.13892193324864,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Denmark next quarter.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.43898591771722,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Portugal; escalate to the regional desk.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.332680102437735,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Penang, Malaysia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.597237180918455,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in India next quarter.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.99532000347972,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Medellin, final delivery Peru.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.039703112095594,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Nairobi, final delivery Mexico.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.176208924502134,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Norway next quarter.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.48813320696354,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Norway; escalate to the regional desk.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.51221092231572,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Brazil.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.27293901890516,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Lagos office (Nigeria) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.61535815708339,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Ireland next quarter.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.36360699683428,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Ireland needs the report.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.41056614369154,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Penang, final delivery Portugal.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.495546163991094,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Portugal next quarter.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.34996414743364,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Nigeria.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.890735970810056,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Nigeria next quarter.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.81959782727063,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Pune, final delivery Egypt.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.03157094120979,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Brazil.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.92872312664986,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Finland needs the report.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.10754101909697,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to malaysia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.06864293478429,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Vietnam.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.87707896158099,
+      "execution_error": null
+    },
+    {
+      "input": "Our Krakow office handled the call, but the customer is in Vietnam.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.15810408256948,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to norway.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.180404998362064,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Mexico.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.90899501554668,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Auckland, New Zealand.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.14029503054917,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Casablanca, Morocco.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.92400095053017,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Bergen, Norway.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.993657963350415,
+      "execution_error": null
+    },
+    {
+      "input": "Our Guadalajara office handled the call, but the customer is in Morocco.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.436596842482686,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in New Zealand.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.13463202863932,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Japan.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.90475391037762,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Chile.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.238512912765145,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Rosario, final delivery India.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.6551081687212,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in India; escalate to the regional desk.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.5764040555805,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination New Zealand.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.69522102549672,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Egypt next quarter.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.47034387663007,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to kenya.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.895975824445486,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Rio de Janeiro, final delivery Greece.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.38029909133911,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Osaka, final delivery Kenya.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.066509041935205,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Australia.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.17401090823114,
+      "execution_error": null
+    },
+    {
+      "input": "Our Chiang Mai office handled the call, but the customer is in Denmark.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.60207004658878,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Colombia next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.4699370265007,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to nigeria.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.27153707668185,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to chile.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.0052248518914,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Canada.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.74660611897707,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Valparaiso, final delivery Turkey.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.61952801607549,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Kenya.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.154049104079604,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Peru needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.393613977357745,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Cebu office (Philippines) attached.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.41726887226105,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Vietnam needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.27741588652134,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Mexico.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.14162113890052,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Izmir, final delivery Indonesia.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.975197054445744,
+      "execution_error": null
+    },
+    {
+      "input": "Our Rosario office handled the call, but the customer is in Japan.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.25529115460813,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Peru next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.16401495411992,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Morocco.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.845742147415876,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Ireland; escalate to the regional desk.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.50059905461967,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Colombia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.17853194475174,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Indonesia next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.69946799427271,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Sweden; escalate to the regional desk.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.74190300889313,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Montreal office (Canada) attached.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.19560688175261,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to colombia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.23100505582988,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Philippines.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.044527035206556,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Thailand next quarter.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.30159208923578,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Japan needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.54746397398412,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Hungary needs the report.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.244869051501155,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Turkey next quarter.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.37270401790738,
+      "execution_error": null
+    },
+    {
+      "input": "Our Izmir office handled the call, but the customer is in Egypt.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.550371166318655,
+      "execution_error": null
+    },
+    {
+      "input": "Our Surabaya office handled the call, but the customer is in Nigeria.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.816521970555186,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Casablanca office (Morocco) attached.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.35005206242204,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Portugal.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.285143069922924,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to vietnam.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.232839062809944,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Australia next quarter.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.025713784620166,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Lagos, final delivery Hungary.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.93795805238187,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Greece.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.42482199333608,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Debrecen, Hungary.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.68012987449765,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Lagos, Nigeria.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.01748687773943,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Kenya.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.816323202103376,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Aarhus, final delivery Sweden.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.993216982111335,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Aarhus, final delivery Morocco.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.01466813497245,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to denmark.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.0323779322207,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to philippines.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.01201596111059,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Finland.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.167568949982524,
+      "execution_error": null
+    },
+    {
+      "input": "Our Bergen office handled the call, but the customer is in Brazil.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.646983940154314,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Pune office (India) attached.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.4527779687196,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Malaysia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.20625385642052,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to finland.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.69308301061392,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Denmark.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.948672987520695,
+      "execution_error": null
+    },
+    {
+      "input": "please route the shipment to thailand.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.226493030786514,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Malaysia needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.22801900282502,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Izmir, final delivery Finland.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.99847802333534,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Pune, final delivery Argentina.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.15549598261714,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Indonesia needs the report.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.181057062000036,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Morocco needs the report.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.17715312168002,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Ireland.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.82473802939057,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Alexandria, Egypt.",
+      "output": "\"RG-K7\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-K7\" want RG-K7"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.715584160760045,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Turkey.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-V1"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.80459794588387,
+      "execution_error": null
+    },
+    {
+      "input": "Our Cebu office handled the call, but the customer is in Canada.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.44636804610491,
+      "execution_error": null
+    },
+    {
+      "input": "Our reseller in Poland needs the report.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.04016285762191,
+      "execution_error": null
+    },
+    {
+      "input": "Customer billing address is in Indonesia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.19175795838237,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Philippines; escalate to the regional desk.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.33036692999303,
+      "execution_error": null
+    },
+    {
+      "input": "Our Nairobi office handled the call, but the customer is in Hungary.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.359222097322345,
+      "execution_error": null
+    },
+    {
+      "input": "Our Casablanca office handled the call, but the customer is in Poland.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.575123857706785,
+      "execution_error": null
+    },
+    {
+      "input": "Our Debrecen office handled the call, but the customer is in Indonesia.",
+      "output": "\"RG-T4\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-T4\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.50601399689913,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Porto, final delivery Chile.",
+      "output": "\"RG-X6\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-X6\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.12751006707549,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Hungary.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 42.12184506468475,
+      "execution_error": null
+    },
+    {
+      "input": "Invoice for the Auckland office (New Zealand) attached.",
+      "output": "\"RG-Q9\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-Q9\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 41.89982800744474,
+      "execution_error": null
+    },
+    {
+      "input": "Support ticket opened by a customer in Nigeria; escalate to the regional desk.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-Q9"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.6971990596503,
+      "execution_error": null
+    },
+    {
+      "input": "Routed via Gothenburg, final delivery Japan.",
+      "output": "\"RG-V1\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-V1\" want RG-T4"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.35294591449201,
+      "execution_error": null
+    },
+    {
+      "input": "Warehouse transfer: destination Poland.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 39.78150803595781,
+      "execution_error": null
+    },
+    {
+      "input": "Ship this order to Krakow, Poland.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-M2"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.04820203408599,
+      "execution_error": null
+    },
+    {
+      "input": "We are opening a second depot in Hungary next quarter.",
+      "output": "\"RG-M2\"",
+      "passed": false,
+      "failed_rules": [
+        "expected: got \"RG-M2\" want RG-X6"
+      ],
+      "failed_rule_names": [
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": 40.09574186056852,
+      "execution_error": null
+    }
+  ]
+}
