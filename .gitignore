@@ -37,6 +37,7 @@ htmlcov/
 .paw/
 .paw*/
 *.paw
+*.paw.history.jsonl
 traces.db
 
 # OS & Editor

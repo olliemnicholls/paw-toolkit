@@ -117,10 +117,10 @@ def test_logits_processor_latency_guarantee() -> None:
     assert min(times) < 2.0  # Must be under 2ms per generation step
 
 
-def test_paw_load_success_validation() -> None:
+def test_paw_load_success_validation(tmp_path) -> None:
     """Verify paw.load binds adapter to Pydantic model and returns validated instance."""
     backend = MockPAWBackend()
-    adapter_path = "models/triage.paw"
+    adapter_path = str(tmp_path / "triage.paw")
     backend.compile(
         spec="Triage ticket",
         examples=[
@@ -146,10 +146,10 @@ def test_paw_load_success_validation() -> None:
     assert result.tags == ["auth"]
 
 
-def test_paw_load_fail_open_to_fallback() -> None:
+def test_paw_load_fail_open_to_fallback(tmp_path) -> None:
     """Verify Fail-Open safety: invalid adapter output falls back transparently to teacher."""
     backend = MockPAWBackend()
-    adapter_path = "models/broken.paw"
+    adapter_path = str(tmp_path / "broken.paw")
     # Adapter returns malformed / syntax-violating output
     backend.compile(
         spec="Broken",
@@ -183,10 +183,10 @@ def test_paw_load_fail_open_to_fallback() -> None:
     assert result.notes == "Processed by teacher for: query"
 
 
-def test_paw_load_raises_schema_error_without_fallback() -> None:
+def test_paw_load_raises_schema_error_without_fallback(tmp_path) -> None:
     """Verify that absent fallback, validation failure raises PAWSchemaError."""
     backend = MockPAWBackend()
-    adapter_path = "models/broken.paw"
+    adapter_path = str(tmp_path / "broken.paw")
     backend.compile(
         spec="Broken",
         examples=[{"input": "query", "output": "INVALID_OUTPUT"}],
@@ -229,7 +229,7 @@ def test_schema_grammar_edge_types() -> None:
     assert "null" in pat
 
 
-def test_paw_load_default_backend_and_return_types() -> None:
+def test_paw_load_default_backend_and_return_types(tmp_path) -> None:
     """Verify get_default_backend, set_default_backend, dict/instance outputs, and fallback failures."""
     from paw_kit.schema.loader import get_default_backend, set_default_backend
 
@@ -237,7 +237,7 @@ def test_paw_load_default_backend_and_return_types() -> None:
     set_default_backend(custom_backend)
     assert get_default_backend() is custom_backend
 
-    adapter_path = "models/test_load.paw"
+    adapter_path = str(tmp_path / "test_load.paw")
     custom_backend.compile(
         spec="Test",
         examples=[],
