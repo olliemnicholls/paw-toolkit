@@ -1200,3 +1200,104 @@ def test_config_change_between_runs_starts_a_fresh_window(tmp_path: Path) -> Non
     assert len(_pairs(reconfigured)) == 3
     assert reconfigured.get_agreement()["samples"] == 0
     assert "config_change" in [t["reason"] for t in _transitions(reconfigured)]
+
+
+# --- The response_model path --------------------------------------------------
+
+
+class ModelBackend(MockPAWBackend):
+    """A compiled adapter returning a fixed JSON payload for a structured task."""
+
+    def __init__(self, payload: str) -> None:
+        super().__init__()
+        self.payload = payload
+
+    def infer(
+        self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None
+    ) -> str:
+        return self.payload
+
+
+def _make_structured(tmp_path: Path, name: str, backend: MockPAWBackend, **kwargs: Any) -> Any:
+    spec = f"Triage the ticket ({name})"
+    params: Dict[str, Any] = dict(
+        spec=spec, threshold=2, response_model=Triage, cache_dir=str(tmp_path / f"c_{name}"),
+        backend=backend, sync_compile=True,
+    )
+    params.update(kwargs)
+
+    def teacher(text: str) -> Triage:
+        return Triage(priority="high", urgency_score=4)
+
+    return compile_on_hit(**params)(teacher)
+
+
+def test_shadow_compares_response_model_instances_field_wise(tmp_path: Path) -> None:
+    """With a response_model both sides are re-validated and compared field-wise."""
+    matching = ModelBackend('{"priority": "high", "urgency_score": 4}')
+    svc = _make_structured(tmp_path, "modelagree", matching, shadow_window=2, shadow_threshold=1.0)
+    svc("a")
+    svc("b")
+    svc("c")
+    svc("d")
+    _drain(svc)
+    assert svc.db.get_status(svc.task_id) == "ready"
+    assert all(p["verdict"] == "agree" for p in _pairs(svc))
+
+    differing = ModelBackend('{"priority": "low", "urgency_score": 1}')
+    svc2 = _make_structured(tmp_path, "modeldisagree", differing, shadow_window=2)
+    svc2("a")
+    svc2("b")
+    svc2("c")
+    svc2("d")
+    _drain(svc2)
+    assert svc2.db.get_status(svc2.task_id) == "shadow"
+    assert all(p["verdict"] == "disagree" for p in _pairs(svc2))
+
+
+def test_adapter_validation_failure_in_the_worker_is_an_error_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """A response_model parse failure on the adapter side is a recorded error verdict."""
+    broken = ModelBackend("MALFORMED_OUTPUT_CAUSING_PARSE_ERROR")
+    svc = _make_structured(tmp_path, "modelbroken", broken, shadow_window=2)
+    svc("a")
+    svc("b")
+    assert svc("c").priority == "high"  # the caller is untouched
+    svc("d")
+    _drain(svc)
+
+    pairs = _pairs(svc)
+    assert len(pairs) == 2
+    assert {p["verdict"] for p in pairs} == {"error"}
+    assert all(p["adapter_output"] is None for p in pairs)
+    assert svc.db.get_status(svc.task_id) == "shadow"
+    assert svc.get_fail_open_count() == 0
+
+
+def test_field_tolerance_agreement_promotes_where_the_default_would_not(
+    tmp_path: Path,
+) -> None:
+    """The documented recipe for the case the repo's own measurement hit."""
+    from paw_kit import field_tolerance_agreement
+
+    near = ModelBackend('{"priority": "high", "urgency_score": 5}')
+    strict = _make_structured(tmp_path, "tolstrict", near, shadow_window=2, shadow_threshold=1.0)
+    strict("a")
+    strict("b")
+    strict("c")
+    strict("d")
+    _drain(strict)
+    assert strict.db.get_status(strict.task_id) == "shadow"
+
+    near2 = ModelBackend('{"priority": "high", "urgency_score": 5}')
+    tolerant = _make_structured(
+        tmp_path, "toltolerant", near2, shadow_window=2, shadow_threshold=1.0,
+        agreement_fn=field_tolerance_agreement({"urgency_score": 1}),
+    )
+    tolerant("a")
+    tolerant("b")
+    tolerant("c")
+    tolerant("d")
+    _drain(tolerant)
+    assert tolerant.db.get_status(tolerant.task_id) == "ready"
