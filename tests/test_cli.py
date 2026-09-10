@@ -123,6 +123,188 @@ def test_cli_check_no_auto_recompile_failure(tmp_path: Path, monkeypatch: pytest
     assert "Pass rate:" in result.output
 
 
+# --- Tool feedback (measurements/README.md, "Finetune compiler on a rule the base
+# model does not know (fiscal weeks)"): `paw-test check` used to never read
+# `expected`, so a suite carrying the exact answer in every case still scored
+# `Pass rate: 100.0%`, exit 0, for an adapter that was wrong on every single case, as
+# long as the suite's own assertion was loose enough not to notice. --------------
+
+
+def test_cli_check_reports_wrong_adapter_as_failing_despite_a_loose_assertion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression, directly reproducing the measured defect: a mock adapter that
+    returns the same structurally-valid-but-wrong answer for every case, checked
+    against a suite carrying the correct answer in each case's `expected`. `check`
+    must report this as failing -- not `Pass rate: 100.0% (3/3)`, exit 0."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = tmp_path / "fiscal_wrong.paw"
+    adapter_path.write_text(
+        json.dumps(
+            {
+                "backend": "mock",
+                "spec": "Fiscal week",
+                "examples": [],
+                "rules": {},
+                # Matches the assertion's shape unconditionally, but is never the
+                # case's actual `expected` answer below.
+                "default_response": "FY0000-W00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite_path = tmp_path / "fiscal_suite.yaml"
+    suite_path.write_text(
+        "task_name: fiscal_week\n"
+        'spec: "Label the fiscal week for a date."\n'
+        f'adapter_path: "{adapter_path}"\n'
+        "standard_cases:\n"
+        '  - input: "2026-03-03"\n'
+        '    expected: "FY2026-W05"\n'
+        '  - input: "2026-01-20"\n'
+        '    expected: "FY2025-W51"\n'
+        '  - input: "2027-02-01"\n'
+        '    expected: "FY2027-W01"\n'
+        "assertions:\n"
+        r"  - rule: regex_match" "\n"
+        r"    pattern: '^FY\d{4}-W\d{2}$'" "\n"
+        "active_learning:\n"
+        "  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check", str(suite_path)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 1
+    assert "Pass rate: 0.0% (0/3)" in out
+    assert "Correct against expected: 0/3 (0.0%)" in out
+
+
+def test_cli_check_omits_expected_line_when_no_case_has_expected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a suite with no `expected` anywhere must behave exactly as before
+    this fix -- no "Correct against expected" line at all."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = tmp_path / "model.paw"
+    adapter_path.write_text(
+        json.dumps({"backend": "mock", "spec": "s", "examples": [], "rules": {"today": "2026-09-05"}}),
+        encoding="utf-8",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        "task_name: no_expected\n"
+        'spec: "Convert dates"\n'
+        f'adapter_path: "{adapter_path}"\n'
+        "standard_cases:\n"
+        '  - input: "today"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 20\n"
+        "active_learning:\n"
+        "  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check", str(suite_path)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 0
+    assert "Correct against expected" not in out
+
+
+def test_cli_check_adapter_flag_overrides_suite_adapter_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--adapter` runs the suite against a different compiled adapter, so one suite
+    can be checked against several adapters without a near-identical suite.yaml per
+    adapter (measurements/README.md, Tool feedback point 2)."""
+    monkeypatch.chdir(tmp_path)
+    suite_adapter = tmp_path / "suite_adapter.paw"
+    suite_adapter.write_text(
+        json.dumps({"backend": "mock", "spec": "s", "examples": [], "rules": {"today": "WRONG"}}),
+        encoding="utf-8",
+    )
+    override_adapter = tmp_path / "override.paw"
+    override_adapter.write_text(
+        json.dumps({"backend": "mock", "spec": "s", "examples": [], "rules": {"today": "2026-09-05"}}),
+        encoding="utf-8",
+    )
+
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        "task_name: override_test\n"
+        'spec: "s"\n'
+        f'adapter_path: "{suite_adapter}"\n'
+        "standard_cases:\n"
+        '  - input: "today"\n'
+        '    expected: "2026-09-05"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 20\n"
+        "active_learning:\n"
+        "  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+
+    # Against the suite's own adapter_path: fails (it answers "WRONG").
+    without_override = runner.invoke(app, ["check", str(suite_path)])
+    assert without_override.exit_code == 1
+
+    # Against the override: passes, and the header reports the overridden path.
+    with_override = runner.invoke(app, ["check", str(suite_path), "--adapter", str(override_adapter)])
+    out = strip_ansi(with_override.output)
+    assert with_override.exit_code == 0
+    assert "Pass rate: 100.0% (1/1)" in out
+    assert str(override_adapter) in out
+
+
+def test_cli_check_adapter_flag_rejects_path_outside_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--adapter` keeps the same containment guarantee suite.yaml's own adapter_path
+    gets (PAW-TEST-02): an override outside cwd is rejected, not silently used."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    adapter_path = workdir / "in.paw"
+    adapter_path.write_text(
+        json.dumps({"backend": "mock", "spec": "s", "examples": [], "rules": {"today": "2026-09-05"}}),
+        encoding="utf-8",
+    )
+    suite_path = workdir / "suite.yaml"
+    suite_path.write_text(
+        "task_name: override_outside_test\n"
+        'spec: "s"\n'
+        'adapter_path: "in.paw"\n'
+        "standard_cases:\n"
+        '  - input: "today"\n'
+        '    expected: "2026-09-05"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 20\n"
+        "active_learning:\n"
+        "  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+    outside_adapter = tmp_path / "outside.paw"
+    outside_adapter.write_text(
+        json.dumps({"backend": "mock", "spec": "s", "examples": [], "rules": {"today": "2026-09-05"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(workdir)
+    result = runner.invoke(app, ["check", str(suite_path), "--adapter", str(outside_adapter)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 1
+    assert "not contained within" in " ".join(out.split())
+
+
+def test_cli_check_help_mentions_adapter_override() -> None:
+    result = runner.invoke(app, ["check", "--help"])
+    assert result.exit_code == 0
+    assert "--adapter" in result.output
+    assert "adapter_path" in result.output
+
+
 def test_cli_check_rejects_adapter_path_outside_cwd_PAW_CLI_02(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify a suite.yaml adapter_path outside cwd is rejected before any recompile write.
 

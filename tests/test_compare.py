@@ -640,6 +640,100 @@ def test_compare_cli_genuine_differences_and_whitespace_only_both_shown(
     assert diff_idx < world_idx < whitespace_idx
 
 
+# --------------------------------------------------------------------- finding: adapter labels
+
+
+def test_compare_adapters_labels_by_file_stem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CompareReport.label_a/label_b default to each adapter's file stem, and
+    adapter_a/adapter_b (the full paths) stay unchanged for backward compatibility
+    (measurements/README.md, Tool feedback point 2)."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "paw-4b-qwen3-0.6b.paw"
+    adapter_b = tmp_path / "paw-ft-bs48.paw"
+    _write_mock_manifest(adapter_a, {"hello": "HELLO"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    assert report.label_a == "paw-4b-qwen3-0.6b"
+    assert report.label_b == "paw-ft-bs48"
+    assert report.adapter_a == str(adapter_a)
+    assert report.adapter_b == str(adapter_b)
+
+
+def test_compare_adapters_labels_fall_back_to_full_path_on_stem_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two adapters with the same file stem in different directories must not collapse
+    to the same label -- fall back to the full path for both."""
+    monkeypatch.chdir(tmp_path)
+    dir_a = tmp_path / "arm_a"
+    dir_b = tmp_path / "arm_b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    adapter_a = dir_a / "model.paw"
+    adapter_b = dir_b / "model.paw"
+    _write_mock_manifest(adapter_a, {"hello": "HELLO"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    assert report.label_a == str(adapter_a)
+    assert report.label_b == str(adapter_b)
+    assert report.label_a != report.label_b
+
+
+def test_compare_cli_prints_adapter_labels_by_stem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI must show each adapter's file stem in place of the fixed A/B labels,
+    in both the per-row diff and the summary line."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("model_a.paw")
+    adapter_b = Path("model_b.paw")
+    _write_mock_manifest(adapter_a, {"hello": "HELLO", "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO", "world": "wat"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    result = runner.invoke(test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz"])
+    assert result.exit_code == 0
+    out = result.output
+
+    assert "model_a ->" in out
+    assert "model_b ->" in out
+    assert "model_a pass" in out
+    assert "model_b pass" in out
+    assert "only-model_a-pass" in out
+    assert "only-model_b-pass" in out
+
+
+def test_compare_cli_json_output_carries_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("model_a.paw")
+    adapter_b = Path("model_b.paw")
+    _write_mock_manifest(adapter_a, {"hello": "HELLO"})
+    _write_mock_manifest(adapter_b, {"hello": "HELLO"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+    out_path = Path("report.json")
+
+    result = runner.invoke(
+        test_app,
+        ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz", "--json", str(out_path)],
+    )
+    assert result.exit_code == 0
+    data = json.loads(out_path.read_text(encoding="utf-8"))
+    assert data["label_a"] == "model_a"
+    assert data["label_b"] == "model_b"
+    assert data["adapter_a"] == str(adapter_a)
+    assert data["adapter_b"] == str(adapter_b)
+
+
 def test_no_unescaped_console_interpolations_in_compare_and_judge_commands():
     """The repo-wide `_e()` AST rule (tests/test_cli.py) scans the whole of cli.py, so
     the `compare`/`judge` commands added there are already covered by it -- this test

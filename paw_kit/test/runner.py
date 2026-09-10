@@ -10,7 +10,23 @@ from pydantic import BaseModel, Field
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.schema.loader import get_default_backend
 from paw_kit.test.fuzzer import AdversarialFuzzer
+from paw_kit.test.matching import values_equivalent
 from paw_kit.test.suite import AssertionRule, TestSuiteConfig
+
+# measurements/README.md, "Finetune compiler on a rule the base model does not know",
+# "Tool feedback" point 1: a suite carrying the exact answer in each case's `expected`
+# field used to be read only by paw_kit.test.active (to seed the active-learning
+# dataset) -- the runner itself never compared output to it, so an adapter that was
+# 10% correct on ground truth still scored `Pass rate: 100.0% (300/300)`. Truncation
+# length for the "expected: got ... want ..." failure reason below, so an
+# arbitrarily long adapter output/expected value can't blow up a printed report.
+_EXPECTED_MISMATCH_TRUNCATE_LENGTH = 120
+
+
+def _truncate_for_reason(text: str, length: int = _EXPECTED_MISMATCH_TRUNCATE_LENGTH) -> str:
+    """Clip `text` for embedding in a failure reason string."""
+    return text if len(text) <= length else text[:length] + "..."
+
 
 # PAW-TEST-03: bounds mirroring logits_processor._compile_fsm_safe's two-tier shape
 # (Track 09) -- a cheap length pre-check as the *primary* defense, since a bare
@@ -71,6 +87,14 @@ class TestCaseResult(BaseModel):
     # had no structured field to check. This is that field: just the rule names, in the
     # same order as `failed_rules`, e.g. `["not_contains"]`.
     failed_rule_names: List[str] = Field(default_factory=list)
+    # measurements/README.md, "Tool feedback" point 1: whether this case's output
+    # matches its suite-carried `expected` field, using the same JSON-or-whitespace
+    # normalised equality `paw-test compare` uses for its equivalence count
+    # (`values_equivalent`, `paw_kit.test.matching`) -- `None` when the case has no
+    # `expected` (a fuzz case, or a standard_case that simply doesn't set one), never
+    # coerced to False, so a caller can tell "no ground truth to check" apart from
+    # "checked, and it was wrong".
+    expected_match: Optional[bool] = None
     latency_ms: float = 0.0
     # PAW-TEST-08: the raw exception text from a failed backend.infer() call used to
     # be embedded directly in `output` (e.g. "[EXCEPTION: <str(exc)>]"), which could
@@ -91,6 +115,15 @@ class TestRunReport(BaseModel):
     total_cases: int = 0
     passed_cases: int = 0
     failed_cases: int = 0
+    # measurements/README.md, "Tool feedback" point 1: how many cases carried an
+    # `expected` field at all (`expected_total`) and how many of those matched
+    # (`expected_matched`) -- a suite with no `expected` anywhere leaves both 0, and
+    # `expected_match_rate` 0.0, same as before this field existed. A case whose
+    # `expected` does not match is *also* counted in `failed_cases` above (see
+    # `TestRunner.run`); these fields don't double the failure, they report it from
+    # a different angle -- "how good is the answer key match", not "did the case pass".
+    expected_total: int = 0
+    expected_matched: int = 0
     results: List[TestCaseResult] = Field(default_factory=list)
 
     @property
@@ -102,6 +135,12 @@ class TestRunReport(BaseModel):
     def pass_rate(self) -> float:
         """Return pass percentage (0.0 to 100.0)."""
         return (self.passed_cases / self.total_cases * 100.0) if self.total_cases > 0 else 0.0
+
+    @property
+    def expected_match_rate(self) -> float:
+        """Percentage of cases carrying an `expected` field whose output matched it
+        (0.0 to 100.0). 0.0, not a division error, when no case has `expected`."""
+        return (self.expected_matched / self.expected_total * 100.0) if self.expected_total > 0 else 0.0
 
     def get_failing_inputs(self) -> List[Tuple[str, str, List[str]]]:
         """Return list of (input, output, failure_reasons) for all failing cases."""
@@ -193,21 +232,29 @@ class TestRunner:
     def run(self, config: TestSuiteConfig) -> TestRunReport:
         """Execute standard cases and fuzzer inputs against the configured adapter."""
         inputs_to_test: List[str] = []
+        # Parallel to inputs_to_test: the case's `expected` field, or None for a
+        # standard_case that doesn't set one and for every fuzz-generated case (fuzz
+        # cases have no ground truth to check against).
+        expected_values: List[Optional[str]] = []
 
         # 1. Standard cases
         for case in config.standard_cases:
             inputs_to_test.append(case.input)
+            expected_values.append(case.expected)
 
         # 2. Adversarial fuzzer cases
         seed_inputs = [c.input for c in config.standard_cases]
         fuzzed_cases = AdversarialFuzzer.generate(config.fuzzing, base_inputs=seed_inputs)
         inputs_to_test.extend(fuzzed_cases)
+        expected_values.extend([None] * len(fuzzed_cases))
 
         results: List[TestCaseResult] = []
         passed_count = 0
         failed_count = 0
+        expected_total = 0
+        expected_matched = 0
 
-        for inp in inputs_to_test:
+        for inp, expected in zip(inputs_to_test, expected_values):
             t0 = time.perf_counter()
             execution_error: Optional[str] = None
             try:
@@ -228,6 +275,30 @@ class TestRunner:
                     failed_rules.append(f"{rule.rule}: {reason}")
                     failed_rule_names.append(rule.rule)
 
+            # measurements/README.md, "Tool feedback" point 1: a case carrying an
+            # `expected` field is graded against it too, not just the suite's
+            # assertions -- a suite-wide `exact_match` rule can't express "every case
+            # has its own answer", which is exactly what let a 10%-correct adapter
+            # score 100% before this fix. abstain_value is honoured the same way
+            # evaluate_assertion honours it: an explicit "I don't know" output passes
+            # regardless of what `expected` says.
+            expected_match: Optional[bool] = None
+            if expected is not None:
+                expected_total += 1
+                if config.abstain_value is not None and out == config.abstain_value:
+                    expected_match = True
+                else:
+                    expected_match = values_equivalent(out, expected)
+                if expected_match:
+                    expected_matched += 1
+                else:
+                    reason = (
+                        f"expected: got {_truncate_for_reason(out)} "
+                        f"want {_truncate_for_reason(expected)}"
+                    )
+                    failed_rules.append(reason)
+                    failed_rule_names.append("expected")
+
             case_passed = len(failed_rules) == 0
             if case_passed:
                 passed_count += 1
@@ -241,6 +312,7 @@ class TestRunner:
                     passed=case_passed,
                     failed_rules=failed_rules,
                     failed_rule_names=failed_rule_names,
+                    expected_match=expected_match,
                     latency_ms=latency,
                     execution_error=execution_error,
                 )
@@ -252,5 +324,7 @@ class TestRunner:
             total_cases=len(results),
             passed_cases=passed_count,
             failed_cases=failed_count,
+            expected_total=expected_total,
+            expected_matched=expected_matched,
             results=results,
         )

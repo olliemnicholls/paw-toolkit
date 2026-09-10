@@ -937,3 +937,175 @@ def test_test_runner_execution_error_uses_placeholder_not_raw_exception_PAW_TEST
     assert "sensitive detail" not in result.output
     assert result.execution_error is not None
     assert "sensitive detail" in result.execution_error
+
+
+# --- Tool feedback (measurements/README.md, "Finetune compiler on a rule the base
+# model does not know (fiscal weeks)"): the runner never compared output to `expected`,
+# so a suite carrying the exact ground-truth answer in every case scored
+# `Pass rate: 100.0%` for an adapter that was wrong 267/300 times, as long as the
+# suite's own assertion vocabulary was loose enough (a structurally-shaped but wrong
+# answer) not to notice. --------------------------------------------------------
+
+
+def test_runner_expected_mismatch_fails_case_even_when_assertion_passes(tmp_path: Path) -> None:
+    """Regression: reproduces the fiscal-week defect directly. The adapter's answer is
+    *shaped* correctly (passes a loose regex_match) but is not the case's `expected`
+    value -- before this fix, that case counted as passed; now it must not."""
+    adapter_path = str(tmp_path / "fiscal.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="Fiscal week", examples=[], output_path=adapter_path)
+    # Every input gets the same wrong-but-shaped label.
+    backend.register_rule(adapter_path, "2026-03-03", "FY0000-W00")
+
+    config = TestSuiteConfig(
+        task_name="fiscal_regression",
+        spec="Fiscal week",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="2026-03-03", expected="FY2026-W05")],
+        assertions=[AssertionRule(rule="regex_match", pattern=r"^FY\d{4}-W\d{2}$")],
+        fuzzing=FuzzingConfig(),
+    )
+
+    report = TestRunner(backend=backend).run(config)
+    result = report.results[0]
+
+    # The assertion alone is satisfied -- "FY0000-W00" matches the pattern.
+    assert result.failed_rule_names == ["expected"]
+    assert result.expected_match is False
+    assert "expected: got FY0000-W00 want FY2026-W05" in result.failed_rules[0]
+    assert result.passed is False
+
+    assert report.is_success is False
+    assert report.pass_rate == 0.0
+    assert report.expected_total == 1
+    assert report.expected_matched == 0
+    assert report.expected_match_rate == 0.0
+
+
+def test_runner_no_expected_anywhere_behaves_as_before(tmp_path: Path) -> None:
+    """Regression: a suite whose standard_cases never set `expected` must run exactly
+    as it did before this fix -- expected_total/expected_matched stay 0,
+    expected_match_rate is 0.0 (not a division error), every result's expected_match
+    is None (not False), and pass/fail is governed by assertions alone."""
+    adapter_path = str(tmp_path / "no_expected.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="s", examples=[{"input": "x", "output": "2026-09-04"}], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="no_expected_test",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="x")],  # no `expected`
+        assertions=[AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$")],
+        fuzzing=FuzzingConfig(empty_inputs=False),
+    )
+
+    report = TestRunner(backend=backend).run(config)
+
+    assert report.is_success is True
+    assert report.pass_rate == 100.0
+    assert report.expected_total == 0
+    assert report.expected_matched == 0
+    assert report.expected_match_rate == 0.0
+    assert all(r.expected_match is None for r in report.results)
+
+
+def test_runner_expected_match_honours_abstain_value(tmp_path: Path) -> None:
+    """An output equal to `abstain_value` counts as matching `expected`, even though
+    the literal strings differ -- the same "I don't know" escape hatch
+    evaluate_assertion already gives ordinary assertions."""
+    adapter_path = str(tmp_path / "abstain_expected.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="s", examples=[{"input": "   ", "output": "UNPARSEABLE"}], output_path=adapter_path)
+
+    config = TestSuiteConfig(
+        task_name="abstain_expected_test",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="   ", expected="2026-01-01")],
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+        abstain_value="UNPARSEABLE",
+    )
+
+    report = TestRunner(backend=backend).run(config)
+    assert report.results[0].expected_match is True
+    assert report.results[0].passed is True
+    assert report.is_success is True
+    assert report.expected_matched == 1
+
+
+def test_runner_expected_match_uses_same_normalisation_as_compare(tmp_path: Path) -> None:
+    """`expected_match` uses the same normalisation `paw-test compare` uses for its
+    equivalence count: JSON-parse both if both parse (key order/spacing-independent),
+    else Unicode NFC + whitespace collapse."""
+    adapter_path = str(tmp_path / "norm_expected.paw")
+    backend = MockPAWBackend()
+    backend.compile(
+        spec="s",
+        examples=[
+            {"input": "json_case", "output": '{"a": 1, "b": 2}'},
+            {"input": "ws_case", "output": "the   quick brown fox"},
+        ],
+        output_path=adapter_path,
+    )
+
+    config = TestSuiteConfig(
+        task_name="normalisation_test",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[
+            StandardTestCase(input="json_case", expected='{"b":2,"a":1}'),
+            StandardTestCase(input="ws_case", expected="the quick brown fox"),
+        ],
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+    )
+
+    report = TestRunner(backend=backend).run(config)
+    assert all(r.expected_match is True for r in report.results)
+    assert report.is_success is True
+    assert report.expected_total == 2
+    assert report.expected_matched == 2
+
+
+def test_active_learning_repairs_case_failing_only_on_expected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A case whose output satisfies every assertion but doesn't match `expected` must
+    still be treated as a failure the active-learning loop queries the teacher about
+    (Tool feedback point 1: `expected` now participates in `is_success`) -- and
+    repairing it must not double-count anywhere in the report."""
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "expected_only.paw")
+    backend = MockPAWBackend()
+    # Structurally valid (matches the regex) but the wrong date for "today".
+    backend.compile(
+        spec="Normalize date", examples=[{"input": "today", "output": "1999-01-01"}], output_path=adapter_path
+    )
+
+    config = TestSuiteConfig(
+        task_name="expected_only_failure_test",
+        spec="Normalize date",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="today", expected="2026-09-05")],
+        assertions=[AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$")],
+        fuzzing=FuzzingConfig(),
+    )
+
+    report_before = TestRunner(backend=backend).run(config)
+    assert report_before.is_success is False
+    assert report_before.results[0].failed_rule_names == ["expected"]  # the assertion alone passed
+
+    teacher_queries: List[str] = []
+
+    def teacher(inp: str) -> str:
+        teacher_queries.append(inp)
+        return "2026-09-05"
+
+    al_report = run_active_learning_loop(config=config, backend=backend, teacher_provider=teacher)
+
+    assert any("today" in q for q in teacher_queries), "an expected-only failure must still reach the teacher"
+    assert al_report.is_success is True
+    assert al_report.repaired_edge_cases == 1
+    assert al_report.rejected_labels_count == 0

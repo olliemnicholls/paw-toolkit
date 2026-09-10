@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import time
-import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,6 +24,7 @@ from pydantic import BaseModel, Field
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.test.fuzzer import AdversarialFuzzer
+from paw_kit.test.matching import normalize_whitespace, parse_json_or_none
 from paw_kit.test.runner import evaluate_assertion
 from paw_kit.test.suite import TestSuiteConfig
 
@@ -105,22 +105,6 @@ _MATCH_EQUIVALENT = "equivalent"
 _MATCH_DIFFERENT = "different"
 
 
-def _parse_json_or_none(text: str) -> Tuple[bool, Any]:
-    """`(True, value)` if `text` parses as JSON, `(False, None)` otherwise."""
-    try:
-        return True, json.loads(text)
-    except (ValueError, TypeError):
-        return False, None
-
-
-def _normalize_whitespace(text: str) -> str:
-    """Unicode NFC normalize, then collapse all whitespace runs (including leading/
-    trailing) to single spaces -- `str.split()` with no argument already does the
-    collapsing half; NFC first so two visually-identical strings encoded differently
-    (e.g. composed vs. decomposed accents) don't register as a difference either."""
-    return " ".join(unicodedata.normalize("NFC", text).split())
-
-
 def _outputs_match_kind(output_a: str, output_b: str) -> str:
     """Classify one pair of outputs as byte-identical, equivalent-but-not-identical, or
     genuinely different.
@@ -134,13 +118,26 @@ def _outputs_match_kind(output_a: str, output_b: str) -> str:
     """
     if output_a == output_b:
         return _MATCH_BYTE_IDENTICAL
-    a_is_json, parsed_a = _parse_json_or_none(output_a)
-    b_is_json, parsed_b = _parse_json_or_none(output_b)
+    a_is_json, parsed_a = parse_json_or_none(output_a)
+    b_is_json, parsed_b = parse_json_or_none(output_b)
     if a_is_json and b_is_json:
         equivalent = parsed_a == parsed_b
     else:
-        equivalent = _normalize_whitespace(output_a) == _normalize_whitespace(output_b)
+        equivalent = normalize_whitespace(output_a) == normalize_whitespace(output_b)
     return _MATCH_EQUIVALENT if equivalent else _MATCH_DIFFERENT
+
+
+def adapter_label_pair(adapter_a: str, adapter_b: str) -> Tuple[str, str]:
+    """Human-readable labels for two adapters, for display in `paw-test compare`'s
+    stdout and JSON report: each path's file stem (`models/a.paw` -> `"a"`), or the
+    full path for both when the stems collide (e.g. two same-named adapters compiled
+    into different directories) -- telling the two apart takes precedence over
+    brevity, and a bare `stem` alone would silently conflate them."""
+    stem_a = Path(adapter_a).stem
+    stem_b = Path(adapter_b).stem
+    if stem_a and stem_b and stem_a != stem_b:
+        return stem_a, stem_b
+    return str(adapter_a), str(adapter_b)
 
 
 class CompareRow(BaseModel):
@@ -173,6 +170,12 @@ class CompareReport(BaseModel):
     task_name: str
     adapter_a: str
     adapter_b: str
+    # Finding (measurements/README.md, "Finetune compiler", tool feedback point 2):
+    # display labels for the two adapters -- each one's file stem, or the full path
+    # when the stems collide -- kept separate from `adapter_a`/`adapter_b` (the full
+    # paths) so existing JSON consumers of those two fields are unaffected.
+    label_a: str = "A"
+    label_b: str = "B"
     manifest_a: Dict[str, Any] = Field(default_factory=dict)
     manifest_b: Dict[str, Any] = Field(default_factory=dict)
     total_cases: int = 0
@@ -331,10 +334,13 @@ def compare_adapters(
             )
         )
 
+    label_a, label_b = adapter_label_pair(str(adapter_a), str(adapter_b))
     return CompareReport(
         task_name=suite.task_name,
         adapter_a=str(adapter_a),
         adapter_b=str(adapter_b),
+        label_a=label_a,
+        label_b=label_b,
         manifest_a=_project_manifest(read_adapter_manifest(str(adapter_a))),
         manifest_b=_project_manifest(read_adapter_manifest(str(adapter_b))),
         total_cases=len(rows),

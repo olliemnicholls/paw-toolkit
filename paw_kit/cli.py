@@ -22,7 +22,7 @@ from paw_kit.pathsafety import ensure_contained
 from paw_kit.serve.server import backend_label
 from paw_kit.speclint import Finding, lint_spec
 from paw_kit.test.active import run_active_learning_loop
-from paw_kit.test.compare import CompareReport, compare_adapters, read_adapter_manifest
+from paw_kit.test.compare import CompareReport, adapter_label_pair, compare_adapters, read_adapter_manifest
 from paw_kit.test.judge import (
     JudgeInputRow,
     JudgeReport,
@@ -31,7 +31,7 @@ from paw_kit.test.judge import (
     judge_disagreements,
     judge_outputs,
 )
-from paw_kit.test.runner import TestRunner
+from paw_kit.test.runner import TestRunner, TestRunReport
 from paw_kit.test.suite import load_suite
 
 console = Console()
@@ -369,6 +369,20 @@ def demo_cmd(
         raise typer.Exit(code=1)
 
 
+def _print_expected_match_line(report: TestRunReport) -> None:
+    """Print `paw-test check`'s "Correct against expected" line, whenever any case in
+    the report carries an `expected` field -- printed before the assertion pass rate,
+    since the assertion pass rate alone is exactly the number that read 100% for an
+    adapter that was 10% correct (measurements/README.md, "Tool feedback" point 1).
+    """
+    if report.expected_total <= 0:
+        return
+    console.print(
+        f"[bold]Correct against expected:[/bold] {_e(report.expected_matched)}/"
+        f"{_e(report.expected_total)} ({_e(round(report.expected_match_rate, 1))}%)"
+    )
+
+
 def _write_json_report(json_out: Optional[Path], data: dict) -> None:
     """Shared `--json PATH` writer for `check`/`compare`: a plain `json.dumps`, not
     routed through Rich -- machine-readable output must not be subject to Rich's
@@ -390,6 +404,15 @@ def check(
     json_out: Optional[Path] = typer.Option(
         None, "--json", help="Write the run's TestRunReport as JSON to this path (input for `paw-test judge`)"
     ),
+    adapter: Optional[Path] = typer.Option(
+        None,
+        "--adapter",
+        help="Run this suite against a different compiled .paw adapter, overriding "
+        "the suite.yaml's own adapter_path -- so one suite file can be checked "
+        "against several adapters without writing a near-identical suite.yaml per "
+        "adapter. Must resolve under the current working directory, exactly like "
+        "the suite's own adapter_path (PAW-TEST-02).",
+    ),
 ) -> None:
     """Run test suite assertions and active-learning self-healing loop on a .paw adapter."""
     if not suite_path.exists():
@@ -401,6 +424,18 @@ def check(
     except Exception as exc:
         console.print(f"[bold red]Error parsing suite:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
+
+    if adapter is not None:
+        # Same containment guarantee suite.yaml's own adapter_path gets in load_suite()
+        # (PAW-TEST-02) -- an override arriving from a CLI flag hasn't been through that
+        # check, and it can still reach a recompiling write (active_backend.compile(...,
+        # output_path=adapter_path)) further down.
+        try:
+            ensure_contained(str(adapter), Path.cwd(), label="--adapter")
+        except ValueError as exc:
+            console.print(f"[bold red]Error:[/bold red] {_e(exc)}")
+            raise typer.Exit(code=1)
+        config.adapter_path = str(adapter)
 
     if auto_recompile is not None:
         config.active_learning.auto_recompile = auto_recompile
@@ -503,6 +538,7 @@ def check(
                 if res.execution_error:
                     console.print(f"         [dim red]backend error: {escape(res.execution_error)}[/dim red]")
 
+        _print_expected_match_line(report)
         console.print(
             f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
             f"({report.passed_cases}/{report.total_cases}) [dim](backend: {_e(actual_backend)})[/dim]"
@@ -544,6 +580,8 @@ def check(
     # regardless of whether auto-recompile ran.
     _write_json_report(json_out, al_report.iteration_reports[-1].model_dump())
 
+    _print_expected_match_line(al_report.iteration_reports[-1])
+
     if al_report.is_success:
         console.print(f"\n[bold green][SUCCESS][/bold green] All assertions passed! (Iterations: {al_report.iterations_run})")
         if al_report.recompiled:
@@ -583,7 +621,12 @@ def compare_cmd(
     under `--backend real`, never released) -- the first row's latencies include that
     cold load, not steady-state inference time.
     """
-    for label, adapter_path_arg in (("A", adapter_a), ("B", adapter_b)):
+    # Finding (measurements/README.md, "Finetune compiler", tool feedback point 2):
+    # labels for stdout/JSON default to each adapter's file stem, falling back to the
+    # full path for both when the stems collide -- see adapter_label_pair's docstring.
+    label_a, label_b = adapter_label_pair(str(adapter_a), str(adapter_b))
+
+    for label, adapter_path_arg in ((label_a, adapter_a), (label_b, adapter_b)):
         if not adapter_path_arg.exists():
             console.print(f"[bold red]Error:[/bold red] Adapter {_e(label)} '{_e(adapter_path_arg)}' does not exist.")
             raise typer.Exit(code=1)
@@ -597,7 +640,7 @@ def compare_cmd(
         console.print(f"[bold red]Error parsing suite:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
 
-    for label, adapter_path_arg in (("A", adapter_a), ("B", adapter_b)):
+    for label, adapter_path_arg in ((label_a, adapter_a), (label_b, adapter_b)):
         if not read_adapter_manifest(str(adapter_path_arg)):
             console.print(
                 f"[bold red]Error:[/bold red] Could not read a manifest from adapter {_e(label)} "
@@ -621,9 +664,9 @@ def compare_cmd(
         for row in errored_rows:
             console.print(f"  [bold]Input:[/bold] {_e(row.input[:80])}")
             if row.execution_error_a:
-                console.print(f"    [red]A error:[/red] {_e(row.execution_error_a)}")
+                console.print(f"    [red]{_e(label_a)} error:[/red] {_e(row.execution_error_a)}")
             if row.execution_error_b:
-                console.print(f"    [red]B error:[/red] {_e(row.execution_error_b)}")
+                console.print(f"    [red]{_e(label_b)} error:[/red] {_e(row.execution_error_b)}")
         console.print()
 
     # Finding 2: `differing_rows` (byte-level -- unchanged) splits into the differences
@@ -639,10 +682,13 @@ def compare_cmd(
         console.print(f"[bold]Differences ({_e(len(genuine_diffs))}/{_e(report.total_cases)}):[/bold]\n")
         for row in genuine_diffs:
             console.print(f"  [bold]Input:[/bold] {_e(row.input[:80])}")
-            console.print(f"    A -> {_e(row.output_a[:80])}")
-            console.print(f"    B -> {_e(row.output_b[:80])}")
+            console.print(f"    {_e(label_a)} -> {_e(row.output_a[:80])}")
+            console.print(f"    {_e(label_b)} -> {_e(row.output_b[:80])}")
             if row.pass_a != row.pass_b:
-                console.print(f"    [yellow]pass differs:[/yellow] A={_e(row.pass_a)} B={_e(row.pass_b)}")
+                console.print(
+                    f"    [yellow]pass differs:[/yellow] {_e(label_a)}={_e(row.pass_a)} "
+                    f"{_e(label_b)}={_e(row.pass_b)}"
+                )
     elif not errored_rows and not whitespace_only:
         # Suppressed whenever any case errored, or any case is a whitespace-only
         # difference -- both would make "identical output ... on every case" false.
@@ -662,9 +708,10 @@ def compare_cmd(
         f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output "
         f"(byte-for-byte), {_e(report.equivalent_count)} equivalent output "
         f"(byte-for-byte + JSON/whitespace-normalized), "
-        f"A pass {_e(report.a_pass_count)}/{_e(report.total_cases)}, "
-        f"B pass {_e(report.b_pass_count)}/{_e(report.total_cases)}, "
-        f"only-A-pass {_e(report.only_a_pass_count)}, only-B-pass {_e(report.only_b_pass_count)}, "
+        f"{_e(label_a)} pass {_e(report.a_pass_count)}/{_e(report.total_cases)}, "
+        f"{_e(label_b)} pass {_e(report.b_pass_count)}/{_e(report.total_cases)}, "
+        f"only-{_e(label_a)}-pass {_e(report.only_a_pass_count)}, "
+        f"only-{_e(label_b)}-pass {_e(report.only_b_pass_count)}, "
         f"errored {_e(report.errored_count)}/{_e(report.total_cases)}"
     )
 
