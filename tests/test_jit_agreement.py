@@ -4,7 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from paw_kit import default_agreement_fn, field_tolerance_agreement
-from paw_kit.jit.agreement import _MAX_AGREEMENT_DEPTH, safe_agreement
+from paw_kit.jit.agreement import _MAX_AGREEMENT_DEPTH, safe_agreement, stringify_answer
 
 
 class Triage(BaseModel):
@@ -110,6 +110,24 @@ def test_field_tolerance_agreement_reproduces_measurement_rule() -> None:
     # Non-model inputs fall through to the base comparison.
     assert fn("same", "same")
     assert not fn("same", "different")
+
+
+def test_stringify_answer_handles_tuples_and_falls_back_to_default_str() -> None:
+    """Finding 9: the one shared serializer -- str/BaseModel/dict/list/tuple, and a
+    `default=str` fallback for anything `json.dumps` cannot handle on its own."""
+    assert stringify_answer("already a string") == "already a string"
+    assert stringify_answer(Triage(priority="high", urgency_score=4)) == (
+        Triage(priority="high", urgency_score=4).model_dump_json()
+    )
+    assert stringify_answer(("a", 1)) == stringify_answer(["a", 1])
+
+    class Unserializable:
+        def __str__(self) -> str:
+            return "unserializable-repr"
+
+    # A plain object isn't JSON-serializable on its own -- `default=str` is what
+    # keeps this a string instead of a raised TypeError.
+    assert stringify_answer([Unserializable()]) == '["unserializable-repr"]'
 
 
 def test_safe_agreement_converts_a_raising_fn_into_a_recorded_error() -> None:

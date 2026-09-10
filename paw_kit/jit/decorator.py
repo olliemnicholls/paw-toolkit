@@ -16,10 +16,10 @@ from pydantic import BaseModel
 
 from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.mock import MockPAWBackend
-from paw_kit.jit.agreement import default_agreement_fn
+from paw_kit.jit.agreement import default_agreement_fn, stringify_answer
 from paw_kit.jit.compiler import BackgroundCompiler
 from paw_kit.jit.db import TraceDB
-from paw_kit.jit.shadow import _GLOBAL_SHADOW_RUNNER, ShadowJob, serialize_answer
+from paw_kit.jit.shadow import _GLOBAL_SHADOW_RUNNER, ShadowJob
 from paw_kit.schema.loader import get_default_backend, load
 
 T = TypeVar("T")
@@ -38,14 +38,30 @@ _FAIL_OPEN_COUNTS: Dict[str, int] = {}
 _FAIL_OPEN_COUNTS_LOCK = threading.Lock()
 
 
-def _record_fail_open(task_id: str, exc: Exception, db: Optional[TraceDB] = None) -> None:
+def _record_fail_open(
+    task_id: str,
+    exc: Exception,
+    db: Optional[TraceDB] = None,
+    shadow_window: int = 0,
+    db_path: Optional[str] = None,
+    queue_size: int = 8,
+) -> None:
     # Track 14: also bump the *persisted* counter, so `paw-kit report` -- a different
     # process entirely -- can show the figure. The in-process counter below keeps its
     # exact existing meaning and reset-on-restart semantics.
-    if db is not None:
+    #
+    # Finding 1: the persisted increment is a synchronous SQLite write
+    # (`db.increment_fail_open`), and it must never run on *this* thread -- fail-open
+    # exists to protect availability, so making the caller wait on a write lock right
+    # here would defeat the point. At `shadow_window=0` there is no shadow worker for
+    # this task at all (see shadow.py) and this is byte-for-byte the pre-Track-14
+    # behaviour: no persisted counter, only the in-process one below. Otherwise the
+    # increment is handed to the existing shadow worker's queue (drop-if-full, same as
+    # every other shadow job) and applied there.
+    if db is not None and shadow_window and db_path is not None:
         try:
-            db.increment_fail_open(task_id)
-        except Exception:
+            _GLOBAL_SHADOW_RUNNER.submit_fail_open(task_id, db_path, db, queue_size)
+        except Exception:  # pragma: no cover - defense in depth
             pass
     with _FAIL_OPEN_COUNTS_LOCK:
         _FAIL_OPEN_COUNTS[task_id] = _FAIL_OPEN_COUNTS.get(task_id, 0) + 1
@@ -429,7 +445,7 @@ def compile_on_hit(
                     # to the return value or exception behavior on this path. A fail-open is an
                     # infrastructure fault, not semantic drift: it never enters the audit
                     # window and never counts toward demotion.
-                    _record_fail_open(task_id, exc, db)
+                    _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
                     return func(*args, **kwargs)
 
                 if shadow_window and _should_audit(rng, audit_rate):
@@ -438,7 +454,7 @@ def compile_on_hit(
                             state_epoch=state_epoch,
                             phase="audit",
                             input_payload=input_payload,
-                            adapter_output=serialize_answer(result),
+                            adapter_output=stringify_answer(result),
                             adapter_latency_ms=served_latency_ms,
                             # Deliberately holds the caller's own args/kwargs by
                             # reference and calls func on a worker thread: the wrapped
@@ -455,13 +471,12 @@ def compile_on_hit(
             teacher_result = func(*args, **kwargs)
             latency_ms = (time.perf_counter() - start_time) * 1000
 
-            # Serialize output for tracing
-            if isinstance(teacher_result, BaseModel):
-                teacher_output_str = teacher_result.model_dump_json()
-            elif isinstance(teacher_result, (dict, list)):
-                teacher_output_str = json.dumps(teacher_result)
-            else:
-                teacher_output_str = str(teacher_result)
+            # Serialize output for tracing. Finding 9: one shared serializer
+            # (paw_kit.jit.agreement.stringify_answer) for this trace-persistence
+            # path, the shadow-comparison persistence path in shadow.py, and the
+            # str-vs-structured comparison rule in agreement.py itself -- a teacher
+            # returning e.g. a tuple now serializes identically on every path.
+            teacher_output_str = stringify_answer(teacher_result)
 
             # 4. Record trace and increment counter
             # PAW-JIT-02: redaction (opt-in, see redact_trace docstring above) is
@@ -527,11 +542,21 @@ def compile_on_hit(
                 "disagree": block["disagree"],
                 "error": block["error"],
                 "teacher_error": block["teacher_error"],
+                # Finding 2: persisted, epoch-scoped -- True once the runner has
+                # stopped evaluating this epoch's completed windows for promotion (see
+                # shadow.py's stall-guard WARNING for the two ways out). Not to be
+                # confused with `stall_subsampled` below.
+                "stalled": block["stalled"],
                 # In-process, since process start, and per-process only: two processes
                 # running the same decorated function share the database (and therefore
                 # the promotion decision) but not these.
                 "dropped": runner_stats["dropped"],
-                "stalled": runner_stats["stalled"],
+                # How many comparisons *this process* personally skipped under the
+                # stall guard's subsampling -- distinct from `stalled` above, which is
+                # the persisted, DB-derived "has this epoch passed the stall point"
+                # flag; this can be 0 on a freshly started process even for a task that
+                # is, in fact, stalled.
+                "stall_subsampled": runner_stats["stalled"],
                 "pending": runner_stats["pending"],
                 # The *persisted* (therefore possibly redacted) text.
                 "last_disagreements": db.get_recent_disagreements(task_id, n),

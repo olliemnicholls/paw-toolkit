@@ -1571,9 +1571,14 @@ def _render_report_table(reports: List[dict]) -> Table:
         agreement_cell = _format_agreement(agreement)
         if phase and window:
             agreement_cell = f"{agreement_cell} {phase}/{window}"
+        state_cell = f"[{style}]{_e(report.get('status', 'tracing'))}[/{style}]"
+        if agreement.get("stalled"):
+            # Finding 2: a task the runner has stopped evaluating for promotion at
+            # this epoch must not read, at a glance, like one still converging.
+            state_cell += " [bold red](stalled)[/bold red]"
         table.add_row(
             _e(str(report.get("task_id", ""))[:12] + "..."),
-            f"[{style}]{_e(report.get('status', 'tracing'))}[/{style}]",
+            state_cell,
             str(report.get("call_count", 0)),
             _e(agreement_cell),
             str(report.get("fail_open_count", 0)),

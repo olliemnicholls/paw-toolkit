@@ -20,7 +20,6 @@ and the redaction function all arrive as callables on the job. That is what keep
 
 import atexit
 from dataclasses import dataclass
-import json
 import logging
 import queue
 import random
@@ -30,15 +29,18 @@ from typing import Any, Callable, Dict, Optional, Set, Tuple, Type
 
 from pydantic import BaseModel
 
-from paw_kit.jit.agreement import safe_agreement
+from paw_kit.jit.agreement import safe_agreement, stringify_answer
+from paw_kit.jit.db import _SHADOW_STALL_FACTOR
 
 logger = logging.getLogger("paw_kit.jit.shadow")
 
 # Once a task has accumulated this many times `shadow_window` comparisons at one epoch
 # without promoting, the runner drops to sampling one comparison in every
 # `shadow_window`. This bounds the "an adapter that never promotes doubles compute
-# forever" cost without adding a seventh tuning knob.
-_SHADOW_STALL_FACTOR = 5
+# forever" cost without adding a seventh tuning knob. Canonically defined in db.py --
+# `get_task_report`/`get_agreement()` need the same threshold to report `stalled`
+# (finding 2) without every caller of `TraceDB` alone pulling in this module's
+# global runner and atexit hook -- and imported here rather than duplicated.
 
 # Global (not per-task) best-effort drain budget at interpreter exit. Per-task would
 # cost N times this for N decorated functions; and with nothing pending the drain
@@ -47,20 +49,6 @@ _SHADOW_STALL_FACTOR = 5
 _ATEXIT_DRAIN_SECONDS = 2.0
 
 _RunnerKey = Tuple[str, str]
-
-
-def serialize_answer(value: Any) -> str:
-    """Serialize an answer for persistence, matching `decorator.py`'s trace serialization."""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, BaseModel):
-        return value.model_dump_json()
-    if isinstance(value, (dict, list)):
-        try:
-            return json.dumps(value)
-        except Exception:
-            return str(value)
-    return str(value)
 
 
 def _coerce(value: Any, response_model: Optional[Type[BaseModel]]) -> Any:
@@ -116,6 +104,11 @@ class ShadowJob:
     demote_threshold: float = 0.0
     max_pairs: int = 500
     queue_size: int = 8
+    # Finding 1: a "fail_open" job carries nothing but enough to key the worker and
+    # call `db.increment_fail_open(task_id)` there -- the persisted fail-open counter
+    # must never be written on the caller thread. Every field above this one is
+    # meaningless for that kind and left at its default.
+    kind: str = "compare"
 
     @property
     def key(self) -> _RunnerKey:
@@ -138,7 +131,6 @@ class ShadowRunner:
         self._stalled: Dict[_RunnerKey, int] = {}
         self._drop_warned: Set[_RunnerKey] = set()
         self._stall_warned: Set[Tuple[_RunnerKey, int]] = set()
-        self._stall_counter: Dict[Tuple[_RunnerKey, int], int] = {}
         self._seq_cache: Dict[Tuple[_RunnerKey, int], int] = {}
         self._error_logged: Set[Tuple[str, str]] = set()
         # Stall-guard subsampling. Random rather than a deterministic "every Nth job"
@@ -170,18 +162,19 @@ class ShadowRunner:
                     self._dropped[key] = self._dropped.get(key, 0) + 1
                     first = key not in self._drop_warned
                     self._drop_warned.add(key)
+                what = "comparison" if job.kind == "compare" else "fail-open"
                 if first:
                     logger.warning(
                         "paw_kit.jit.shadow: task_id=%s shadow queue is full (size=%d); "
-                        "dropping this comparison. Dropped comparisons are not counted as "
-                        "disagreements -- they are simply not sampled. Further drops for "
-                        "this task log at DEBUG.",
-                        job.task_id, job.queue_size,
+                        "dropping this %s. A dropped comparison is not counted as a "
+                        "disagreement -- it is simply not sampled; a dropped fail-open is "
+                        "simply not counted. Further drops for this task log at DEBUG.",
+                        job.task_id, job.queue_size, what,
                     )
                 else:
                     logger.debug(
-                        "paw_kit.jit.shadow: task_id=%s shadow queue full, comparison dropped.",
-                        job.task_id,
+                        "paw_kit.jit.shadow: task_id=%s shadow queue full, %s dropped.",
+                        job.task_id, what,
                     )
                 return False
             return True
@@ -191,6 +184,31 @@ class ShadowRunner:
                 job.task_id, type(exc).__name__, exc,
             )
             return False
+
+    def submit_fail_open(self, task_id: str, db_path: str, db: Any, queue_size: int = 8) -> bool:
+        """Enqueue a persisted fail-open counter increment onto the task's worker thread.
+
+        Finding 1: `TraceDB.increment_fail_open` is a synchronous SQLite write, so it
+        must never run on the caller thread -- the fail-open path exists specifically
+        to protect availability, and making a request wait on a write lock right
+        there defeats the point. Shares `submit`'s contract exactly (never blocks,
+        never raises, drops the newest job on a full queue): a dropped fail-open is
+        simply not counted in the persisted figure, the same way a dropped comparison
+        is simply not sampled. The in-process counter in decorator.py is unaffected
+        either way -- it is a dict increment, not I/O, and stays on the caller thread.
+        """
+        return self.submit(
+            ShadowJob(
+                task_id=task_id,
+                db_path=db_path,
+                db=db,
+                state_epoch=0,
+                phase="fail_open",
+                input_payload="",
+                queue_size=queue_size,
+                kind="fail_open",
+            )
+        )
 
     # --- worker plumbing ------------------------------------------------------
 
@@ -258,8 +276,6 @@ class ShadowRunner:
         with self._lock:
             first = cache_key not in self._stall_warned
             self._stall_warned.add(cache_key)
-            count = self._stall_counter.get(cache_key, 0) + 1
-            self._stall_counter[cache_key] = count
             keep = self._stall_rng.random() < (1.0 / job.shadow_window)
         if first:
             try:
@@ -269,10 +285,21 @@ class ShadowRunner:
                 rate = stats["rate"]
             except Exception:
                 rate = None
+            # Finding 2: say plainly that this is a one-way door for the rest of this
+            # epoch (`_maybe_transition` stops evaluating completed windows for
+            # promotion past this point, see its own comment) and name both ways out --
+            # a task stuck here otherwise looks, from `get_agreement()`/`paw-kit
+            # report` alone, just like one still converging.
             logger.warning(
                 "paw_kit.jit.shadow: task_id=%s is not converging: agreement %s over %d "
-                "samples at this epoch; the teacher is still serving. Sampling one "
-                "comparison in every %d from here to bound the cost.",
+                "samples at this epoch; the teacher is still serving. From here, "
+                "completed windows are no longer evaluated for promotion at this epoch "
+                "-- comparisons keep being recorded (sampled one in every %d, so "
+                "`get_agreement()`/`paw-kit report` keep moving) but nothing can "
+                "promote until the epoch advances. Recover by changing one of this "
+                "task's persisted shadow config values (shadow_window, "
+                "shadow_threshold, audit_window, demote_threshold) or by passing "
+                "shadow_window=0.",
                 job.task_id, "unknown" if rate is None else f"{rate:.2f}", seq,
                 job.shadow_window,
             )
@@ -306,7 +333,36 @@ class ShadowRunner:
                 task_id, error_type, exc,
             )
 
+    def _prune_stale_epoch_state(self, key: _RunnerKey, current_epoch: int) -> None:
+        """Drop `_seq_cache`/`_stall_warned` entries for `key` at an older epoch.
+
+        Finding 4: both structures are keyed on `(key, state_epoch)`, and without this
+        every epoch a long-lived task ever passed through (a compile retry, a
+        promotion, a demotion, a config change) left one entry behind for the life of
+        the process. `state_epoch` only ever increases for a given task, so anything
+        strictly older than the epoch just observed is safe to drop.
+        """
+        with self._lock:
+            for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:
+                del self._seq_cache[k]
+            for k in [k for k in self._stall_warned if k[0] == key and k[1] < current_epoch]:
+                self._stall_warned.discard(k)
+
+    def _run_fail_open_job(self, job: ShadowJob) -> None:
+        """Worker-thread side of `submit_fail_open` -- the only thing a fail-open job does."""
+        try:
+            job.db.increment_fail_open(job.task_id)
+        except Exception as exc:
+            logger.debug(
+                "paw_kit.jit.shadow: task_id=%s could not persist a fail-open (%s: %s).",
+                job.task_id, type(exc).__name__, exc,
+            )
+
     def _run_job(self, job: ShadowJob) -> None:
+        if job.kind == "fail_open":
+            self._run_fail_open_job(job)
+            return
+        self._prune_stale_epoch_state(job.key, job.state_epoch)
         if self._stall_throttled(job):
             return
 
@@ -323,7 +379,7 @@ class ShadowRunner:
             try:
                 adapter_value = job.run_adapter(job.input_payload)  # type: ignore[misc]
                 adapter_latency = (time.perf_counter() - started) * 1000
-                adapter_output = serialize_answer(adapter_value)
+                adapter_output = stringify_answer(adapter_value)
             except BaseException as exc:  # noqa: BLE001
                 verdict = "error"
                 error_type = type(exc).__name__
@@ -334,7 +390,7 @@ class ShadowRunner:
             try:
                 teacher_value_raw = job.run_teacher()  # type: ignore[misc]
                 teacher_latency = (time.perf_counter() - started) * 1000
-                teacher_output = serialize_answer(teacher_value_raw)
+                teacher_output = stringify_answer(teacher_value_raw)
             except BaseException as exc:  # noqa: BLE001
                 # Not the adapter's fault: excluded from numerator *and* denominator.
                 verdict = "teacher_error"

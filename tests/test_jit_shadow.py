@@ -613,6 +613,9 @@ def test_sixty_percent_agreement_adapter_never_promotes_over_many_windows(
     # Every comparison so far was exhaustive, so the measured rate is exactly 60%.
     assert svc.get_agreement()["rate"] == pytest.approx(0.6)
     assert svc.db.get_status(svc.task_id) == "shadow"
+    # Exactly at the stall point the last full window is still evaluated (see
+    # `_maybe_transition`'s `seq > factor * window`, strict) -- not stalled yet.
+    assert svc.get_agreement()["stalled"] is False
 
     while svc.db.get_epoch_seq(svc.task_id, epoch) < 100 and n < 3000:
         for _ in range(20):
@@ -628,6 +631,46 @@ def test_sixty_percent_agreement_adapter_never_promotes_over_many_windows(
     # above the threshold by chance -- and must still not promote. That is why a
     # stalled task's windows are recorded for visibility but never evaluated.
     assert svc.db.get_adapter_path(svc.task_id) is None
+    # Finding 2: both `get_agreement()` and `get_task_report()` now say so.
+    assert svc.get_agreement()["stalled"] is True
+    assert svc.db.get_task_report(svc.task_id)["agreement"]["stalled"] is True
+
+
+def test_tumbling_window_does_not_promote_on_a_pattern_a_sliding_window_would(
+    tmp_path: Path,
+) -> None:
+    """Finding 3: a deterministic discriminator for the tumbling-vs-sliding rule,
+    independent of the stall guard.
+
+    `shadow_window=5`, ten comparisons scripted D,D,A,A,A | A,A,D,D,D (D=disagree,
+    A=agree). Tumbling windows measure 3/5=0.6 then 2/5=0.4 -- both below the 0.8
+    threshold, so a tumbling window never promotes. A *sliding* 5-window ending at
+    comparison 7 (comparisons 3-7) would see A,A,A,A,A = 5/5 = 1.0 and promote. Only
+    10 comparisons run, well under the `_SHADOW_STALL_FACTOR * shadow_window == 25`
+    stall point, so the stall guard cannot be what is discriminating here.
+    """
+    sequence = [False, False, True, True, True, True, True, False, False, False]
+    inputs = [f"c{i}" for i in range(len(sequence))]
+    outcomes = dict(zip(inputs, sequence))
+    backend = ScriptedBackend(agree_when=lambda text: outcomes[text])
+    svc, _ = _make(tmp_path, "c1regression", backend, shadow_window=5, shadow_threshold=0.8)
+    svc("seed0")
+    svc("seed1")
+    assert svc.db.get_status(svc.task_id) == "shadow"
+
+    for text in inputs:
+        svc(text)
+    _drain(svc)
+
+    epoch = svc.db.get_task_routing(svc.task_id)[2]
+    seq = svc.db.get_epoch_seq(svc.task_id, epoch)
+    assert seq == 10
+    assert seq < shadow_module._SHADOW_STALL_FACTOR * 5, (
+        "must discriminate via the tumbling-window rule, not the stall guard"
+    )
+    assert svc.get_agreement()["rate"] == pytest.approx(0.4), "trailing (second) window"
+    assert svc.db.get_status(svc.task_id) == "shadow"
+    assert svc.is_compiled() is False
 
 
 def test_stall_guard_throttles_a_non_converging_task(
@@ -827,12 +870,70 @@ def test_fail_open_in_ready_records_the_fallback_and_does_not_demote(tmp_path: P
     for n in range(3):
         assert svc(f"broken{n}") == f"teacher:broken{n}"
     assert calls["n"] == before + 3
+    # In-process counter: a plain dict increment on the caller thread, unaffected by
+    # finding 1's fix.
     assert svc.get_fail_open_count() == 3
-    assert svc.db.get_task_report(svc.task_id)["fail_open_count"] == 3
+    # The *persisted* counter (finding 1) is now applied on the shadow worker thread,
+    # not the caller's -- drain before reading it back.
     _drain(svc)
+    assert svc.db.get_task_report(svc.task_id)["fail_open_count"] == 3
     # Infrastructure faults are not semantic drift: no audit pair, no demotion.
     assert svc.db.get_status(svc.task_id) == "ready"
     assert [p for p in _pairs(svc) if p["phase"] == "audit"] == []
+
+
+def test_fail_open_persisted_increment_never_runs_on_the_caller_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1: `db.increment_fail_open` is a synchronous SQLite write and must run
+    on the shadow worker thread, never on the caller's request path."""
+    backend = ScriptedBackend()
+    svc, _ = _promote(tmp_path, "failopenthread", backend, audit_window=5)
+    backend.fail = True
+
+    caller_thread = threading.current_thread()
+    seen_threads: List[threading.Thread] = []
+    original = TraceDB.increment_fail_open
+
+    def spy(self: TraceDB, task_id: str) -> None:
+        seen_threads.append(threading.current_thread())
+        original(self, task_id)
+
+    monkeypatch.setattr(TraceDB, "increment_fail_open", spy)
+
+    assert svc("broken0") == "teacher:broken0"
+    assert svc("broken1") == "teacher:broken1"
+    _drain(svc)
+
+    assert len(seen_threads) == 2, "increment_fail_open was not called the expected number of times"
+    assert all(t is not caller_thread for t in seen_threads), (
+        "the persisted fail-open increment ran on the caller thread"
+    )
+    assert svc.db.get_task_report(svc.task_id)["fail_open_count"] == 2
+
+
+def test_fail_open_at_shadow_window_zero_never_persists_a_counter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1: shadow_window=0 is byte-for-byte the pre-Track-14 fail-open path --
+    no shadow worker exists for the task at all, so no persisted counter is written,
+    only the in-process one."""
+    backend = ScriptedBackend()
+    svc, calls = _make(tmp_path, "failopenzero", backend, threshold=3, shadow_window=0)
+    for i in range(3):
+        svc(f"in{i}")
+    assert svc.db.get_status(svc.task_id) == "ready"
+    backend.fail = True
+
+    called: List[str] = []
+    monkeypatch.setattr(
+        TraceDB, "increment_fail_open", lambda self, task_id: called.append(task_id)
+    )
+
+    assert svc("broken0") == "teacher:broken0"
+    assert svc.get_fail_open_count() == 1
+    assert called == [], "increment_fail_open must never be called at shadow_window=0"
+    assert svc.db.get_task_report(svc.task_id)["fail_open_count"] == 0
 
 
 def test_redact_trace_applies_to_shadow_pair_columns(tmp_path: Path) -> None:
@@ -944,6 +1045,12 @@ def test_teacher_error_on_audit_is_excluded_from_numerator_and_denominator(
     assert all(p["teacher_output"] is None for p in teacher_errors)
     assert all(p["seq"] == 0 for p in teacher_errors)
     assert svc.db.get_status(svc.task_id) == "ready"
+    # Finding 5: the *reported* `teacher_error` is scoped to the current trailing
+    # window, not the whole epoch -- with zero countable audit comparisons so far this
+    # epoch, no window has started yet, so it reads 0 even though two teacher-error
+    # rows already exist on disk (checked above via the raw table). Before the fix
+    # this grew unbounded next to a `window`-sized rate; it no longer does.
+    assert svc.get_agreement()["teacher_error"] == 0
 
     # The window still reaches audit_window and can still demote.
     state["raise"] = False
@@ -952,6 +1059,54 @@ def test_teacher_error_on_audit_is_excluded_from_numerator_and_denominator(
         svc(f"drift{n}")
     _drain(svc)
     assert svc.db.get_status(svc.task_id) == "shadow"
+
+
+def test_tuple_answer_serializes_identically_on_trace_path_and_in_comparison(
+    tmp_path: Path,
+) -> None:
+    """Finding 9: one shared serializer. A teacher/adapter returning a tuple -- the
+    case only `agreement._stringify` (now `stringify_answer`) used to handle -- must
+    serialize to the same string on decorator.py's trace-path persistence and inside
+    shadow.py's comparison, since both now call the same function."""
+    from paw_kit.jit.agreement import stringify_answer
+
+    class TupleBackend(ScriptedBackend):
+        def infer(
+            self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None
+        ) -> Any:
+            self.infer_calls += 1
+            return (input_text, 1)
+
+    backend = TupleBackend()
+    calls = {"n": 0}
+    spec = "Echo the input back (tupleserialize)"
+    cache_dir = str(tmp_path / "cache_tupleserialize")
+
+    def teacher(text: str) -> Any:
+        calls["n"] += 1
+        return (text, 1)
+
+    svc = compile_on_hit(
+        spec=spec, threshold=2, cache_dir=cache_dir, backend=backend, sync_compile=True,
+        shadow_window=20,
+    )(teacher)
+    svc("seed0")
+    svc("seed1")
+    svc("tuple-in")
+    _drain(svc)
+
+    expected = stringify_answer(("tuple-in", 1))
+
+    trace_row = _query(
+        svc.db,
+        "SELECT teacher_output FROM traces WHERE task_id = ? ORDER BY id DESC LIMIT 1;",
+        (svc.task_id,),
+    )[0]
+    pair_row = _pairs(svc)[-1]
+    assert trace_row["teacher_output"] == expected, "decorator.py's trace-path serialization"
+    assert pair_row["teacher_output"] == expected, "the same trace-path string, carried through"
+    assert pair_row["adapter_output"] == expected, "shadow.py's comparison-path serialization"
+    assert pair_row["verdict"] == "agree"
 
 
 def test_free_text_teacher_without_response_model_does_not_promote_by_default(
@@ -1139,12 +1294,17 @@ def test_get_agreement_shape_and_last_disagreements(tmp_path: Path) -> None:
     svc, _ = _make(tmp_path, "shape", backend, shadow_window=20)
 
     empty = svc.get_agreement()
+    # Finding 2: `stalled` is now the persisted, epoch-scoped boolean flag; the
+    # pre-existing in-process subsampling counter (also historically named `stalled`)
+    # is exposed as `stall_subsampled` to make room for it.
     expected_keys = {
         "state", "phase", "rate", "window", "samples", "agree", "disagree", "error",
-        "teacher_error", "dropped", "stalled", "pending", "last_disagreements",
+        "teacher_error", "stalled", "dropped", "stall_subsampled", "pending",
+        "last_disagreements",
     }
     assert set(empty) == expected_keys
     assert empty["rate"] is None
+    assert empty["stalled"] is False
     assert empty["last_disagreements"] == []
 
     svc("a")
@@ -1159,6 +1319,7 @@ def test_get_agreement_shape_and_last_disagreements(tmp_path: Path) -> None:
     assert agreement["window"] == 20
     assert agreement["samples"] == 5
     assert agreement["rate"] == 0.0
+    assert agreement["stalled"] is False, "5 samples is nowhere near the stall point"
     assert len(agreement["last_disagreements"]) == 3
     payloads = [entry["input_payload"] for entry in agreement["last_disagreements"]]
     assert payloads == ["d4", "d3", "d2"], "newest first"
@@ -1200,6 +1361,32 @@ def test_config_change_between_runs_starts_a_fresh_window(tmp_path: Path) -> Non
     assert len(_pairs(reconfigured)) == 3
     assert reconfigured.get_agreement()["samples"] == 0
     assert "config_change" in [t["reason"] for t in _transitions(reconfigured)]
+
+
+def test_config_change_mid_ready_also_starts_a_fresh_epoch(tmp_path: Path) -> None:
+    """Finding 6: reconciliation must bump the epoch in `ready`, not only `shadow` --
+    otherwise lowering `audit_window`/`demote_threshold` on a promoted task re-slices
+    its existing audit history under new arithmetic."""
+    backend = ScriptedBackend()
+    svc, _ = _promote(tmp_path, "readyconfig", backend, shadow_window=1, shadow_threshold=1.0)
+    assert svc.db.get_status(svc.task_id) == "ready"
+    epoch_before = svc.db.get_task_routing(svc.task_id)[2]
+
+    bumped = svc.db.sync_shadow_config(
+        svc.task_id,
+        {
+            "shadow_window": 1,
+            "shadow_threshold": 1.0,
+            "audit_window": 5,  # changed from the default 20
+            "demote_threshold": 0.6,
+        },
+    )
+    assert bumped is True
+
+    epoch_after = svc.db.get_task_routing(svc.task_id)[2]
+    assert epoch_after == epoch_before + 1
+    assert svc.db.get_status(svc.task_id) == "ready", "a config change must not itself change status"
+    assert "config_change" in [t["reason"] for t in _transitions(svc)]
 
 
 # --- The response_model path --------------------------------------------------

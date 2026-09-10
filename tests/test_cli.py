@@ -1141,6 +1141,44 @@ def test_cli_report_renders_state_agreement_and_fail_open(tmp_path: Path) -> Non
     assert "[v2] wrong" in result.stdout
 
 
+def test_cli_report_shows_stalled_marker_for_a_task_past_the_stall_point(tmp_path: Path) -> None:
+    """Finding 2: a `shadow` task the runner has stopped evaluating for promotion at
+    this epoch shows a `stalled` marker next to its state -- otherwise indistinguishable
+    in the report from one still converging."""
+    from paw_kit.jit.db import TraceDB
+    from paw_kit.jit.shadow import _SHADOW_STALL_FACTOR
+
+    db_file = tmp_path / "stalled" / "traces.db"
+    db = TraceDB(str(db_file))
+    task_id = "b" * 64
+    window = 2
+    db.sync_shadow_config(
+        task_id,
+        {"shadow_window": window, "shadow_threshold": 0.8, "audit_window": 2, "demote_threshold": 0.6},
+    )
+    db.record_trace(task_id, "hello", "teacher:hello", 1.0)
+    db.set_shadow_started(task_id, str(db_file.parent / "adapter.paw"))
+    epoch = db.get_task_routing(task_id)[2]
+    for n in range(_SHADOW_STALL_FACTOR * window + 1):
+        db.record_shadow_pair(
+            task_id, epoch, "shadow", f"in{n}", f"teacher:{n}", "wrong", "disagree"
+        )
+    db.close()
+
+    result = runner.invoke(app, ["report", "--db", str(db_file)])
+    assert result.exit_code == 0, result.stdout
+    output = strip_ansi(result.stdout)
+    assert task_id[:12] in output
+    # Substring, not the full word: Rich can truncate a narrow "State" column to
+    # "(stalle…" in the CliRunner's default terminal width.
+    assert "stall" in output
+
+    json_result = runner.invoke(app, ["report", "--db", str(db_file), "--json"])
+    assert json_result.exit_code == 0, json_result.stdout
+    payload = json.loads(json_result.stdout)
+    assert payload["tasks"][0]["agreement"]["stalled"] is True
+
+
 def test_cli_report_json_output_matches_get_task_report(tmp_path: Path) -> None:
     """--json emits exactly what TraceDB.get_task_report reports, plus disagreements."""
     from paw_kit.jit.db import TraceDB

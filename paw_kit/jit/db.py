@@ -52,6 +52,15 @@ _STATE_TRANSITIONS_MAX_ROWS = 200
 # a table is therefore `cap + prune_interval - 1`.
 _PRUNE_EVERY = 50
 
+# Track 14 shadow-mode stall guard. Once a task has run this many multiples of a
+# window's worth of comparisons at one epoch without promoting, `ShadowRunner`
+# (paw_kit.jit.shadow) stops evaluating completed windows for promotion, and this
+# module marks the task `stalled` in `get_task_report`/`get_agreement()` (finding 2).
+# Canonical home: the window arithmetic (`get_agreement_stats`, `get_epoch_seq`)
+# already lives here, and `shadow.py` imports the constant from this module instead of
+# duplicating it.
+_SHADOW_STALL_FACTOR = 5
+
 
 def _prune_interval(cap: int) -> int:
     """How often to prune a table with this retention cap. See _PRUNE_EVERY."""
@@ -673,6 +682,12 @@ class TraceDB:
         arithmetic and could promote a task the previous configuration was correctly
         refusing. Bumping the epoch on a config change makes the next window a fresh,
         honest one. Returns True if the epoch was bumped.
+
+        Finding 6: this bumps for `status in ('shadow', 'ready')`, not `'shadow'`
+        alone -- `audit_window`/`demote_threshold` re-slice a `ready` task's audit
+        history exactly the same way `shadow_window`/`shadow_threshold` re-slice a
+        `shadow` task's, and a `ready` task changing config out from under a running
+        audit was unreachable only because the shipped default is `audit_rate=0.0`.
         """
         now = datetime.now(timezone.utc).isoformat()
         encoded = json.dumps(config, sort_keys=True)
@@ -699,21 +714,22 @@ class TraceDB:
                     return False
                 if row["shadow_config"] == encoded:
                     return False
-                changed_mid_shadow = (
-                    row["shadow_config"] is not None and row["status"] == "shadow"
+                changed_mid_run = (
+                    row["shadow_config"] is not None
+                    and row["status"] in ("shadow", "ready")
                 )
-                epoch = (row["state_epoch"] or 0) + (1 if changed_mid_shadow else 0)
+                epoch = (row["state_epoch"] or 0) + (1 if changed_mid_run else 0)
                 self._conn.execute(
                     "UPDATE tasks SET shadow_config = ?, state_epoch = ?, updated_at = ? "
                     "WHERE task_id = ?;",
                     (encoded, epoch, now, task_id),
                 )
-                if changed_mid_shadow:
+                if changed_mid_run:
                     self._record_transition_locked(
-                        task_id, "shadow", "shadow", None, None, epoch, now,
+                        task_id, row["status"], row["status"], None, None, epoch, now,
                         reason="config_change",
                     )
-                return changed_mid_shadow
+                return changed_mid_run
 
         return self._with_write_retry(_do)
 
@@ -831,6 +847,16 @@ class TraceDB:
         LIMIT budget, so `samples` could never reach `audit_window` once one landed in
         the trailing window -- and `samples == audit_window` is the demotion trigger.
         One flaky teacher call would disable drift detection for that task forever.
+
+        Finding 5: `teacher_error` is scoped to that *same* trailing window, not the
+        whole epoch -- otherwise it grows unbounded next to a `window`-sized rate.
+        Simplest implementation: teacher-error rows are not countable and carry no
+        `seq` of their own (they are stored with `seq = 0`), so the boundary is the
+        `id` of the oldest of the `window` countable rows above, and a teacher-error
+        row counts if it is at least that recent -- i.e. it is interleaved with the
+        current window. With fewer than `window` countable rows so far this epoch, the
+        boundary is simply the first one recorded, so nothing is double-counted or
+        missed; with none at all yet, nothing has started, and it reads 0.
         """
         with self._lock:
             rows = self._conn.execute(
@@ -844,11 +870,26 @@ class TraceDB:
                 """,
                 (task_id, state_epoch, phase, window),
             ).fetchall()
-            teacher_errors = self._conn.execute(
-                "SELECT COUNT(*) AS n FROM shadow_pairs "
-                "WHERE task_id = ? AND state_epoch = ? AND phase = ? AND verdict = 'teacher_error';",
-                (task_id, state_epoch, phase),
-            ).fetchone()["n"]
+            boundary_id = self._conn.execute(
+                """
+                SELECT MIN(id) AS boundary_id FROM (
+                    SELECT id FROM shadow_pairs
+                    WHERE task_id = ? AND state_epoch = ? AND phase = ?
+                      AND verdict != 'teacher_error'
+                    ORDER BY id DESC LIMIT ?
+                );
+                """,
+                (task_id, state_epoch, phase, window),
+            ).fetchone()["boundary_id"]
+            if boundary_id is None:
+                teacher_errors = 0
+            else:
+                teacher_errors = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM shadow_pairs "
+                    "WHERE task_id = ? AND state_epoch = ? AND phase = ? "
+                    "AND verdict = 'teacher_error' AND id >= ?;",
+                    (task_id, state_epoch, phase, boundary_id),
+                ).fetchone()["n"]
             seq = self._conn.execute(
                 "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
                 "WHERE task_id = ? AND state_epoch = ?;",
@@ -950,14 +991,26 @@ class TraceDB:
             agreement = {
                 "phase": None, "rate": None, "window": 0, "samples": 0,
                 "agree": 0, "disagree": 0, "error": 0, "teacher_error": 0,
+                "stalled": False,
             }
         else:
             stats = self.get_agreement_stats(task_id, base["state_epoch"], window, phase)
+            # Finding 2: `stalled` mirrors ShadowRunner._maybe_transition's own "past
+            # the stall point" check exactly (`seq > _SHADOW_STALL_FACTOR * window`,
+            # `shadow` phase only -- `audit` never stalls, there is no audit subsample
+            # guard) so that a task the runner has stopped evaluating for promotion at
+            # this epoch does not read, from `get_agreement()`/`paw-kit report` alone,
+            # like one still converging.
+            stalled = (
+                phase == "shadow" and window > 0
+                and stats["seq"] > _SHADOW_STALL_FACTOR * window
+            )
             agreement = {
                 "phase": phase, "rate": stats["rate"], "window": window,
                 "samples": stats["samples"], "agree": stats["agree"],
                 "disagree": stats["disagree"], "error": stats["error"],
                 "teacher_error": stats["teacher_error"],
+                "stalled": stalled,
             }
         base["agreement"] = agreement
         return base

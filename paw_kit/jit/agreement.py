@@ -33,8 +33,18 @@ def _normalize_str(value: str) -> str:
     return unicodedata.normalize("NFC", value).strip()
 
 
-def _stringify(value: Any) -> str:
-    """Serialize a structured value the same way `decorator.py` serializes a teacher result."""
+def stringify_answer(value: Any) -> str:
+    """Serialize a teacher/adapter answer to the one canonical string form.
+
+    Track 14 finding 9: this used to be three near-identical near-duplicates --
+    `agreement._stringify` (this function, used below for the str-vs-structured
+    comparison rule), `shadow.serialize_answer` (the shadow worker's comparison-output
+    persistence path) and an inline block in `decorator.py` (the trace-path
+    persistence path) -- and only this one handled `tuple` and used `default=str`. Now
+    there is exactly one implementation, imported by both other call sites, so a
+    teacher or adapter that returns e.g. a tuple serializes identically no matter
+    which path it went through.
+    """
     if isinstance(value, str):
         return value
     if isinstance(value, BaseModel):
@@ -81,9 +91,9 @@ def _compare(a: Any, b: Any, depth: int) -> bool:
     # serialized and compared by the str rule. A str vs a bare number is NOT covered
     # here -- that stays a type mismatch, i.e. a disagreement.
     if isinstance(a, str) and _is_structured(b):
-        return _normalize_str(a) == _normalize_str(_stringify(b))
+        return _normalize_str(a) == _normalize_str(stringify_answer(b))
     if isinstance(b, str) and _is_structured(a):
-        return _normalize_str(_stringify(a)) == _normalize_str(b)
+        return _normalize_str(stringify_answer(a)) == _normalize_str(b)
 
     if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
         if len(a) != len(b):
