@@ -214,6 +214,76 @@ def test_cli_inspect_adapter(tmp_path: Path) -> None:
     assert "Binary / Raw Weights" in res_bin.output
 
 
+def test_cli_inspect_shows_program_id_and_compiler(tmp_path: Path) -> None:
+    """A ProgramAsWeights-style manifest's program_id and compiler must be visible --
+    the whole point of `paw-inspect` is answering "what did this adapter compile to,"
+    and those two fields were previously dropped entirely."""
+    adapter = tmp_path / "real.paw"
+    adapter.write_text(
+        json.dumps(
+            {
+                "backend": "programasweights",
+                "manifest_version": 2,
+                "program_id": "prog_abc123",
+                "compiler": "paw-4b-qwen3-0.6b",
+                "compiled_at": "2026-01-01T00:00:00Z",
+                "spec": "Normalize a date.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["inspect", str(adapter)])
+    out = strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert "prog_abc123" in out
+    assert "paw-4b-qwen3-0.6b" in out
+    # Spec is printed last among the manifest-derived rows.
+    spec_pos = out.index("Normalize a date.")
+    program_id_pos = out.index("prog_abc123")
+    assert program_id_pos < spec_pos
+
+
+def test_cli_inspect_json_flag_prints_raw_manifest(tmp_path: Path) -> None:
+    adapter = tmp_path / "a.paw"
+    manifest = {"backend": "mock", "spec": "s", "manifest_version": 2, "examples_count": 0}
+    adapter.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = runner.invoke(app, ["inspect", str(adapter), "--json"])
+    assert result.exit_code == 0
+    assert json.loads(strip_ansi(result.output)) == manifest
+
+
+def test_cli_inspect_json_flag_errors_on_non_json_adapter(tmp_path: Path) -> None:
+    adapter = tmp_path / "weights.bin"
+    adapter.write_bytes(b"\x00\x01\x02\x03")
+    result = runner.invoke(app, ["inspect", str(adapter), "--json"])
+    assert result.exit_code == 1
+
+
+def test_cli_history_appended_twice_and_printed(tmp_path: Path) -> None:
+    """Two compiles append two lines to the sidecar log, and `paw-kit history`
+    prints both."""
+    from paw_kit.backend.mock import MockPAWBackend
+
+    backend = MockPAWBackend()
+    adapter = tmp_path / "a.paw"
+    backend.compile("v1", [{"input": "a", "output": "1"}], str(adapter))
+    backend.compile("v2", [{"input": "a", "output": "1"}, {"input": "b", "output": "2"}], str(adapter))
+
+    result = runner.invoke(app, ["history", str(adapter)])
+    out = strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert out.count("mock") >= 2
+    # Two data rows, not counting the header.
+    assert "1" in out and "2" in out
+
+
+def test_cli_history_missing_log_errors(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["history", str(tmp_path / "nope.paw")])
+    assert result.exit_code == 1
+    assert "no history log" in strip_ansi(result.output)
+
+
 def test_cli_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify clean command handles missing dirs, dry-run, confirmation, and actual purging."""
     # PAW-CLI-01: cache_dir must resolve under cwd, so exercise this from a cwd chdir'd
@@ -924,6 +994,61 @@ def test_no_unescaped_console_interpolations():
         "Unescaped interpolation into Rich markup (wrap in _e(), or add to the "
         "allowlist only if provably never a string):\n  " + "\n  ".join(offenders)
     )
+
+
+def test_cli_lint_spec_text_argument_warns_and_exits_zero():
+    result = runner.invoke(
+        app, ["lint-spec", "Pull out the phone number and format it consistently."]
+    )
+    out = strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert "output-format-unpinned" in out
+
+
+def test_cli_lint_spec_error_severity_exits_one():
+    result = runner.invoke(app, ["lint-spec", "short"])
+    assert result.exit_code == 1
+    assert "spec-too-short" in strip_ansi(result.output)
+
+
+def test_cli_lint_spec_reads_from_file(tmp_path: Path):
+    spec_file = tmp_path / "spec.txt"
+    spec_file.write_text("Translate this sentence into French.", encoding="utf-8")
+    result = runner.invoke(app, ["lint-spec", "--file", str(spec_file)])
+    assert result.exit_code == 0
+
+
+def test_cli_lint_spec_json_output(tmp_path: Path):
+    result = runner.invoke(app, ["lint-spec", "short", "--json"])
+    assert result.exit_code == 1
+    findings = json.loads(strip_ansi(result.output))
+    assert findings[0]["rule_id"] == "spec-too-short"
+    assert findings[0]["severity"] == "error"
+
+
+def test_cli_lint_spec_examples_file_flags_single_form(tmp_path: Path):
+    examples_file = tmp_path / "examples.jsonl"
+    examples_file.write_text(
+        '{"input": "a", "output": "(555) 123-4567"}\n'
+        '{"input": "b", "output": "(555) 999-0000"}\n',
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "lint-spec",
+            "Extract the phone number from this text.",
+            "--examples",
+            str(examples_file),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "examples-single-form" in strip_ansi(result.output)
+
+
+def test_cli_lint_spec_no_spec_or_file_errors():
+    result = runner.invoke(app, ["lint-spec"])
+    assert result.exit_code == 1
 
 
 def test_public_api_is_importable_and_excludes_deleted_backends():

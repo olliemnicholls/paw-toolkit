@@ -12,6 +12,7 @@ from paw_kit.schema.loader import load
 from paw_kit.schema.logits_processor import RegexLogitsProcessor
 from paw_kit.serve.docker import export_docker_scaffold
 from paw_kit.serve.server import create_app, serve_adapter
+from paw_kit.speclint import Finding, lint_spec
 from paw_kit.test.active import ActiveLearningReport, run_active_learning_loop
 from paw_kit.test.fuzzer import AdversarialFuzzer
 from paw_kit.test.runner import TestRunReport, TestRunner, evaluate_assertion
@@ -34,6 +35,7 @@ __all__ = [
     "AdversarialFuzzer",
     "AssertionRule",
     "BackgroundCompiler",
+    "Finding",
     "FuzzingConfig",
     "MockPAWBackend",
     "PAWSchemaError",
@@ -49,6 +51,7 @@ __all__ = [
     "create_app",
     "evaluate_assertion",
     "export_docker_scaffold",
+    "lint_spec",
     "load",
     "load_suite",
     "pydantic_to_regex",

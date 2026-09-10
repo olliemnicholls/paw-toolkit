@@ -1,5 +1,6 @@
 """Tests for ProgramAsWeightsBackend against a fake SDK (no network, no model)."""
 
+import hashlib
 import json
 import warnings
 from pathlib import Path
@@ -301,3 +302,92 @@ def test_precheck_failure_is_swallowed_and_manifest_records_null(key: None, tmp_
         backend.compile("spec", [], str(out))
     manifest = json.loads(out.read_text())
     assert manifest["cache_hit"] is None
+
+
+# ---------------------------------------------------------------- manifest v2 / lineage
+
+
+def test_manifest_v2_records_lineage_fields(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, max_spec_examples=1)
+    out = tmp_path / "a.paw"
+    examples = [{"input": "a", "output": "1"}, {"input": "b", "output": "2"}]
+
+    backend.compile("Classify tickets.", examples, str(out))
+
+    manifest = json.loads(out.read_text())
+    assert manifest["manifest_version"] == 2
+    assert manifest["spec_sha256"] == hashlib.sha256(b"Classify tickets.").hexdigest()
+    # full_spec_sha256 is the hash of the spec *with* the folded example appended --
+    # distinct from spec_sha256 because max_spec_examples=1 folds one example in.
+    assert manifest["full_spec_sha256"] != manifest["spec_sha256"]
+    rendered = _render_spec_with_examples("Classify tickets.", examples, 1)
+    assert manifest["full_spec_sha256"] == hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    assert manifest["folded_example_ids"] == [hashlib.sha256(b"a\x1f1").hexdigest()]
+    assert manifest["parent_program_id"] is None
+    assert manifest["parent_manifest_sha256"] is None
+    assert isinstance(manifest["compile_wall_s"], float)
+    assert manifest["compile_wall_s"] >= 0.0
+    assert manifest["compiler_snapshot"] is None
+
+
+def test_manifest_v2_records_parent_program_id_on_recompile(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out = tmp_path / "a.paw"
+
+    backend.compile("v1", [], str(out))
+    first = json.loads(out.read_text())
+    first_raw = out.read_text()
+
+    backend.compile("v2", [], str(out))
+    second = json.loads(out.read_text())
+
+    assert first["program_id"] == "prog-fast"
+    assert second["parent_program_id"] == "prog-fast"
+    assert second["parent_manifest_sha256"] == hashlib.sha256(first_raw.encode("utf-8")).hexdigest()
+
+
+def test_read_manifest_accepts_v1_manifest_with_no_manifest_version_key(tmp_path: Path) -> None:
+    """A v1 manifest (written before this feature existed) has no manifest_version
+    key at all -- read_manifest must keep accepting it unchanged."""
+    backend = ProgramAsWeightsBackend(sdk=FakeSDK())
+    legacy = tmp_path / "legacy.paw"
+    legacy.write_text(
+        json.dumps(
+            {
+                "backend": "programasweights",
+                "program_id": "prog-legacy",
+                "slug": "legacy-slug",
+                "compiler": FAST_COMPILER,
+                "status": "completed",
+                "spec": "legacy spec",
+                "examples_folded_into_spec": 0,
+                "examples_count": 0,
+                "public": False,
+                "ephemeral": False,
+                "cache_hit": None,
+                "compiled_at": "2026-01-01T00:00:00Z",
+            }
+        )
+    )
+    manifest = ProgramAsWeightsBackend.read_manifest(str(legacy))
+    assert manifest["program_id"] == "prog-legacy"
+    assert "manifest_version" not in manifest
+
+
+def test_history_log_appended_once_per_compile(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out = tmp_path / "a.paw"
+    history_path = Path(str(out) + ".history.jsonl")
+
+    backend.compile("v1", [], str(out))
+    backend.compile("v2", [], str(out))
+
+    lines = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 2
+    assert all("spec" not in entry for entry in lines)
+    assert lines[0]["program_id"] == "prog-fast"
+    assert lines[1]["parent_program_id"] == "prog-fast"
+    assert oct(history_path.stat().st_mode)[-3:] == "600"

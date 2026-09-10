@@ -324,9 +324,11 @@ uv run paw-kit export dataset --db ./.paw/traces.db --out traces.jsonl
 paw-kit demo [--scenario pii]         mock-backend walkthroughs
 paw-test check suite.yaml             run a suite (--backend real runs the upstream SDK, read-only)
 paw-inspect adapter.paw               show an adapter manifest
+paw-kit history adapter.paw           show every past compile of an adapter, oldest first
 paw-clean [--dry-run]                 remove cached adapters and trace DB
 paw-serve adapter.paw --port 8000     HTTP server
 paw-kit export docker|dataset ...     scaffolding and trace export
+paw-kit lint-spec "text"|--file f.txt static checks for spec-authoring mistakes measured against real adapters
 ```
 
 ---

@@ -59,6 +59,13 @@ import warnings
 
 from paw_kit.atomicio import atomic_write_text
 from paw_kit.backend.base import AbstractPAWBackend
+from paw_kit.backend.manifest_lineage import (
+    append_history_entry,
+    extract_snapshot,
+    folded_example_ids,
+    read_parent_lineage,
+    sha256_text,
+)
 
 # Public compiler names as documented in the upstream README. `paw-4b-qwen3-0.6b` is
 # the server default (single-forward-pass "fast" compiler from the original PAW paper);
@@ -68,6 +75,13 @@ FAST_COMPILER = "paw-4b-qwen3-0.6b"
 FINETUNE_COMPILER = "paw-ft-bs48"
 
 MANIFEST_BACKEND_NAME = "programasweights"
+# Bumped when compile() started recording lineage (spec/full-spec hashes, which
+# examples were actually folded, parent-manifest linkage, compile wall time, and
+# whatever compiler_snapshot the SDK returns). `read_manifest` does not gate on this
+# -- a version-1 manifest (no `manifest_version` key at all) must keep loading
+# unchanged; this constant exists for `paw-inspect`/`paw-kit history` to display, not
+# to reject anything.
+MANIFEST_VERSION = 2
 _MAX_MANIFEST_BYTES = 64 * 1024
 _MAX_CACHED_FUNCTIONS = 8  # each holds a loaded llama.cpp model; keep this small
 
@@ -186,6 +200,12 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
 
         full_spec = _render_spec_with_examples(spec, examples, self.max_spec_examples)
         folded_count = min(len(examples), self.max_spec_examples)
+        folded_ids = folded_example_ids(examples, self.max_spec_examples)
+
+        # Read whatever manifest already sits at output_path *before* it is
+        # overwritten below -- this is the only point at which its lineage is still
+        # recoverable (see manifest_lineage.read_parent_lineage's docstring).
+        parent_program_id, parent_manifest_sha256 = read_parent_lineage(output_path, _MAX_MANIFEST_BYTES)
 
         if self.public and folded_count > 0:
             warnings.warn(
@@ -224,11 +244,12 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                     stacklevel=2,
                 )
 
+        compile_started = time.monotonic()
         if self.compiler == FINETUNE_COMPILER:
             job = paw.compile_async(
                 full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral
             )
-            program_id, slug, status = self._wait_for_job(paw, job)
+            program_id, slug, status, compiler_snapshot = self._wait_for_job(paw, job)
         else:
             program = paw.compile(
                 full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral
@@ -239,29 +260,40 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             if not program_id or (status and str(status).lower() in _FAILED_STATES):
                 err = getattr(program, "error", None) or (program.get("error") if isinstance(program, dict) else None)
                 raise RuntimeError(f"ProgramAsWeights compile failed (status={status!r}): {err!r}")
+            compiler_snapshot = extract_snapshot(program)
+        compile_wall_s = time.monotonic() - compile_started
 
         manifest = {
             "backend": MANIFEST_BACKEND_NAME,
+            "manifest_version": MANIFEST_VERSION,
             "program_id": program_id,
             "slug": slug,
             "compiler": self.compiler,
             "status": status,
             "spec": spec,
+            "spec_sha256": sha256_text(spec),
+            "full_spec_sha256": sha256_text(full_spec),
             "examples_folded_into_spec": folded_count,
             "examples_count": len(examples),
+            "folded_example_ids": folded_ids,
             "public": self.public,
             "ephemeral": self.ephemeral,
             "cache_hit": cache_hit,
+            "parent_program_id": parent_program_id,
+            "parent_manifest_sha256": parent_manifest_sha256,
+            "compile_wall_s": compile_wall_s,
+            "compiler_snapshot": compiler_snapshot,
             "compiled_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         atomic_write_text(output_path, json.dumps(manifest, indent=2))
+        append_history_entry(output_path, manifest)
 
         # Drop any loaded function for this path: the program behind it just changed.
         with self._lock:
             self._functions.pop(output_path, None)
         return output_path
 
-    def _wait_for_job(self, paw: Any, job: Any) -> tuple[str, Optional[str], str]:
+    def _wait_for_job(self, paw: Any, job: Any) -> tuple[str, Optional[str], str, Any]:
         """Poll `get_compile_status` until the job reaches a terminal state."""
         job_id = job.get("job_id") if isinstance(job, dict) else getattr(job, "job_id", None)
         if not job_id:
@@ -276,7 +308,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             if status in _FAILED_STATES:
                 raise RuntimeError(f"ProgramAsWeights finetune compile {job_id} {status}: {get('error')!r}")
             if program_id and (status in _SUCCESS_STATES or get("completed_at")):
-                return str(program_id), get("slug"), status
+                return str(program_id), get("slug"), status, extract_snapshot(status_obj)
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"ProgramAsWeights compile {job_id} still {status!r} after {self.compile_timeout_s}s"

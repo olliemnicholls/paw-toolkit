@@ -1,5 +1,6 @@
 """Unit tests for AbstractPAWBackend protocol and MockPAWBackend implementation."""
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -201,3 +202,87 @@ def test_mock_backend_rejects_malformed_adapter_shape_PAW_BACKEND_04(tmp_path: P
     bad_rule_values.write_text(json.dumps({"examples": [], "rules": {"k": 123}}), encoding="utf-8")
     assert backend.infer(str(bad_rule_values), "x") == "[mock:x]"
     assert backend.get_adapter(str(bad_rule_values)) is None
+
+
+# ---------------------------------------------------------------- manifest v2 / lineage
+
+
+def test_mock_compile_writes_v2_manifest_fields(tmp_path: Path) -> None:
+    """MockPAWBackend.compile() records the same lineage fields as
+    ProgramAsWeightsBackend.compile() (manifest_version, hashes, folded example ids,
+    parent linkage, timing) -- see paw_kit.backend.manifest_lineage."""
+    backend = MockPAWBackend()
+    out = tmp_path / "a.paw"
+    examples = [{"input": "a", "output": "1"}, {"input": "b", "output": "2"}]
+
+    backend.compile("Classify tickets.", examples, str(out))
+
+    manifest = json.loads(out.read_text())
+    assert manifest["manifest_version"] == 2
+    assert manifest["spec_sha256"] == hashlib.sha256(b"Classify tickets.").hexdigest()
+    assert manifest["full_spec_sha256"] is None
+    assert len(manifest["folded_example_ids"]) == 2
+    assert manifest["folded_example_ids"][0] == hashlib.sha256(b"a\x1f1").hexdigest()
+    assert manifest["parent_program_id"] is None
+    assert manifest["parent_manifest_sha256"] is None
+    assert manifest["compiler_snapshot"] is None
+    assert isinstance(manifest["compile_wall_s"], float)
+    assert manifest["compile_wall_s"] >= 0.0
+
+
+def test_mock_recompile_records_parent_manifest_sha256(tmp_path: Path) -> None:
+    """A second compile() into the same path records the first manifest's own hash
+    as parent_manifest_sha256 -- the only way to link the two once the first
+    manifest is overwritten."""
+    backend = MockPAWBackend()
+    out = tmp_path / "a.paw"
+
+    backend.compile("v1", [], str(out))
+    first_raw = out.read_text()
+
+    backend.compile("v2", [], str(out))
+    second = json.loads(out.read_text())
+
+    assert second["parent_manifest_sha256"] == hashlib.sha256(first_raw.encode("utf-8")).hexdigest()
+
+
+def test_mock_v1_manifest_with_no_manifest_version_still_infers(tmp_path: Path) -> None:
+    """A hand-written v1-shaped manifest (no manifest_version key at all, as every
+    manifest written before this feature looked) must keep working unchanged."""
+    backend = MockPAWBackend()
+    adapter = tmp_path / "legacy.paw"
+    adapter.write_text(
+        json.dumps(
+            {
+                "spec": "legacy",
+                "examples": [{"input": "hi", "output": "there"}],
+                "examples_count": 1,
+                "backend": "mock",
+                "rules": {},
+                "default_response": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert backend.infer(str(adapter), "hi") == "there"
+
+
+def test_mock_history_log_appended_once_per_compile(tmp_path: Path) -> None:
+    """Every compile() call appends one line to <adapter>.history.jsonl, the
+    manifest minus its spec text."""
+    backend = MockPAWBackend()
+    out = tmp_path / "a.paw"
+    history_path = Path(str(out) + ".history.jsonl")
+
+    backend.compile("v1", [{"input": "a", "output": "1"}], str(out))
+    backend.compile("v2", [{"input": "a", "output": "1"}, {"input": "b", "output": "2"}], str(out))
+
+    lines = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 2
+    assert all("spec" not in entry for entry in lines)
+    assert lines[0]["examples_count"] == 1
+    assert lines[1]["examples_count"] == 2
+    assert lines[1]["parent_manifest_sha256"] is not None
+
+    # 0600, not subject to the process umask.
+    assert oct(history_path.stat().st_mode)[-3:] == "600"

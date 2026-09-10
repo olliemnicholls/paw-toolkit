@@ -4,10 +4,24 @@ from collections import OrderedDict
 import json
 from pathlib import Path
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from paw_kit.atomicio import atomic_write_text
 from paw_kit.backend.base import AbstractPAWBackend
+from paw_kit.backend.manifest_lineage import (
+    append_history_entry,
+    folded_example_ids,
+    read_parent_lineage,
+    sha256_text,
+)
+
+# Mirrors programasweights.MANIFEST_VERSION -- see that module's constant for what
+# bumped it. The mock backend has no upstream `program_id`/`compiler`/`compiled_at`
+# concept of its own, so those three fields stay absent here; everything else in the
+# v2 lineage schema (spec hash, folded example ids, parent linkage, compile wall
+# time, compiler_snapshot) applies equally to a mock manifest.
+MANIFEST_VERSION = 2
 
 # PAW-BACKEND-03: caps how many distinct adapter_path entries MockPAWBackend keeps
 # resident in memory at once, evicted least-recently-used. Without this, a
@@ -85,14 +99,38 @@ class MockPAWBackend(AbstractPAWBackend):
         Returns:
             The path to the created mock adapter artifact.
         """
+        # Read whatever manifest already sits at output_path *before* it is
+        # overwritten below -- same ordering requirement as
+        # ProgramAsWeightsBackend.compile(), for the same reason (see
+        # manifest_lineage.read_parent_lineage's docstring).
+        parent_program_id, parent_manifest_sha256 = read_parent_lineage(
+            output_path, _MAX_ADAPTER_FILE_BYTES
+        )
+
+        compile_started = time.monotonic()
         adapter_data = {
             "spec": spec,
             "examples": examples,
             "examples_count": len(examples),
             "backend": "mock",
+            "manifest_version": MANIFEST_VERSION,
+            "spec_sha256": sha256_text(spec),
+            # Unlike ProgramAsWeightsBackend, the mock never renders spec+examples
+            # into a separate "text actually sent" -- there is no compile service to
+            # send anything to. Nothing distinct from spec_sha256 to record here.
+            "full_spec_sha256": None,
+            # The mock has no max_spec_examples cap and folds nothing into spec text;
+            # every well-formed example handed to compile() is retained verbatim in
+            # "examples" and is live training signal for infer()'s example-match
+            # step, so all of them count as "folded" here (limit=None).
+            "folded_example_ids": folded_example_ids(examples, limit=None),
+            "parent_program_id": parent_program_id,
+            "parent_manifest_sha256": parent_manifest_sha256,
+            "compiler_snapshot": None,
             "rules": {},
             "default_response": None,
         }
+        adapter_data["compile_wall_s"] = time.monotonic() - compile_started
         with self._lock:
             self._put_adapter_locked(output_path, adapter_data)
 
@@ -103,6 +141,7 @@ class MockPAWBackend(AbstractPAWBackend):
         # across it would serialize every concurrent infer()/compile() call against
         # any other adapter_path behind it too.
         atomic_write_text(output_path, json.dumps(adapter_data, indent=2))
+        append_history_entry(output_path, adapter_data)
 
         return output_path
 

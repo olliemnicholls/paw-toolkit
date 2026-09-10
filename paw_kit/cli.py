@@ -1,5 +1,6 @@
 """Typer and Rich command-line interface for paw-toolkit."""
 
+import importlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.pathsafety import ensure_contained
 from paw_kit.serve.server import backend_label
+from paw_kit.speclint import Finding, lint_spec
 from paw_kit.test.active import run_active_learning_loop
 from paw_kit.test.runner import TestRunner
 from paw_kit.test.suite import load_suite
@@ -518,9 +520,50 @@ def check(
         raise typer.Exit(code=1)
 
 
+# Preferred, stable ordering for manifest fields `inspect()` prints -- covers every
+# key either backend's compile() writes (manifest_version 1 and 2, both
+# ProgramAsWeightsBackend and MockPAWBackend). Any manifest key not named here still
+# prints (a third-party AbstractPAWBackend's own fields, or a future addition) --
+# sorted alphabetically, after every key below and before "spec", which is always
+# last regardless of where it falls in this list.
+_INSPECT_FIELD_ORDER = [
+    "manifest_version",
+    "backend",
+    "program_id",
+    "slug",
+    "compiler",
+    "status",
+    "spec_sha256",
+    "full_spec_sha256",
+    "examples_count",
+    "examples_folded_into_spec",
+    "folded_example_ids",
+    "public",
+    "ephemeral",
+    "cache_hit",
+    "parent_program_id",
+    "parent_manifest_sha256",
+    "compile_wall_s",
+    "compiler_snapshot",
+    "compiled_at",
+    "rules",
+    "default_response",
+    "examples",
+]
+
+
+def _prettify_field_name(key: str) -> str:
+    """`"examples_count"` -> `"Examples Count"` -- matches this command's pre-existing
+    row labels for the fields that already had one, extended to every manifest key."""
+    return key.replace("_", " ").title()
+
+
 @app.command(name="inspect")
 def inspect(
     adapter_path: Path = typer.Argument(..., help="Path to compiled .paw adapter artifact"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the raw manifest JSON instead of a formatted table"
+    ),
 ) -> None:
     """Inspect metadata, task spec, and file properties of a .paw adapter artifact."""
     if not adapter_path.exists():
@@ -537,30 +580,234 @@ def inspect(
     # isn't a regular file outright; the size cap skips the parse attempt (falling
     # back to the "Binary / Raw Weights" branch below) rather than reading a file
     # too large to plausibly be adapter metadata.
-    metadata = {}
+    metadata: dict = {}
     is_json = False
     if adapter_path.is_file() and size_bytes <= _MAX_INSPECT_FILE_BYTES:
         try:
             with open(adapter_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                metadata = loaded
                 is_json = True
         except Exception:
             pass
+
+    if json_output:
+        if not is_json:
+            console.print(
+                f"[bold red]Error:[/bold red] '{_e(adapter_path)}' is not JSON adapter metadata."
+            )
+            raise typer.Exit(code=1)
+        console.print_json(data=metadata)
+        return
 
     table = Table(title=f"PAW Adapter: {adapter_path.name}")
     table.add_column("Property", style="cyan", no_wrap=True)
     table.add_column("Value", style="magenta")
 
-    table.add_row("File Path", str(adapter_path.resolve()))
+    table.add_row("File Path", _e(adapter_path.resolve()))
     table.add_row("File Size", f"{size_bytes} bytes ({size_bytes / 1024:.2f} KB)")
     table.add_row("Format", "JSON Simulation" if is_json else "Binary / Raw Weights")
 
     if is_json:
-        table.add_row("Specification", metadata.get("spec", "N/A"))
-        table.add_row("Backend", metadata.get("backend", "mock"))
-        table.add_row("Examples Count", str(metadata.get("examples_count", len(metadata.get("examples", [])))))
+        remaining = sorted(k for k in metadata if k not in _INSPECT_FIELD_ORDER and k != "spec")
+        ordered_keys = [k for k in _INSPECT_FIELD_ORDER if k in metadata] + remaining
+        for key in ordered_keys:
+            table.add_row(_e(_prettify_field_name(key)), _e(metadata[key]))
+        # The spec is printed last, always -- it is typically the longest value and
+        # the one most useful to see uninterrupted at the bottom of the table.
+        table.add_row("Specification", _e(metadata.get("spec", "N/A")))
 
     console.print(table)
+
+
+# Sidecar history logs are append-only JSONL, one line per compile -- unbounded over
+# an adapter's lifetime in principle, but each line is a manifest-sized JSON object
+# (kilobytes, not megabytes). This is a generous cap consistent with the rest of the
+# codebase's "never read an externally-writable path unbounded" posture (PAW-CLI-06),
+# not a realistic ceiling for legitimate use.
+_MAX_HISTORY_FILE_BYTES = 10 * 1024 * 1024
+
+
+def _history_path(adapter_path: Path) -> Path:
+    return Path(str(adapter_path) + ".history.jsonl")
+
+
+@app.command(name="history")
+def history(
+    adapter_path: Path = typer.Argument(..., help="Path to a compiled .paw adapter artifact"),
+) -> None:
+    """Print the append-only compile lineage log for an adapter.
+
+    Every `compile()` call (on any `AbstractPAWBackend` shipped by paw-kit) appends
+    one line to `<adapter>.history.jsonl` -- the compiled manifest minus its spec
+    text. A manifest itself only ever points at its immediate parent (an overwritten
+    file cannot be read back), so this sidecar is the only place the full compile
+    lineage of a repeatedly-recompiled adapter survives.
+    """
+    log_path = _history_path(adapter_path)
+    if not log_path.is_file():
+        console.print(f"[bold red]Error:[/bold red] no history log at '{_e(log_path)}'.")
+        raise typer.Exit(code=1)
+    if log_path.stat().st_size > _MAX_HISTORY_FILE_BYTES:
+        console.print(
+            f"[bold red]Error:[/bold red] history log '{_e(log_path)}' exceeds "
+            f"{_e(_MAX_HISTORY_FILE_BYTES)} bytes."
+        )
+        raise typer.Exit(code=1)
+
+    entries: List[dict] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            entries.append(parsed)
+
+    if not entries:
+        console.print(f"[dim]No lineage entries recorded in '{_e(log_path)}'.[/dim]")
+        raise typer.Exit(code=0)
+
+    table = Table(title=f"Compile history: {adapter_path.name}")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Compiled At")
+    table.add_column("Backend")
+    table.add_column("Program ID")
+    table.add_column("Compiler")
+    table.add_column("Compile (s)", justify="right")
+    table.add_column("Parent Program ID")
+
+    for i, entry in enumerate(entries, 1):
+        compile_wall_s = entry.get("compile_wall_s")
+        wall_str = f"{compile_wall_s:.3f}" if isinstance(compile_wall_s, (int, float)) else "-"
+        table.add_row(
+            str(i),
+            _e(entry.get("compiled_at") or "-"),
+            _e(entry.get("backend") or "-"),
+            _e(entry.get("program_id") or "-"),
+            _e(entry.get("compiler") or "-"),
+            _e(wall_str),
+            _e(entry.get("parent_program_id") or "-"),
+        )
+
+    console.print(table)
+
+
+_LINT_SEVERITY_COLOR = {"error": "red", "warn": "yellow", "info": "cyan"}
+
+
+@app.command(name="lint-spec")
+def lint_spec_cmd(
+    spec_text: Optional[str] = typer.Argument(
+        None, help="Spec text to lint. Omit and use --file to read it from a file instead."
+    ),
+    file: Optional[Path] = typer.Option(
+        None, "--file", help="Read the spec from this file instead of the positional argument"
+    ),
+    schema: Optional[str] = typer.Option(
+        None,
+        "--schema",
+        help="Pydantic response model to check, as 'module:ClassName' (enables the "
+        "schema-all-required rule)",
+    ),
+    examples_file: Optional[Path] = typer.Option(
+        None,
+        "--examples",
+        help="JSONL file of {\"input\": ..., \"output\": ...} pairs (enables the "
+        "examples-single-form rule)",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print findings as JSON"),
+) -> None:
+    """Lint a spec for failure modes measured against real compiled PAW adapters.
+
+    Exits 1 only if a finding's severity is "error" (spec-too-long / spec-too-short);
+    "warn" and "info" findings are printed but do not fail the command.
+    """
+    if spec_text is not None and file is not None:
+        console.print("[bold red]Error:[/bold red] pass spec text or --file, not both.")
+        raise typer.Exit(code=1)
+    if file is not None:
+        if not file.exists():
+            console.print(f"[bold red]Error:[/bold red] spec file '{_e(file)}' does not exist.")
+            raise typer.Exit(code=1)
+        spec_content = file.read_text(encoding="utf-8")
+    elif spec_text is not None:
+        spec_content = spec_text
+    else:
+        console.print("[bold red]Error:[/bold red] provide spec text, or --file.")
+        raise typer.Exit(code=1)
+
+    schema_model = None
+    if schema is not None:
+        if ":" not in schema:
+            console.print(
+                "[bold red]Error:[/bold red] --schema must be 'module:ClassName', e.g. "
+                "'myapp.models:Contact'."
+            )
+            raise typer.Exit(code=1)
+        module_name, _, class_name = schema.partition(":")
+        try:
+            module = importlib.import_module(module_name)
+            schema_model = getattr(module, class_name)
+        except Exception as exc:
+            console.print(f"[bold red]Error loading --schema:[/bold red] {_e(exc)}")
+            raise typer.Exit(code=1)
+        if not hasattr(schema_model, "model_fields"):
+            console.print(
+                f"[bold red]Error:[/bold red] {_e(schema)} is not a Pydantic BaseModel."
+            )
+            raise typer.Exit(code=1)
+
+    examples_list: Optional[List[dict]] = None
+    if examples_file is not None:
+        if not examples_file.exists():
+            console.print(
+                f"[bold red]Error:[/bold red] examples file '{_e(examples_file)}' does not exist."
+            )
+            raise typer.Exit(code=1)
+        examples_list = []
+        for line in examples_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                examples_list.append(parsed)
+
+    findings = lint_spec(spec_content, examples=examples_list, schema=schema_model)
+
+    if json_output:
+        console.print_json(
+            data=[
+                {"rule_id": f.rule_id, "severity": f.severity, "message": f.message}
+                for f in findings
+            ]
+        )
+    elif not findings:
+        console.print("[bold green]No issues found.[/bold green]")
+    else:
+        for f in findings:
+            color = _LINT_SEVERITY_COLOR[f.severity]
+            # The "[rule_id]" brackets are literal text, not a markup tag -- run
+            # through _e() as one unit (rather than escaping f.rule_id alone and
+            # writing the brackets as bare f-string text) so Rich never sees them as
+            # an attempted, unrecognized style tag and silently deletes the span
+            # (exactly the class of bug _e()'s own docstring describes).
+            console.print(
+                f"[bold {_e(color)}]{_e(f.severity.upper())}[/bold {_e(color)}] "
+                f"{_e('[' + f.rule_id + ']')} {_e(f.message)}"
+            )
+
+    if any(f.severity == "error" for f in findings):
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
 
 
 @app.command(name="clean")
