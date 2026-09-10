@@ -157,17 +157,51 @@ def check_gpu_visible(timeout_s: float = _DEFAULT_GPU_TIMEOUT_S) -> CheckResult:
     return CheckResult("GPU", "PASS", output.splitlines()[0], "")
 
 
+# Every `PAW_API_KEY` this project's own scripts and docs use (`scripts/measure_*.py`,
+# `paw_kit/serve/docker.py`) is `paw_sk_...` -- not a documented, versioned format
+# guarantee from upstream, just the one shape ever observed. Used only to say whether a
+# set value *looks like* a key, never to claim it is one -- see `check_api_key`.
+_API_KEY_PREFIX = "paw_sk_"
+
+
 @_guarded("PAW_API_KEY")
 def check_api_key() -> CheckResult:
-    """Is `PAW_API_KEY` set. Never prints the key itself -- only "set" / "not set"."""
-    if os.environ.get("PAW_API_KEY"):
-        return CheckResult("PAW_API_KEY", "PASS", "set", "")
+    """Is `PAW_API_KEY` set, and does it look like a `paw_sk_...` key. Never prints the
+    key itself -- only "set" / "not set" and whether the prefix matches.
+
+    This check cannot, and does not claim to, validate the key against the service:
+    `precheck_compile` (`ProgramAsWeightsBackend`'s readiness probe) returns HTTP 200
+    for an absent key, a syntactically invalid key, and a valid key alike -- see
+    `measurements/README.md`'s "Finetune compiler" section, "What compile C actually
+    did". Nothing short of an actual compile call tells you whether the key is good, so
+    the PASS/WARN below is honest about *format* only: a set, correctly-prefixed value
+    still WARNs, worded to say a wrong key will only surface on the first compile.
+    """
+    key = os.environ.get("PAW_API_KEY")
+    if not key:
+        return CheckResult(
+            "PAW_API_KEY",
+            "WARN",
+            "not set",
+            "Inference on an already-cached program needs no key; compiling a new one does. "
+            "Get one at https://programasweights.com/settings",
+        )
+    if not key.startswith(_API_KEY_PREFIX):
+        return CheckResult(
+            "PAW_API_KEY",
+            "WARN",
+            f"set, but does not look like a {_API_KEY_PREFIX}... key",
+            "This is a format check only, not a validity check (nothing short of a "
+            "real compile call validates a key against the service) -- but every "
+            f"key this project has seen starts with '{_API_KEY_PREFIX}'. Double-check "
+            "the value if compiles fail with an authentication error.",
+        )
     return CheckResult(
         "PAW_API_KEY",
-        "WARN",
-        "not set",
-        "Inference on an already-cached program needs no key; compiling a new one does. "
-        "Get one at https://programasweights.com/settings",
+        "PASS",
+        f"set and looks like a {_API_KEY_PREFIX}... key",
+        "Format looks right; this does not confirm the key is valid -- a wrong key "
+        "only surfaces on the first real compile call, not here.",
     )
 
 
@@ -179,9 +213,22 @@ def check_service_health(
 ) -> CheckResult:
     """GET `<api_url>/api/v1/health`.
 
-    PASS only on 200 with a non-empty `gpu_services` dict; WARN on 200 with an empty
-    one (the service can report healthy while every compile backend behind it is down --
-    see upstream issue #5); FAIL on a non-200 status or a network error.
+    FAIL only on a non-200 status or a network error. Otherwise WARN on any of:
+    - `status` present and not `"ok"`/`"healthy"` (e.g. `"degraded"`) -- reported
+      verbatim.
+    - a non-empty `warnings` list -- every entry is listed in the message, not just
+      counted. When any entry contains `redis_unavailable`, the remedy specifically
+      calls out that async compiles (the `paw-ft-bs48` finetune compiler) are likely to
+      be refused (HTTP 503 `durable_queue_unavailable`) while fast compiles may still
+      work -- this is the one check that would have predicted that failure and
+      previously said nothing about it (`measurements/README.md`'s "Finetune compiler"
+      section, "paw-test feedback" item 4).
+    - an empty `gpu_services` dict -- kept as a WARN (the service can report healthy
+      while every compile backend behind it is down, see upstream issue #5), but its
+      remedy is softened: the fast compiler has been observed to compile successfully
+      even when `gpu_services` is empty, so this alone is not a reliable predictor of
+      failure.
+    PASS only when none of the above apply.
 
     `api_url`, `timeout_s` and `transport` are parameters (rather than always reading
     `programasweights.get_api_url()` and hitting the network directly) so tests can
@@ -219,21 +266,59 @@ def check_service_health(
         data = resp.json()
     except Exception:
         data = None
-    gpu_services = data.get("gpu_services") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        data = {}
 
-    if isinstance(gpu_services, dict) and gpu_services:
+    gpu_services = data.get("gpu_services")
+    gpu_services_empty = not (isinstance(gpu_services, dict) and gpu_services)
+
+    reported_status = data.get("status")
+    status_text = str(reported_status).strip() if isinstance(reported_status, str) else ""
+    status_unhealthy = bool(status_text) and status_text.lower() not in ("ok", "healthy")
+
+    raw_warnings = data.get("warnings")
+    warnings_list = [str(w) for w in raw_warnings] if isinstance(raw_warnings, list) else []
+    redis_unavailable = any("redis_unavailable" in w for w in warnings_list)
+
+    if not status_unhealthy and not warnings_list and not gpu_services_empty:
         return CheckResult(
             "Upstream service health",
             "PASS",
             f"200 OK, {len(gpu_services)} gpu service(s) registered",
             "",
         )
+
+    detail_parts = []
+    remedy_parts = []
+
+    if status_unhealthy:
+        detail_parts.append(f"status={status_text!r}")
+        remedy_parts.append(f"service reports status={status_text!r}, not ok/healthy.")
+
+    if warnings_list:
+        detail_parts.append("warnings=[" + "; ".join(warnings_list) + "]")
+        if redis_unavailable:
+            remedy_parts.append(
+                "warnings include redis_unavailable: async compiles (the paw-ft-bs48 "
+                "finetune compiler) are likely to be refused (HTTP 503 "
+                "durable_queue_unavailable) while fast compiles may still work."
+            )
+        else:
+            remedy_parts.append("see the warnings listed above for detail.")
+
+    if gpu_services_empty:
+        detail_parts.append("gpu_services is empty")
+        remedy_parts.append(
+            "gpu_services is empty; the fast compiler has been observed to compile "
+            "successfully even so -- this alone is not a reliable predictor of compile "
+            "failure, see upstream issue #5."
+        )
+
     return CheckResult(
         "Upstream service health",
         "WARN",
-        "200 OK but gpu_services is empty",
-        "service reports healthy but no GPU services are registered; compiles are "
-        "likely to fail or hang, see upstream issue #5",
+        "200 OK but " + "; ".join(detail_parts),
+        " ".join(remedy_parts),
     )
 
 

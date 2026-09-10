@@ -334,9 +334,54 @@ def test_anthropic_judge_defaults_to_temperature_zero(monkeypatch: pytest.Monkey
 
     judge_fn = anthropic_judge()
     judge_fn("some prompt")
-    assert captured_kwargs["temperature"] == 0.0
+    # Finding 1: `anthropic>=1.0` dropped `temperature` from `Messages.create()`'s typed
+    # signature, so it must travel via `extra_body` (still honoured on the wire) rather
+    # than as a direct kwarg -- a direct `temperature=` kwarg raises `TypeError` on the
+    # installed SDK before a request is ever sent.
+    assert "temperature" not in captured_kwargs
+    assert captured_kwargs["extra_body"] == {"temperature": 0.0}
     assert captured_kwargs["model"] == "claude-haiku-4-5"
     assert captured_kwargs["max_tokens"] == 60
+
+
+def test_anthropic_judge_temperature_survives_incompatible_sdk_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for finding 1: a fake client whose `create()` does not even accept a
+    `temperature` keyword (mirroring `anthropic==1.4.0`'s actual typed signature) must
+    still work, because temperature travels via `extra_body`, not a direct kwarg."""
+    import types
+
+    captured_kwargs = {}
+
+    class FakeMessages:
+        def create(self, *, model, max_tokens, messages, extra_body=None, **kwargs):
+            # A `temperature` kwarg here would be a TypeError on the real SDK -- this
+            # signature deliberately doesn't accept one, so passing it directly would
+            # raise before this function's own **kwargs could absorb it.
+            captured_kwargs["model"] = model
+            captured_kwargs["max_tokens"] = max_tokens
+            captured_kwargs["extra_body"] = extra_body
+
+            class Block:
+                text = "YES: ok"
+
+            class Resp:
+                content = [Block()]
+
+            return Resp()
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.messages = FakeMessages()
+
+    fake_anthropic = types.SimpleNamespace(Anthropic=FakeClient)
+    monkeypatch.setitem(sys.modules, "anthropic", fake_anthropic)
+
+    judge_fn = anthropic_judge()
+    result = judge_fn("some prompt")
+    assert result == "YES: ok"
+    assert captured_kwargs["extra_body"] == {"temperature": 0.0}
 
 
 # --------------------------------------------------------------------------- CLI
@@ -835,3 +880,153 @@ def test_judge_cli_help_mentions_egress() -> None:
     assert result.exit_code == 0
     assert "leaves this machine" in result.output
     assert "judge provider" in result.output
+
+
+# ------------------------------------------------------- finding 1: judge-itself-broken
+
+
+def test_judge_cli_exits_nonzero_when_every_case_errored_on_check_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worse half of finding 1: `judge_outputs` catches every per-case exception, so
+    a judge that cannot be called at all (e.g. a broken SDK call) used to print `pass
+    rate 0.0%` and exit 0 -- indistinguishable from every case genuinely failing. Every
+    case erroring must exit non-zero instead."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+    report_path = tmp_path / "check_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "task_name": "x",
+                "adapter_path": "a.paw",
+                "total_cases": 2,
+                "passed_cases": 2,
+                "failed_cases": 0,
+                "results": [
+                    {"input": "hello", "output": "HELLO", "passed": True, "failed_rules": [], "failed_rule_names": []},
+                    {"input": "world", "output": "WORLD", "passed": True, "failed_rules": [], "failed_rule_names": []},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_anthropic_judge(model: str = "claude-haiku-4-5", **kwargs):
+        def _j(prompt: str) -> str:
+            raise TypeError("Messages.create() got an unexpected keyword argument 'temperature'")
+
+        return _j
+
+    import paw_kit.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "anthropic_judge", fake_anthropic_judge)
+
+    result = runner.invoke(test_app, ["judge", str(report_path), "--spec", "x"])
+    assert result.exit_code != 0
+    assert "errored 2" in result.output
+    assert "the judge itself is failing" in result.output.lower()
+    assert "unexpected keyword argument 'temperature'" in result.output
+
+
+def test_judge_cli_warns_but_exits_zero_when_majority_but_not_all_errored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """More than half (but not all) of a judge run's cases erroring should print a
+    clear "the judge itself is failing" line with the first error text, but must not by
+    itself force a non-zero exit -- some verdicts were still genuinely obtained."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+    report_path = tmp_path / "check_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "task_name": "x",
+                "adapter_path": "a.paw",
+                "total_cases": 3,
+                "passed_cases": 3,
+                "failed_cases": 0,
+                "results": [
+                    {"input": "input-alpha", "output": "A", "passed": True, "failed_rules": [], "failed_rule_names": []},
+                    {"input": "input-bravo", "output": "B", "passed": True, "failed_rules": [], "failed_rule_names": []},
+                    {"input": "input-charlie", "output": "C", "passed": True, "failed_rules": [], "failed_rule_names": []},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_anthropic_judge(model: str = "claude-haiku-4-5", **kwargs):
+        def _j(prompt: str) -> str:
+            if "input-alpha" in prompt:
+                return "YES: fine"
+            raise RuntimeError("503 rate limited")
+
+        return _j
+
+    import paw_kit.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "anthropic_judge", fake_anthropic_judge)
+
+    result = runner.invoke(test_app, ["judge", str(report_path), "--spec", "x"])
+    assert result.exit_code == 0
+    assert "errored 2" in result.output
+    assert "the judge itself is failing" in result.output.lower()
+    assert "503 rate limited" in result.output
+
+
+def test_judge_cli_exits_nonzero_when_one_side_of_compare_report_fully_errored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same failure mode, on a `compare --json` report: side A errors on every case
+    while B judges normally -- the run must still exit non-zero, since half of what it
+    claims to have measured was never actually obtained."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+    report_path = tmp_path / "compare_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "task_name": "x",
+                "adapter_a": "a.paw",
+                "adapter_b": "b.paw",
+                "manifest_a": {},
+                "manifest_b": {},
+                "total_cases": 1,
+                "identical_count": 0,
+                "a_pass_count": 1,
+                "b_pass_count": 1,
+                "only_a_pass_count": 0,
+                "only_b_pass_count": 0,
+                "rows": [
+                    {
+                        "input": "world",
+                        "output_a": "WORLD_A",
+                        "output_b": "WORLD_B",
+                        "identical": False,
+                        "pass_a": True,
+                        "pass_b": True,
+                        "failed_rules_a": [],
+                        "failed_rules_b": [],
+                        "latency_a_ms": 0.1,
+                        "latency_b_ms": 0.1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_anthropic_judge(model: str = "claude-haiku-4-5", **kwargs):
+        def _j(prompt: str) -> str:
+            if "WORLD_A" in prompt:
+                raise TypeError("Messages.create() got an unexpected keyword argument 'temperature'")
+            return "YES: fine"
+
+        return _j
+
+    import paw_kit.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "anthropic_judge", fake_anthropic_judge)
+
+    result = runner.invoke(test_app, ["judge", str(report_path), "--spec", "x"])
+    assert result.exit_code != 0
+    assert "the judge itself is failing" in result.output.lower()
+    assert "(A)" in result.output

@@ -626,22 +626,42 @@ def compare_cmd(
                 console.print(f"    [red]B error:[/red] {_e(row.execution_error_b)}")
         console.print()
 
-    differing = report.differing_rows
-    if differing:
-        console.print(f"[bold]Differences ({_e(len(differing))}/{_e(report.total_cases)}):[/bold]\n")
-        for row in differing:
+    # Finding 2: `differing_rows` (byte-level -- unchanged) splits into the differences
+    # that actually matter (`genuinely_differing_rows`) and pairs that differ only in
+    # JSON/whitespace formatting (`equivalent_only_rows`). The latter get their own,
+    # collapsed heading below instead of being silently folded into -- or dropped from
+    # -- the main listing, which is what made "0 identical output" read as "these two
+    # programs completely disagree" on a run where 37/60 pairs differed only in
+    # `json.dumps` spacing (measurements/README.md, "Finetune compiler" section).
+    genuine_diffs = report.genuinely_differing_rows
+    whitespace_only = report.equivalent_only_rows
+    if genuine_diffs:
+        console.print(f"[bold]Differences ({_e(len(genuine_diffs))}/{_e(report.total_cases)}):[/bold]\n")
+        for row in genuine_diffs:
             console.print(f"  [bold]Input:[/bold] {_e(row.input[:80])}")
             console.print(f"    A -> {_e(row.output_a[:80])}")
             console.print(f"    B -> {_e(row.output_b[:80])}")
             if row.pass_a != row.pass_b:
                 console.print(f"    [yellow]pass differs:[/yellow] A={_e(row.pass_a)} B={_e(row.pass_b)}")
-    elif not errored_rows:
-        # Suppressed whenever any case errored -- both adapters raising on every case is
-        # exactly the "0 differing rows" shape this green line used to paper over.
+    elif not errored_rows and not whitespace_only:
+        # Suppressed whenever any case errored, or any case is a whitespace-only
+        # difference -- both would make "identical output ... on every case" false.
         console.print("[bold green]No differences[/bold green] -- identical output and pass status on every case.")
 
+    if whitespace_only:
+        console.print(
+            f"\n[bold]Whitespace-only differences ({_e(len(whitespace_only))}/{_e(report.total_cases)}):[/bold] "
+            "same value once parsed as JSON (or, if either side isn't JSON, once "
+            "Unicode-normalized and whitespace-collapsed) -- not byte-identical, but not "
+            "a real disagreement either. Collapsed to input only:\n"
+        )
+        for row in whitespace_only:
+            console.print(f"  {_e(row.input[:80])}")
+
     console.print(
-        f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output, "
+        f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output "
+        f"(byte-for-byte), {_e(report.equivalent_count)} equivalent output "
+        f"(byte-for-byte + JSON/whitespace-normalized), "
         f"A pass {_e(report.a_pass_count)}/{_e(report.total_cases)}, "
         f"B pass {_e(report.b_pass_count)}/{_e(report.total_cases)}, "
         f"only-A-pass {_e(report.only_a_pass_count)}, only-B-pass {_e(report.only_b_pass_count)}, "
@@ -696,6 +716,48 @@ def _warn_on_unparseable(report: JudgeReport, side: Optional[str] = None) -> Non
         "pass/fail signal. Check the judge's raw responses or prompt format.",
         file=sys.stderr,
     )
+
+
+# Above this share of a judge run's cases erroring (the `judge` callable itself raised --
+# `JudgeVerdict.judge_error` -- not just answering off-format), warn that the judge is
+# broken, not the adapter under test. `judge_outputs` catches every per-case exception by
+# design, so a judge that cannot be called at all (e.g. `TypeError: Messages.create() got
+# an unexpected keyword argument 'temperature'` on an incompatible `anthropic` SDK, see
+# measurements/README.md's "Finetune compiler" section, "paw-test feedback" item 1) used
+# to print "pass rate 0.0%" and exit 0 -- a total tool failure that read identically to a
+# total adapter failure, with `errored 60` as the only distinguishing text and nothing
+# the eye goes to or the shell notices.
+_JUDGE_ERROR_MAJORITY_THRESHOLD = 0.5
+
+
+def _first_judge_error(report: JudgeReport) -> Optional[str]:
+    """The first `judge_error` text recorded on `report`, or `None` if no case errored."""
+    for verdict in report.verdicts:
+        if verdict.judge_error:
+            return verdict.judge_error
+    return None
+
+
+def _warn_on_judge_errors(report: JudgeReport, side: Optional[str] = None) -> bool:
+    """Print a stderr warning when more than `_JUDGE_ERROR_MAJORITY_THRESHOLD` of a judge
+    run's cases errored, and return whether *every* case errored -- the caller uses that
+    to decide the process exit code, since a judge that never actually ran must not exit
+    0 the way a judge that ran and disagreed with every case does."""
+    if not report.total_cases:
+        return False
+    all_errored = report.error_count == report.total_cases
+    rate = report.error_count / report.total_cases
+    if rate > _JUDGE_ERROR_MAJORITY_THRESHOLD:
+        label = f" ({side})" if side else ""
+        first_error = _first_judge_error(report) or "unknown error"
+        print(
+            f"[paw-test judge] ERROR: {report.error_count}/{report.total_cases} "
+            f"({rate * 100:.0f}%) judge calls{label} raised -- the judge itself is "
+            f"failing, not the adapter under test (judge_id={report.judge_id}). "
+            f"First error: {first_error}",
+            file=sys.stderr,
+        )
+    return all_errored
 
 
 @test_app.command(name="judge")
@@ -890,12 +952,19 @@ def judge_cmd(
         )
         _warn_on_unparseable(report_a, side="A")
         _warn_on_unparseable(report_b, side="B")
+        all_errored_a = _warn_on_judge_errors(report_a, side="A")
+        all_errored_b = _warn_on_judge_errors(report_b, side="B")
         if out is not None:
             out.write_text(
                 json.dumps({"adapter_a": report_a.model_dump(), "adapter_b": report_b.model_dump()}, indent=2),
                 encoding="utf-8",
             )
             console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
+        # Every case on a side erroring means the judge was never actually consulted on
+        # that side -- a 0.0% pass rate next to exit 0 used to read as "the adapter
+        # failed every case" when the true story was "the judge itself never ran".
+        if all_errored_a or all_errored_b:
+            raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
     if "results" in report_data:
@@ -934,9 +1003,14 @@ def judge_cmd(
             f"unparseable {_e(jreport.unparseable_count)}, errored {_e(jreport.error_count)}"
         )
         _warn_on_unparseable(jreport)
+        all_errored = _warn_on_judge_errors(jreport)
         if out is not None:
             out.write_text(jreport.model_dump_json(indent=2), encoding="utf-8")
             console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
+        # See the compare-report branch above: every case erroring means the judge was
+        # never actually consulted, and that must not exit 0.
+        if all_errored:
+            raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
     console.print(

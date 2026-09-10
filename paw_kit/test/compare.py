@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -89,6 +90,59 @@ def _project_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     return {key: manifest[key] for key in _MANIFEST_DISPLAY_FIELDS if key in manifest}
 
 
+# `"identical"`/`identical_count` above is a byte comparison, deliberately kept: it is
+# what the phone-extraction result in `measurements/README.md` rests on
+# (132/134 byte-identical outputs). But on the ticket-triage run in that same document,
+# 37 of 60 pairs differed *only* in `json.dumps` spacing -- read literally, "0 identical"
+# there said "these are two completely different programs" when the truth was "they
+# agree on 62% of cases and differ in a separator". `_MATCH_*` below is the second,
+# clearly-named comparison this module now also reports: two outputs are "equivalent"
+# when they parse as the same JSON value, or (for anything that doesn't parse as JSON on
+# both sides) when they're equal after Unicode NFC normalization and whitespace
+# collapse. Every byte-identical pair is trivially also equivalent.
+_MATCH_BYTE_IDENTICAL = "byte_identical"
+_MATCH_EQUIVALENT = "equivalent"
+_MATCH_DIFFERENT = "different"
+
+
+def _parse_json_or_none(text: str) -> Tuple[bool, Any]:
+    """`(True, value)` if `text` parses as JSON, `(False, None)` otherwise."""
+    try:
+        return True, json.loads(text)
+    except (ValueError, TypeError):
+        return False, None
+
+
+def _normalize_whitespace(text: str) -> str:
+    """Unicode NFC normalize, then collapse all whitespace runs (including leading/
+    trailing) to single spaces -- `str.split()` with no argument already does the
+    collapsing half; NFC first so two visually-identical strings encoded differently
+    (e.g. composed vs. decomposed accents) don't register as a difference either."""
+    return " ".join(unicodedata.normalize("NFC", text).split())
+
+
+def _outputs_match_kind(output_a: str, output_b: str) -> str:
+    """Classify one pair of outputs as byte-identical, equivalent-but-not-identical, or
+    genuinely different.
+
+    "Equivalent" means: both parse as JSON and their parsed values are equal (so
+    `{"a":1}` and `{"a": 1}` match, key order aside -- `json.loads` returns a `dict`,
+    and dict equality is order-independent); otherwise, equal after
+    `_normalize_whitespace`. If only one side parses as JSON, that is not "both parse"
+    -- comparison falls through to the whitespace-normalized text, on the raw strings,
+    not a parsed value compared against unparsed text.
+    """
+    if output_a == output_b:
+        return _MATCH_BYTE_IDENTICAL
+    a_is_json, parsed_a = _parse_json_or_none(output_a)
+    b_is_json, parsed_b = _parse_json_or_none(output_b)
+    if a_is_json and b_is_json:
+        equivalent = parsed_a == parsed_b
+    else:
+        equivalent = _normalize_whitespace(output_a) == _normalize_whitespace(output_b)
+    return _MATCH_EQUIVALENT if equivalent else _MATCH_DIFFERENT
+
+
 class CompareRow(BaseModel):
     """One case run through both adapters."""
 
@@ -96,6 +150,11 @@ class CompareRow(BaseModel):
     output_a: str
     output_b: str
     identical: bool
+    # Finding 2: which *kind* of match this row is -- `"byte_identical"`,
+    # `"equivalent"` (same value/text after normalization, but not byte-for-byte), or
+    # `"different"`. `identical` above is exactly `match_kind == "byte_identical"`,
+    # kept as its own field for backward-compatible byte-level reporting.
+    match_kind: str = _MATCH_DIFFERENT
     pass_a: bool
     pass_b: bool
     failed_rules_a: List[str] = Field(default_factory=list)
@@ -118,6 +177,13 @@ class CompareReport(BaseModel):
     manifest_b: Dict[str, Any] = Field(default_factory=dict)
     total_cases: int = 0
     identical_count: int = 0
+    # Finding 2: outputs that are the same *value* (same JSON, or the same text once
+    # Unicode NFC + whitespace are normalized) even when they're not byte-identical --
+    # see `_outputs_match_kind`. Includes every byte-identical row too (byte-identical
+    # implies equivalent), so `equivalent_count >= identical_count` always. On the
+    # ticket-triage run this module's docstring describes, `identical_count` was 0 and
+    # `equivalent_count` would have been 37/60 -- the number that actually mattered.
+    equivalent_count: int = 0
     a_pass_count: int = 0
     b_pass_count: int = 0
     only_a_pass_count: int = 0
@@ -134,8 +200,37 @@ class CompareReport(BaseModel):
     def differing_rows(self) -> List[CompareRow]:
         """Rows where the two adapters disagree -- different output, or different pass
         status. This is deliberately the headline view: a per-case diff is what actually
-        decided the finetune-compiler comparison, not the aggregate counts below it."""
+        decided the finetune-compiler comparison, not the aggregate counts below it.
+
+        Unchanged by finding 2: what counts as a "difference" here is still byte-level
+        (`not r.identical`), same as before normalization-aware matching existed --
+        `equivalent_only_rows` below is the new, separately-reported split of this same
+        set, not a redefinition of it.
+        """
         return [r for r in self.rows if not r.identical or r.pass_a != r.pass_b]
+
+    @property
+    def equivalent_only_rows(self) -> List[CompareRow]:
+        """The subset of `differing_rows` that are only a formatting difference: not
+        byte-identical, but `match_kind == "equivalent"` (same JSON value, or the same
+        text after whitespace normalization) and the two adapters agree on pass/fail.
+
+        This is the "whitespace-only" list finding 2 asks to report separately: `paw-test
+        compare`'s CLI lists these under their own, collapsed heading instead of folding
+        them into (or silently dropping them from) the main differences listing.
+        """
+        return [
+            r
+            for r in self.differing_rows
+            if r.match_kind == _MATCH_EQUIVALENT and r.pass_a == r.pass_b
+        ]
+
+    @property
+    def genuinely_differing_rows(self) -> List[CompareRow]:
+        """`differing_rows` minus `equivalent_only_rows` -- real differences, the ones
+        the main "Differences" listing should lead with."""
+        equivalent_only_ids = {id(r) for r in self.equivalent_only_rows}
+        return [r for r in self.differing_rows if id(r) not in equivalent_only_ids]
 
 
 def _infer_safely(backend: AbstractPAWBackend, adapter_path: str, inp: str) -> tuple[str, float, str | None]:
@@ -185,7 +280,7 @@ def compare_adapters(
         inputs.extend(AdversarialFuzzer.generate(suite.fuzzing, base_inputs=seed_inputs))
 
     rows: List[CompareRow] = []
-    identical_count = a_pass_count = b_pass_count = only_a = only_b = errored_count = 0
+    identical_count = equivalent_count = a_pass_count = b_pass_count = only_a = only_b = errored_count = 0
 
     for inp in inputs:
         out_a, lat_a, err_a = _infer_safely(backend, adapter_a, inp)
@@ -205,8 +300,10 @@ def compare_adapters(
         pass_a = not failed_a
         pass_b = not failed_b
         identical = out_a == out_b
+        match_kind = _outputs_match_kind(out_a, out_b)
 
         identical_count += int(identical)
+        equivalent_count += int(match_kind in (_MATCH_BYTE_IDENTICAL, _MATCH_EQUIVALENT))
         a_pass_count += int(pass_a)
         b_pass_count += int(pass_b)
         if pass_a and not pass_b:
@@ -222,6 +319,7 @@ def compare_adapters(
                 output_a=out_a,
                 output_b=out_b,
                 identical=identical,
+                match_kind=match_kind,
                 pass_a=pass_a,
                 pass_b=pass_b,
                 failed_rules_a=failed_a,
@@ -241,6 +339,7 @@ def compare_adapters(
         manifest_b=_project_manifest(read_adapter_manifest(str(adapter_b))),
         total_cases=len(rows),
         identical_count=identical_count,
+        equivalent_count=equivalent_count,
         a_pass_count=a_pass_count,
         b_pass_count=b_pass_count,
         only_a_pass_count=only_a,

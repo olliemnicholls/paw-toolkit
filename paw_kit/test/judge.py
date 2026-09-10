@@ -255,6 +255,17 @@ def anthropic_judge(
     literally the same comparison is not a reliable pass/fail signal, and temperature 0
     is the cheapest available fix that doesn't touch the prompt.
 
+    `temperature` is sent via `extra_body`, not as a typed keyword argument to
+    `client.messages.create`: `anthropic>=1.0` (the version this project actually
+    installs; `pyproject.toml`'s `anthropic` extra now pins `>=1.0`) dropped
+    `temperature` from that method's typed signature, and calling it the old way raises
+    `TypeError: Messages.create() got an unexpected keyword argument 'temperature'` on
+    every judge call before a single request is sent -- see
+    `measurements/README.md`'s "Finetune compiler" section, "paw-test feedback" item 1.
+    The wire API still honours the field regardless of SDK version, so
+    `extra_body={"temperature": ...}` reaches the server the same way the old typed
+    kwarg did, on both the pre-1.0 and post-1.0 SDK.
+
     Imports `anthropic` lazily (only when this factory is actually called), so the rest
     of `paw_kit` -- including every other function in this module -- keeps working
     without the package installed. Raises `ImportError` with an actionable message if
@@ -274,8 +285,8 @@ def anthropic_judge(
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
+            extra_body={"temperature": temperature},
         )
         return "".join(block.text for block in response.content if hasattr(block, "text")).strip()
 

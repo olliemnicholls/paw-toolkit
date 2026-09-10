@@ -478,6 +478,168 @@ def test_compare_report_manifest_projected_to_display_fields(tmp_path: Path, mon
         assert forbidden not in report.manifest_b
 
 
+# ------------------------------------------------------- finding 2: normalized equivalence
+
+
+def test_compare_adapters_json_whitespace_only_difference_is_equivalent_not_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two JSON outputs that differ only in `json.dumps` spacing must not be
+    byte-identical, but must count as `equivalent` -- the exact shape of finding 2's
+    37/60 ticket-triage cases."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": '{"priority":"high","urgency":5}', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": '{"priority": "high", "urgency": 5}', "world": "WORLD"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    hello_row = next(r for r in report.rows if r.input == "hello")
+    assert hello_row.identical is False
+    assert hello_row.match_kind == "equivalent"
+
+    world_row = next(r for r in report.rows if r.input == "world")
+    assert world_row.identical is True
+    assert world_row.match_kind == "byte_identical"
+
+    assert report.identical_count == 1  # only "world"
+    assert report.equivalent_count == 2  # "world" (identical) + "hello" (equivalent)
+    # differing_rows stays byte-level -- unchanged by finding 2.
+    assert [r.input for r in report.differing_rows] == ["hello"]
+    # ...but the whitespace-only split moves it out of the "real" differences.
+    assert [r.input for r in report.genuinely_differing_rows] == []
+    assert [r.input for r in report.equivalent_only_rows] == ["hello"]
+
+
+def test_compare_adapters_json_semantic_difference_is_not_equivalent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two JSON outputs that parse to different values (not just different whitespace)
+    must be classified `different`, not `equivalent`, and must stay in
+    `genuinely_differing_rows`."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": '{"priority": "high"}', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": '{"priority": "low"}', "world": "WORLD"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    hello_row = next(r for r in report.rows if r.input == "hello")
+    assert hello_row.match_kind == "different"
+    assert report.equivalent_count == 1  # only "world"
+    assert [r.input for r in report.genuinely_differing_rows] == ["hello"]
+    assert [r.input for r in report.equivalent_only_rows] == []
+
+
+def test_compare_adapters_non_json_whitespace_collapse_is_equivalent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-JSON text that differs only in whitespace (not both-parse-as-JSON) still
+    counts as equivalent, via Unicode NFC + whitespace-collapse comparison."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": "the   quick brown fox", "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "the quick brown fox", "world": "WORLD"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    hello_row = next(r for r in report.rows if r.input == "hello")
+    assert hello_row.identical is False
+    assert hello_row.match_kind == "equivalent"
+
+
+def test_compare_adapters_only_one_side_json_falls_back_to_text_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If only one side parses as JSON, that is not 'both parse' -- comparison must
+    fall through to the whitespace-normalized *text*, not compare a parsed value
+    against unparsed text."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = tmp_path / "a.paw"
+    adapter_b = tmp_path / "b.paw"
+    _write_mock_manifest(adapter_a, {"hello": '{"a": 1}', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": "not json at all", "world": "WORLD"})
+
+    suite_path = _write_suite(tmp_path, adapter_a)
+    suite = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = compare_adapters(str(adapter_a), str(adapter_b), suite, backend, include_fuzz=False)
+
+    hello_row = next(r for r in report.rows if r.input == "hello")
+    assert hello_row.match_kind == "different"
+
+
+def test_compare_cli_shows_equivalent_count_and_collapses_whitespace_only_heading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI must show a second, clearly-named equivalent-output count in the summary
+    line, and list whitespace-only pairs under their own collapsed heading rather than
+    the main "Differences" listing."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("a.paw")
+    adapter_b = Path("b.paw")
+    _write_mock_manifest(adapter_a, {"hello": '{"a": 1}', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": '{"a":  1}', "world": "WORLD"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    result = runner.invoke(
+        test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz"]
+    )
+    assert result.exit_code == 0
+    out = result.output
+
+    assert "Whitespace-only differences (1/2)" in out
+    assert "1 identical output" in out
+    assert "2 equivalent output" in out
+    # "hello" is whitespace-only, not a real disagreement -- must not appear under the
+    # main "Differences" heading (which should be suppressed entirely here, since there
+    # are zero genuine differences).
+    assert "Differences (" not in out
+
+
+def test_compare_cli_genuine_differences_and_whitespace_only_both_shown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mix of one genuine difference and one whitespace-only difference must show
+    both sections, with the genuine one under "Differences" and the whitespace-only one
+    only under the collapsed heading."""
+    monkeypatch.chdir(tmp_path)
+    adapter_a = Path("a.paw")
+    adapter_b = Path("b.paw")
+    _write_mock_manifest(adapter_a, {"hello": '{"a": 1}', "world": "WORLD"})
+    _write_mock_manifest(adapter_b, {"hello": '{"a":  1}', "world": "wat"})
+    suite_path = _write_suite(tmp_path, adapter_a)
+
+    result = runner.invoke(
+        test_app, ["compare", str(adapter_a), str(adapter_b), str(suite_path), "--no-fuzz"]
+    )
+    assert result.exit_code == 0
+    out = result.output
+
+    assert "Differences (1/2)" in out
+    assert "Whitespace-only differences (1/2)" in out
+    diff_idx = out.index("Differences (1/2)")
+    whitespace_idx = out.index("Whitespace-only differences")
+    world_idx = out.index("world", diff_idx)
+    assert diff_idx < world_idx < whitespace_idx
+
+
 def test_no_unescaped_console_interpolations_in_compare_and_judge_commands():
     """The repo-wide `_e()` AST rule (tests/test_cli.py) scans the whole of cli.py, so
     the `compare`/`judge` commands added there are already covered by it -- this test

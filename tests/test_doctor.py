@@ -137,9 +137,26 @@ def test_api_key_set_is_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PAW_API_KEY", "paw_sk_super_secret_value")
     result = doctor.check_api_key()
     assert result.status == "PASS"
-    assert result.detail == "set"
+    assert "set" in result.detail
     assert "paw_sk_super_secret_value" not in result.detail
     assert "paw_sk_super_secret_value" not in result.remedy
+    # Finding 4: PASS here means the value is set and *looks like* a key -- it must not
+    # claim to have validated it against the service (nothing short of a real compile
+    # does that).
+    assert "valid" not in result.detail.lower()
+    assert "only surfaces on the first" in result.remedy.lower()
+
+
+def test_api_key_set_but_wrong_prefix_is_warn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Finding 4: a syntactically-plausible-but-wrong-shaped value is still just a
+    format check -- WARN, not FAIL, and the remedy must not claim validation."""
+    monkeypatch.setenv("PAW_API_KEY", "sk-not-the-right-prefix")
+    result = doctor.check_api_key()
+    assert result.status == "WARN"
+    assert "does not look like" in result.detail
+    assert "sk-not-the-right-prefix" not in result.detail
+    assert "sk-not-the-right-prefix" not in result.remedy
+    assert "not a validity check" in result.remedy.lower()
 
 
 def test_api_key_unset_is_warn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,6 +216,92 @@ def test_health_fail_on_missing_gpu_services_key() -> None:
 
     result = doctor.check_service_health(api_url="https://fake.example", transport=_transport(handler))
     assert result.status == "WARN"
+
+
+# --------------------------------------- finding 3: status + warnings surfaced honestly
+
+
+def test_health_warn_on_degraded_status_even_with_gpu_services_populated() -> None:
+    """A non-ok/healthy `status` must be surfaced as a WARN with the status text, even
+    when `gpu_services` alone would otherwise have PASSed."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "degraded", "gpu_services": {"worker-1": "up"}})
+
+    result = doctor.check_service_health(api_url="https://fake.example", transport=_transport(handler))
+    assert result.status == "WARN"
+    assert "degraded" in result.detail
+    assert "degraded" in result.remedy
+
+
+def test_health_ok_status_with_populated_gpu_services_and_no_warnings_is_pass() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"status": "ok", "gpu_services": {"worker-1": "up"}, "warnings": []}
+        )
+
+    result = doctor.check_service_health(api_url="https://fake.example", transport=_transport(handler))
+    assert result.status == "PASS"
+
+
+def test_health_lists_every_warning_entry_in_the_message() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "gpu_services": {"worker-1": "up"},
+                "warnings": ["some_other_warning: detail here", "second_warning: more detail"],
+            },
+        )
+
+    result = doctor.check_service_health(api_url="https://fake.example", transport=_transport(handler))
+    assert result.status == "WARN"
+    assert "some_other_warning: detail here" in result.detail
+    assert "second_warning: more detail" in result.detail
+
+
+def test_health_redis_unavailable_warns_about_async_compile_refusal() -> None:
+    """Finding 3, the specific miss: the payload that actually broke the finetune
+    compile (`redis_unavailable`, `gpu_services` empty) must produce a message naming
+    `redis_unavailable` and warning that async compiles (`paw-ft-bs48`) are likely to be
+    refused while fast compiles may still work -- reproducing the exact
+    `measurements/README.md` "Finetune compiler" section payload."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "degraded",
+                "gpu_services": {},
+                "queue_depth": 0,
+                "warnings": ["redis_unavailable: using in-memory global rate limit fallback"],
+            },
+        )
+
+    result = doctor.check_service_health(api_url="https://fake.example", transport=_transport(handler))
+    assert result.status == "WARN"
+    assert "redis_unavailable" in result.detail
+    assert "degraded" in result.detail
+    assert "paw-ft-bs48" in result.remedy
+    assert "async compile" in result.remedy.lower()
+    assert "refused" in result.remedy.lower()
+    # gpu_services empty is still flagged, but softened -- not claimed as the actual
+    # cause of the async-compile refusal.
+    assert "gpu_services is empty" in result.detail
+    assert "compile successfully" in result.remedy.lower() or "fast compiler has been observed" in result.remedy.lower()
+
+
+def test_health_warn_when_gpu_services_empty_remedy_is_softened() -> None:
+    """Finding 3's other half: the empty-`gpu_services` WARN survives, but its remedy
+    must no longer claim compiles are "likely to fail or hang" -- the fast compiler was
+    observed to succeed with it empty."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok", "gpu_services": {}})
+
+    result = doctor.check_service_health(api_url="https://fake.example", transport=_transport(handler))
+    assert result.status == "WARN"
+    assert "issue #5" in result.remedy
+    assert "likely to fail or hang" not in result.remedy
+    assert "compile" in result.remedy.lower() and "successfully" in result.remedy.lower()
 
 
 # ---------------------------------------------------------------- check_base_model_cached
