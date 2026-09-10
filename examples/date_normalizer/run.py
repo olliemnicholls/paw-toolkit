@@ -93,7 +93,9 @@ def main():
     print(f"Total Repaired:      {report.repaired_edge_cases} edge cases resolved by teacher")
     print(f"Recompiled Adapter:  {report.recompiled}")
     print("-" * 75)
-    print("\n[SUCCESS] Neural function hardened against adversarial and distribution shifts!")
+    print("\n[DONE] The loop converged -- on a mock adapter with a stub teacher, so this shows the")
+    print("loop's mechanics only. Against a real adapter and a real teacher it repaired 0 of 11")
+    print("failures on this same suite (see measurements/README.md, 'Active learning, for real').")
     print("Run via CLI anytime: `uv run paw-test check examples/date_normalizer/suite.yaml`\n")
 
 

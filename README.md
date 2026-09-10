@@ -6,28 +6,20 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.04199-b31b1b.svg)](https://arxiv.org/abs/2609.04199)
 
-> **Status: early alpha (v0.1), one person, one weekend.** The harness is built and tested.
-> It runs a real model through the official upstream SDK via `ProgramAsWeightsBackend`,
-> which has now been measured end to end on an RTX 3080 and an A100 (see
-> [`measurements/`](./measurements)) — including a real teacher-vs-compiled-adapter
-> comparison, a real grammar-constrained-decoding test against a live model, a real
-> fail-open test, and a real end-to-end run of the upstream finetune compiler. A few
-> numbers from the first passes of that testing were wrong (arithmetic slips, a
-> cache-discarding bug in a measurement script, transcription errors) and have since
-> been corrected in place, with each mistake left visible rather than quietly fixed —
-> see `measurements/README.md` if you want the specifics before trusting any number in
-> this repo. Everything else runs on a deterministic mock so you can try the workflow
-> with no GPU and no API key. **Semantic correctness — whether the compiled adapter's
-> outputs are actually right, not just fast and schema-shaped — has now been measured,
-> and the honest answer is "it depends, and don't trust the exact percentage past ±2
-> points":** structural-vs-semantic agreement ranged from 60% (a ticket-triage adapter
-> re-scored against a fresh teacher call) to ~90% depending on task; real hallucinations
-> and memorization failures were found by fuzzing, not by inspection; and the LLM judge
-> used to score "semantic" itself flipped its verdict on 4.5% of cases given
-> byte-identical input and output, so every semantic-pass number here carries that much
-> unreported noise. Not a clean "yes it works" — see
-> [`measurements/README.md`](./measurements/README.md#semantic-correctness-for-real-does-it-mean-the-right-thing-not-just-look-right)
-> for the actual breakdown before repeating any percentage from this project as settled.
+> **Status: early alpha (v0.1), one person, one weekend.** The harness — tracing
+> decorator, test runner, schema validation, HTTP server — is built and unit-tested, and
+> its one real backend, `ProgramAsWeightsBackend`, has been run end to end against the
+> upstream service on an RTX 3080 and an A100. What that showed, in one paragraph: a
+> compiled date normaliser answers in ~65 ms on the 3080 (~6 s on CPU) and passes 71/82
+> of its own suite; a compiled ticket-triage adapter replaced a live Claude teacher at
+> ~11x lower latency and zero tokens billed, but agreed with a fresh teacher call on only
+> 60% of tickets; semantic correctness across four tasks ranged from 60% to ~90%, with a
+> ±2-point noise floor from the LLM judge itself. Everything that is not labelled
+> "measured" runs on a deterministic mock — a dictionary lookup, not a model — so the
+> workflow can be tried with no GPU and no API key. Several first-pass numbers were wrong
+> and are corrected in place, visibly, in
+> [`measurements/README.md`](./measurements/README.md); read it before repeating any
+> figure from this repo.
 
 ---
 
@@ -66,12 +58,12 @@ a frontier API, and who want evidence before they trust it:
 
 | Component | State | Exercised against |
 |---|---|---|
-| Tracing decorator, SQLite trace DB, background compile, hot-swap, fail-open | Implemented, unit-tested, **and run for real**: a real Claude teacher + real compiled adapter (~11x steady-state latency, not yet checked for output *correctness*), plus two real induced failures (one confirmed clean fallback, one inconclusive) | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the numbers above — see [`measurements/`](./measurements) |
-| `suite.yaml` runner, fuzzer, active-learning loop | Implemented, unit-tested, **and run for real** against the real 11/82 fuzzer failures below with a live Claude teacher: 0 repaired, correctly — the teacher declines to hallucinate labels the suite's own assertions would reject, surfacing a gap in the suite's assertions rather than the model | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the run above — see [`measurements/`](./measurements) |
-| Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **and confirmed against a real model**: 15/15 valid Pydantic parses (100%) both raw and fence-stripped, vs 0/15 raw / 11/15 (73%) fence-stripped unconstrained. **Not shipped wired into any `paw_kit` backend**, but no longer for want of a place to put it: masking has now been driven against a real upstream-compiled adapter (a bare-string adapter forced into a JSON schema it was never trained on: 4/5 structurally valid, 0.40ms/token masking — structural validity only, and the schema's `kind` field came out `"mobile"` for all four regardless of input) by injecting it into the llama.cpp sampling loop the upstream SDK already runs — see [`measurements/`](./measurements). That path reaches a *private* SDK attribute and is an experiment, not a shipped feature; the blocker to shipping it is a one-time-per-schema FSM warm-up (~1.7s per new state), not the absence of a runtime | Real generation on `Qwen2.5-0.5B-Instruct`; an initial ~13x latency-cost measurement was a caching bug in the test script (fixed) — properly measured on that model, constrained decoding is roughly on par with unconstrained once warm. That does **not** generalise to the upstream-adapter probe in the same cell, where the median constrained call was 3.2 s against 85 ms unconstrained because each new FSM state costs ~1.7 s to build; see [`measurements/`](./measurements) |
-| HTTP server, Docker export, dataset export, CLI | Implemented, unit-tested | `MockPAWBackend` |
-| `ProgramAsWeightsBackend` (official upstream SDK) | Implemented, unit-tested against a fake SDK, **and run end-to-end against the real service and a real model** | Real compile + inference on an RTX 3080 and an A100; see [`measurements/`](./measurements) |
-| `MockPAWBackend` | A dictionary lookup that returns canned strings. It is a test double, not a model. | n/a |
+| Tracing decorator, SQLite trace DB, background compile, hot-swap, fail-open | Implemented, unit-tested, **and run for real**: a live Claude teacher hot-swapped to a real compiled adapter (~11x lower steady-state latency, zero tokens billed afterwards; 60% full agreement with a fresh teacher call on the same tickets). One real induced failure (adapter file deleted) fell open cleanly; a second (bad API key) was inconclusive because the service accepted the key | `MockPAWBackend` for unit tests; real teacher + `ProgramAsWeightsBackend` for the numbers — [`measurements/`](./measurements) |
+| `suite.yaml` runner, fuzzer, active-learning loop | Implemented, unit-tested, **and run for real** against 11 real fuzzer failures with a live Claude teacher: **0 repaired**, and correctly so — every teacher label failed the suite's own assertions (the suite had no "not a date" case), so the loop refused to train on them. The loop is bounded and best-effort, not a guarantee | Same as above |
+| Pydantic-to-regex compiler and FSM logits processor | Implemented, unit-tested, **confirmed against a real model** (15/15 valid Pydantic parses vs 0/15 raw and 11/15 fence-stripped unconstrained; no latency cost once warm), and driven once against a real upstream adapter through a **private** SDK attribute (4/5 structurally valid; the constrained value of one field was constant regardless of input; ~1.7 s warm-up per new FSM state, so 47 s on the first call). **No shipped backend applies it.** `paw.load` validates after generation instead | `Qwen2.5-0.5B-Instruct` via transformers; one upstream adapter via a monkeypatched llama.cpp sampler. Both are measurement scripts, not shipped code — [`measurements/`](./measurements) |
+| HTTP server, Docker export, dataset export, CLI | Implemented, unit-tested | `MockPAWBackend` only |
+| `ProgramAsWeightsBackend` (official upstream SDK) | Implemented, unit-tested against a fake SDK, **and run end to end against the real service** with both upstream compilers | Real compile + inference on an RTX 3080 (CPU and CUDA) and an A100 — [`measurements/`](./measurements) |
+| `MockPAWBackend` | A dictionary lookup that returns canned strings. It is a test double, not a model | n/a |
 
 The demo command and the three examples all run on the mock. When they print "local
 adapter" they mean the dictionary lookup. They demonstrate the *control flow* of the
@@ -104,6 +96,12 @@ export PAW_API_KEY=paw_sk_...
 `programasweights==0.4.4`). No API key is required to *run* an already-compiled program;
 only to compile a new one.
 
+Two things to know before the first real call: the `llama-cpp-python` wheel this pulls
+from PyPI is **CPU-only** — on this repo's date normaliser that meant ~5.9 s per call
+against ~65 ms once a CUDA build was in place (the build notes are at the end of
+[`measurements/README.md`](./measurements/README.md#if-inference-is-unexpectedly-slow-seconds-not-milliseconds));
+and the first call to any program downloads the ~600 MB base model into the SDK's cache.
+
 `paw-kit[measure]` is a separate, optional extra pulling PyTorch/transformers. It exists
 only to reproduce `scripts/measure_schema_real_model.py`, which backs the
 constrained-decoding numbers in [`measurements/`](./measurements). It is **not** a backend
@@ -122,18 +120,14 @@ uv run python examples/pii_scrubber/run.py
 uv run python examples/date_normalizer/run.py
 ```
 
-The same thing in code. Compilation triggers at the end of call 3 (`threshold=3`); call 4
-onward *may* route to the adapter, once the (asynchronous, by default) compile finishes —
-matching what `paw-kit demo` itself prints (try it, it's the same threshold). The status
-is printed explicitly below rather than left for you to infer from the returned value,
-because with `MockPAWBackend` — a literal-input-match lookup, not a real model — a
-teacher call and a hot-swapped call can return an identical-looking value for reasons
-that have nothing to do with whether the hot-swap actually happened, and eyeballing
-output values is exactly how that distinction silently went missing from this example
-before (caught by review, 2026-09-08: this block previously varied the ticket text on
-every call, which a literal-match mock can never generalize across, so it was silently
-falling back to the teacher on *every* call via the decorator's own fail-open path — the
-"hot-swap" that block claimed to demonstrate was never actually happening):
+The same thing in code. Compilation triggers at the end of call 3 (`threshold=3`); from
+call 4 the decorator routes to the adapter once the compile (asynchronous by default) has
+finished. The status is printed explicitly rather than inferred from the returned value:
+with `MockPAWBackend` a teacher call and a hot-swapped call return identical-looking
+values whether or not the swap happened. (An earlier version of this block varied the
+ticket text per call, which a literal-match mock can never match, so every call was
+silently falling back to the teacher through the decorator's fail-open path — caught in
+review 2026-09-08. `wrapper.get_fail_open_count()` now exists so you can check.)
 
 ```python
 from pydantic import BaseModel
@@ -159,16 +153,12 @@ def triage_ticket(ticket_body: str) -> SupportTriage:
     # In real use, this body is your existing Claude/OpenAI call.
     return SupportTriage(priority="high", department="billing", urgency_score=4)
 
-ticket = "Invoice refund needed for charge #1!"  # same input every call, on purpose --
-# MockPAWBackend only ever matches input it has seen verbatim before; varying the text
-# per call (as this example used to) means it can never match, and every call silently
-# falls back to `triage_ticket`'s own body via fail-open, whether or not compilation
-# actually finished. That's a real property of MockPAWBackend worth knowing, not a
-# demo-only quirk -- your own inputs will vary at threshold, and MockPAWBackend does
-# not generalize across them either.
+ticket = "Invoice refund needed for charge #1!"  # same input every call, on purpose:
+# MockPAWBackend only matches input it has seen verbatim. Vary the text and every
+# post-threshold call falls open to `triage_ticket`'s own body, silently.
 for i in range(1, 6):
     served_by = triage_ticket.db.get_status(triage_ticket.task_id)  # "tracing" / "compiling" / "ready"
-    print(i, served_by, triage_ticket(ticket))
+    print(i, served_by, triage_ticket(ticket), triage_ticket.get_fail_open_count())
 ```
 
 ---
@@ -201,6 +191,21 @@ class Triage(BaseModel):
 def triage_ticket(body: str) -> Triage:
     return call_your_llm(body)      # traced until threshold, then compiled and replaced
 ```
+
+What to expect, from the runs in [`measurements/`](./measurements) (one machine each, one
+run each — indicative, not a benchmark):
+
+- **Compile**: 1–5 s wall time with the default fast compiler; ~3 min with `paw-ft-bs48`.
+  On one phone-extraction task the two produced byte-identical output on 132 of 134 inputs.
+- **First call**: 2 s to ~110 s, depending on whether the base model and program are
+  already in the SDK cache.
+- **Steady state**: ~65 ms per call on an RTX 3080, ~89 ms on a shared A100, ~5.9 s on
+  the CPU-only PyPI wheel. The model is small enough that GPU class barely matters; GPU
+  versus CPU matters ~90x.
+- **Quality**: task-dependent and the thing to test, not assume. Structural pass rates of
+  0% to 100% on the same task depending on whether the spec pins down the output format;
+  60% full agreement with a fresh teacher call on ticket triage; one clear fabricated
+  answer (`1-800-FLOWERS` → invented digits) found by the fuzzer.
 
 Two limitations come straight from the upstream API and are worth knowing before you
 plan around them:

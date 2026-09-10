@@ -43,7 +43,7 @@ def _e(value: object) -> str:
 # to parse as JSON. See `inspect()` below.
 _MAX_INSPECT_FILE_BYTES = 50 * 1024 * 1024
 
-app = typer.Typer(help="PAW-Kit: Production Runtime & Reliability Toolkit for Program-as-Weights")
+app = typer.Typer(help="paw-kit: reliability and migration harness for Program-as-Weights (PAW) neural functions")
 test_app = typer.Typer(help="paw-test: Test runner and active-learning self-healing suite")
 test_app.__test__ = False  # Prevent pytest from treating Typer instance as a test suite
 
@@ -641,7 +641,7 @@ def serve(
         "or PAW_API_KEY is configured.",
     ),
 ) -> None:
-    """Launch high-performance OpenAI & Anthropic compatible HTTP microservice."""
+    """Serve an adapter over HTTP with OpenAI- and Anthropic-compatible endpoints."""
     if not adapter_path.exists():
         console.print(f"[bold red]Error:[/bold red] Adapter file '{_e(adapter_path)}' does not exist.")
         raise typer.Exit(code=1)
@@ -694,7 +694,7 @@ def export_docker_cmd(
     adapter_path: Path = typer.Argument(..., help="Path to compiled .paw adapter artifact"),
     out_dir: Path = typer.Option(Path("./docker"), "--out-dir", "-o", help="Output directory for Docker assets"),
 ) -> None:
-    """Generate production-ready Dockerfile and docker-compose deployment assets."""
+    """Generate a Dockerfile and docker-compose scaffold for serving an adapter."""
     if not adapter_path.exists():
         console.print(f"[bold red]Error:[/bold red] Adapter file '{_e(adapter_path)}' does not exist.")
         raise typer.Exit(code=1)

@@ -1,7 +1,7 @@
 """FastAPI HTTP microservice serving compiled .paw adapters.
 
 Exposes OpenAI-compatible (/v1/chat/completions), Anthropic-compatible (/v1/messages),
-and direct RPC (/invoke) endpoints with grammar-constrained decoding and telemetry.
+and direct RPC (/invoke) endpoints with post-generation Pydantic validation and telemetry.
 """
 
 from collections import OrderedDict, deque

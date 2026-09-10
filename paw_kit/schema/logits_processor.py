@@ -83,8 +83,10 @@ def _compile_fsm_safe(pattern: str) -> FSM:
 class RegexLogitsProcessor:
     """Masks token logits at each autoregressive step using an FSM compiled from a regex.
 
-    Guarantees 0.0% syntax failure by setting the probability of any token that would
-    lead to an invalid state to -infinity.
+    Where it is applied to a sampling loop, every token that would leave the regex's
+    language has its logit set to -infinity, so structural validity is a property of the
+    FSM rather than a probability (15/15 valid parses against a real model, see
+    `measurements/`). No backend shipped in `paw_kit` applies it; `scripts/` show how.
     """
 
     def __init__(

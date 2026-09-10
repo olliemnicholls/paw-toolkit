@@ -1,6 +1,6 @@
 # Example 3: Test-Driven Neural Hardening & Active Learning (`paw.test`)
 
-This example demonstrates how `paw-kit` solves the core challenge of deploying small neural functions in production: **resilience against adversarial edge cases, strange formatting, and distribution drift**.
+This example shows the loop `paw-kit` uses to go after **adversarial edge cases, strange formatting, and distribution drift** in a small neural function: fuzz, find failures, ask a teacher for labels, recompile. Whether it helps is task-dependent — see the note at the end.
 
 ## What It Does
 
@@ -19,8 +19,11 @@ This example demonstrates how `paw-kit` solves the core challenge of deploying s
 
 **Note:** in this example both the "teacher" and the adapter are deterministic Python stubs
 (`MockPAWBackend`), so the loop always converges. That demonstrates the loop's mechanics, not
-that active learning improves a real compiled function. Measuring the latter is the point of
-`scripts/measure_real_backend.py` in the repo root.
+that active learning improves a real compiled function. It has been run for real — a real
+compiled adapter, a live Claude teacher, this same suite — and repaired **0 of 11** failures,
+correctly: every teacher label failed the suite's own assertions, because the suite has no
+"not a date" case for whitespace-only input. See `measurements/README.md`, "Active learning,
+for real". The loop is bounded and best-effort; it does not promise 100%.
 
 ## Running the Example
 

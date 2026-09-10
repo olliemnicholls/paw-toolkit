@@ -4,8 +4,8 @@ This example demonstrates how to use the `@compile_on_hit` decorator from `paw-k
 
 ## What It Does
 
-1. **Calls 1 to 5 (Remote Teacher Tracing)**: Production requests are routed to the teacher LLM (e.g. Claude 3.5 Sonnet / GPT-4o). Inputs and teacher responses are captured transparently in an embedded SQLite database (`.paw/traces.db`).
-2. **Threshold Reached (Call 5)**: When call volume reaches the designated threshold (5 calls in this demo, typically 50-100 in production), `paw-kit` asynchronously compiles the specification and collected dataset into a local `.paw` adapter.
+1. **Calls 1 to 5 (Remote Teacher Tracing)**: Requests go to the wrapped function, which in real use is your Claude/OpenAI call. In this example it is `simulated_remote_llm`: a `time.sleep(0.2)` plus keyword rules, no network. Inputs and outputs are captured in an embedded SQLite database (`.paw_demo_triage/traces.db`).
+2. **Threshold Reached (Call 5)**: When the call count reaches the threshold (5 here; the decorator's default is 50), `paw-kit` compiles the specification, with the traced pairs folded in as examples, into a local `.paw` adapter in a background thread.
 3. **Calls 6 to 10 (Hot-Swap to Local Neural Function)**: Once compiled, subsequent calls are automatically redirected to the local adapter. In this demo the "local adapter" is `MockPAWBackend` (a dictionary lookup, not a real model), so the timing shown is illustrative of the intended hot-swap mechanism, not a measured benchmark of real model inference.
 4. **Fail-Open Fallback**: If local execution throws an error or schema validation fails, `paw-kit` transparently fails open back to the remote teacher.
 

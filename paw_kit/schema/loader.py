@@ -53,8 +53,11 @@ def load(
 ) -> Callable[[str], T]:
     """Load a compiled PAW adapter and bind it to a strict Pydantic response schema.
 
-    Enforces token-level grammar constraints, validates outputs, and routes to
-    fallback_provider if local execution fails or schema is violated.
+    Compiles the schema to a regex and passes it to the backend as `grammar_constraint`,
+    but no shipped backend applies it at decoding time (see the README's "what is real"
+    table). What this function actually enforces is post-generation Pydantic validation:
+    output that fails to parse as `response_model` is routed to `fallback_provider`, or
+    raised as `PAWSchemaError` if none is configured.
 
     Args:
         adapter_path: Path to the .paw adapter artifact.

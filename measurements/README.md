@@ -69,11 +69,19 @@ calls). The compiled model's classifications aren't identical to Claude's on eve
 fine-tuned on a real dataset (see the upstream-limitation note in the main README). One
 thing this test did *not* measure, and probably should have: whether the compiled
 adapter's classifications are actually *right*, as opposed to merely fast and
-schema-shaped — looking at the raw data, calls 7-20 return `medium/technical/3` nine
-times out of fourteen, which is at minimum worth checking isn't near-degenerate output
-before quoting "11.2x" as if it were a like-for-like speedup on real work. **This was
-checked directly — see "Semantic correctness, for real" below: 60% full agreement with a
-fresh teacher call, and the medium-clustering pattern noted here is real, not noise.**
+schema-shaped — looking at the raw data, calls 7-20 return `priority=medium, urgency=3`
+nine times out of fourteen (six of those `medium/technical/3`), which is at minimum worth
+checking isn't near-degenerate output before quoting "11.2x" as if it were a
+like-for-like speedup on real work. **This was checked directly — see "Semantic
+correctness, for real" below: 60% full agreement with a fresh teacher call, and the
+medium-clustering pattern noted here is real, not noise.**
+
+> **Corrected 2026-09-09, public-material review.** The sentence above originally read
+> "`medium/technical/3` nine times out of fourteen". Recounted from
+> `jit-speedup-3080-20260908-165914.json`: the exact triple `medium/technical/3` appears
+> **six** times in calls 7-20; it is `medium` priority with urgency `3` that appears nine
+> times (six technical, two billing, one sales). The clustering claim stands; the count
+> attached to it did not.
 
 ## Active learning, for real: a genuine spec gap, not a bug
 
@@ -410,9 +418,13 @@ job reached `status: ready` with a distinct `program_id` (`42db8135a1ac0089ce3d`
 fast compiler's `1b070b72ff231d4710c3` for the same spec), and the resulting program
 downloaded and ran locally like any other. Compile took **180.8s against the fast
 compiler's 1.0–5.0s** on the same machine (`compile_wall_s` in the three hardware runs at
-the top of this file) — 36–180x, and squarely inside the "~2-5 min" the upstream
+the top of this file) — roughly 36–175x, and squarely inside the "~2-5 min" the upstream
 `list_compilers()` description advertises for this compiler. That is not a hang and not a
-surprise; it is the advertised cost.
+surprise; it is the advertised cost. (The 180.8 s figure was printed by the script and is
+not persisted in the run's JSON — `compile_s` is not a field of that artifact, as the
+deferred-topics log already notes — so unlike every other number in this section it
+cannot be re-derived from a committed file. The manifest's `compiled_at` and the run's
+timestamp are consistent with it, no more.)
 
 **The headline is not in the percentages. 132 of the 134 outputs are byte-identical to
 the fast compiler's.** Not similar — identical. Every one of the 8 standard cases, every
