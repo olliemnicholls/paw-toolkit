@@ -1315,7 +1315,7 @@ def doctor(
         table.add_column("Check", style="cyan", no_wrap=True)
         table.add_column("Status")
         table.add_column("Detail")
-        table.add_column("Remedy")
+        table.add_column("Remedy", overflow="fold")
         status_style = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
         for res in results:
             style = status_style.get(res.status, "white")
@@ -1419,16 +1419,33 @@ def serve(
 def export_docker_cmd(
     adapter_path: Path = typer.Argument(..., help="Path to compiled .paw adapter artifact"),
     out_dir: Path = typer.Option(Path("./docker"), "--out-dir", "-o", help="Output directory for Docker assets"),
+    backend_type: str = typer.Option(
+        "real",
+        "--backend",
+        "-b",
+        help="Backend the generated container actually serves: mock | real. Threaded "
+        "into the generated CMD's --backend flag, requirements.txt (real pulls in the "
+        "SDK extra), and the HEALTHCHECK/comments, so none of them describe a backend "
+        "the container doesn't run. Defaults to real -- a container that only ever "
+        "serves the mock is a demo, not a deployment.",
+    ),
 ) -> None:
     """Generate a Dockerfile and docker-compose scaffold for serving an adapter."""
     if not adapter_path.exists():
         console.print(f"[bold red]Error:[/bold red] Adapter file '{_e(adapter_path)}' does not exist.")
         raise typer.Exit(code=1)
 
+    resolved_backend = backend_type.strip().lower()
+    if resolved_backend not in ("mock", "real"):
+        console.print(
+            f"[bold red]Error:[/bold red] Unknown --backend {_e(repr(backend_type))}. Expected 'mock' or 'real'."
+        )
+        raise typer.Exit(code=1)
+
     from paw_kit.serve.docker import export_docker_scaffold
 
     try:
-        dest = export_docker_scaffold(adapter_path=adapter_path, output_dir=out_dir)
+        dest = export_docker_scaffold(adapter_path=adapter_path, output_dir=out_dir, backend=resolved_backend)
         console.print(f"[bold green]Docker deployment assets successfully generated in:[/bold green] {_e(dest.resolve())}")
         console.print("  - Dockerfile")
         console.print("  - .dockerignore")

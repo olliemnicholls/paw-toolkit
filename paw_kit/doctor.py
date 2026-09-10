@@ -258,7 +258,14 @@ def check_base_model_cached() -> CheckResult:
 @_guarded("Cached programs")
 def check_cached_programs(adapter_path: Optional[str] = None) -> CheckResult:
     """Count locally cached compiled programs, and, if `adapter_path` is given, whether
-    that specific adapter's program is fully offline-ready."""
+    that specific adapter's program is fully offline-ready.
+
+    `--adapter` is meant for a `ProgramAsWeightsBackend` manifest; `read_manifest`
+    raises `ValueError` for any other backend's manifest shape (e.g. the mock backend,
+    which is what the default backend and `paw-kit demo` write). That is not a broken
+    environment -- "offline readiness" simply does not apply to a mock adapter -- so it
+    is reported as a WARN, not treated as a check failure.
+    """
     from programasweights import is_offline_ready, list_cached_programs
 
     programs = list_cached_programs()
@@ -269,7 +276,15 @@ def check_cached_programs(adapter_path: Optional[str] = None) -> CheckResult:
 
     from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 
-    manifest = ProgramAsWeightsBackend.read_manifest(adapter_path)
+    try:
+        manifest = ProgramAsWeightsBackend.read_manifest(adapter_path)
+    except ValueError:
+        return CheckResult(
+            "Cached programs",
+            "WARN",
+            "offline readiness does not apply to a mock-backend manifest",
+            "",
+        )
     program_id = manifest.get("program_id") or manifest.get("slug")
     ready = is_offline_ready(program_id)
     detail += f"; {adapter_path} (program_id={program_id}) offline_ready={ready}"
@@ -307,13 +322,27 @@ def run_checks(
 
     `offline` skips every check that touches the network (today, just the upstream
     service health check) instead of running it.
+
+    If `check_sdk_importable()` itself fails, every check that needs the SDK to do
+    anything meaningful (`llama_cpp` -- bundled by the SDK install; the upstream
+    service health check's default-URL lookup; the base-model cache; cached programs)
+    is emitted as a WARN "skipped (SDK not installed)" instead of being run. Each of
+    those would otherwise raise its own opaque `ModuleNotFoundError` and FAIL, burying
+    check #1's one real cause under 3-4 copies of the same underlying symptom on a
+    stock install. A WARN never affects the process exit code -- `paw-kit doctor`
+    exits 1 only when a real FAIL is present -- so a stock install without the
+    optional SDK now reports exactly one FAIL, not several.
     """
-    results: List[CheckResult] = [
-        check_sdk_importable(),
-        check_llama_cpp(),
-        check_gpu_visible(),
-        check_api_key(),
-    ]
+    sdk_result = check_sdk_importable()
+    sdk_missing = sdk_result.status == "FAIL"
+
+    def _skipped(name: str) -> CheckResult:
+        return CheckResult(name, "WARN", "skipped (SDK not installed)", sdk_result.remedy)
+
+    results: List[CheckResult] = [sdk_result]
+    results.append(_skipped("llama_cpp") if sdk_missing else check_llama_cpp())
+    results.append(check_gpu_visible())
+    results.append(check_api_key())
 
     if offline:
         results.append(
@@ -324,10 +353,17 @@ def run_checks(
                 "Run without --offline to check upstream service health.",
             )
         )
+    elif sdk_missing and api_url is None:
+        # check_service_health only touches `programasweights` itself to resolve the
+        # default API URL when none is given (see its `if api_url is None:` branch);
+        # an explicit api_url (tests, or a future --api-url flag) needs no SDK at all.
+        results.append(_skipped("Upstream service health"))
     else:
         results.append(check_service_health(api_url=api_url, timeout_s=timeout_s, transport=transport))
 
-    results.append(check_base_model_cached())
-    results.append(check_cached_programs(adapter_path))
+    results.append(_skipped("Base model cache") if sdk_missing else check_base_model_cached())
+    results.append(
+        _skipped("Cached programs") if sdk_missing else check_cached_programs(adapter_path)
+    )
     results.append(check_rate_limit_note())
     return results

@@ -134,9 +134,11 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         ephemeral: Forwarded to upstream `compile`/`compile_async` as-is; see the SDK's
             own documentation for its effect.
         compile_retries: Extra attempts for the actual `paw.compile`/`paw.compile_async`
-            HTTP call, after a timeout or 5xx (server-side, transient) response, with a
-            short backoff between attempts. A 4xx (bad request, invalid API key, rate
-            limit) is never retried -- retrying it changes nothing. `0` disables retrying.
+            HTTP call, after a connect failure (`httpx.ConnectTimeout`/`ConnectError` --
+            the request provably never reached the server) or a 5xx other than 504
+            (server-side, transient), with a short backoff between attempts. A read
+            timeout, a 504, or a 4xx (bad request, invalid API key, rate limit) is never
+            retried -- see `_invoke_compile`'s docstring for why. `0` disables retrying.
         sdk: Test seam. Any object exposing `compile`, `compile_async`,
             `get_compile_status` and `function` with the upstream signatures. Defaults to
             the real `programasweights` module, imported lazily on first use.
@@ -307,51 +309,145 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         return output_path
 
     def _invoke_compile(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        """Call `fn` (`paw.compile` or `paw.compile_async`), converting an httpx timeout
-        or HTTP error response into a `RuntimeError` naming the service, the status, and
-        `paw-kit doctor` -- rather than letting a raw httpx exception (whose message says
-        nothing about which call failed or what to do about it) reach the caller.
+        """Call `fn` (`paw.compile` or `paw.compile_async`), converting an httpx
+        connect failure or HTTP error response into a `RuntimeError` naming the
+        service and what happened -- rather than letting a raw httpx exception (whose
+        message says nothing about which call failed or what to do about it) reach
+        the caller.
 
-        A timeout or 5xx (server-side, transient) response is retried up to
-        `self.compile_retries` additional times with a short backoff. A 4xx (bad
-        request, invalid API key, rate limit) is never retried -- retrying it wastes a
-        rate-limited attempt on something that will fail again identically.
+        Retry policy, deliberately narrow: `paw.compile`/`paw.compile_async` is a POST
+        that is *not idempotent*. Resubmitting it after the server has already seen the
+        request queues a second compile, spends a second unit of the rate-limited
+        quota, and (on the finetune path) discards the first attempt's `job_id`, making
+        that job unpollable. So only `httpx.ConnectTimeout`/`httpx.ConnectError` (the
+        TCP handshake itself failed or timed out -- the request provably never reached
+        the server) are retried, up to `self.compile_retries` additional times with a
+        short backoff. Every other timeout (`httpx.ReadTimeout` and friends: the
+        request was sent and the server may already be compiling) is raised
+        immediately, *not* retried -- the message explains that the compile may still
+        be running server-side and that re-running with the same spec will hit the
+        compile cache once it finishes, instead of paying for a second compile. A 5xx
+        response is retried the same way as a connect failure, *except* 504 (gateway
+        timeout), which carries the same "already landed, still working" ambiguity as
+        a read timeout and so is also never retried. A 4xx (bad request, invalid API
+        key, rate limit) is never retried either -- retrying it wastes a rate-limited
+        attempt on something that will fail again identically.
         """
         attempt = 0
         while True:
             try:
                 return fn(*args, **kwargs)
-            except httpx.TimeoutException as exc:
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
                 if attempt < self.compile_retries:
                     attempt += 1
                     time.sleep(self._COMPILE_RETRY_BACKOFF_S * attempt)
                     continue
                 raise RuntimeError(
-                    "ProgramAsWeights compile service timed out after "
-                    f"{attempt + 1} attempt(s). Run `paw-kit doctor` to check service "
-                    "health."
+                    "ProgramAsWeights compile service was unreachable after "
+                    f"{attempt + 1} attempt(s) (connection never established). Run "
+                    "`paw-kit doctor` to check service health."
+                ) from exc
+            except httpx.TimeoutException as exc:
+                raise RuntimeError(
+                    "ProgramAsWeights compile service timed out waiting for a "
+                    f"response ({type(exc).__name__}). This was not retried: the "
+                    "request may already have reached the server, and the compile "
+                    "may still be running there. Re-running this compile with the "
+                    "same spec will hit the compile cache once it finishes, instead "
+                    "of starting a second one -- do not assume this attempt failed "
+                    "outright."
                 ) from exc
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code if exc.response is not None else None
-                if status_code is not None and status_code >= 500 and attempt < self.compile_retries:
+                body = exc.response.text[:300] if exc.response is not None else ""
+                retryable_5xx = (
+                    status_code is not None and 500 <= status_code < 600 and status_code != 504
+                )
+                if retryable_5xx and attempt < self.compile_retries:
                     attempt += 1
                     time.sleep(self._COMPILE_RETRY_BACKOFF_S * attempt)
                     continue
+                detail = f" Response: {body}" if body else ""
+                if status_code is not None and 400 <= status_code < 500:
+                    # PAW-DOCTOR advice diagnoses nothing here: a 4xx is a client-side
+                    # problem (bad request, invalid key, rate limit), not a service
+                    # health issue -- the response body (appended above) carries the
+                    # actual reason.
+                    raise RuntimeError(
+                        f"ProgramAsWeights compile service returned HTTP {status_code} "
+                        f"after {attempt + 1} attempt(s).{detail}"
+                    ) from exc
                 raise RuntimeError(
                     f"ProgramAsWeights compile service returned HTTP {status_code} "
                     f"after {attempt + 1} attempt(s). Run `paw-kit doctor` to check "
-                    "service health."
+                    f"service health.{detail}"
                 ) from exc
 
+    #: How many *consecutive* transient poll failures `_wait_for_job` tolerates
+    #: before giving up. Unlike the initial compile submission (`_invoke_compile`),
+    #: `get_compile_status` is a GET and idempotent -- polling it again after a
+    #: failure changes nothing server-side, so it is safe to retry liberally here.
+    _MAX_CONSECUTIVE_POLL_FAILURES = 5
+    #: Backoff applied after the 1st..5th consecutive poll failure, in order (index 0
+    #: for the 1st failure, ... index 4 for the 5th); the 5th value (60s) is reused
+    #: for any failure beyond the 5th, but by then `_MAX_CONSECUTIVE_POLL_FAILURES`
+    #: has already raised, so in practice this list is never indexed past its end.
+    _POLL_FAILURE_BACKOFF_S: "tuple[float, ...]" = (5.0, 10.0, 20.0, 40.0, 60.0)
+
     def _wait_for_job(self, paw: Any, job: Any) -> tuple[str, Optional[str], str, Any]:
-        """Poll `get_compile_status` until the job reaches a terminal state."""
+        """Poll `get_compile_status` until the job reaches a terminal state.
+
+        A single transient failure while polling (an httpx timeout, a connect error,
+        or a 5xx response) used to propagate as a raw exception and throw away an
+        in-progress compile that might be an hour into a finetune. Status polling is
+        idempotent (a GET, unlike the compile submission itself), so this tolerates up
+        to `_MAX_CONSECUTIVE_POLL_FAILURES` *consecutive* such failures, backing off
+        between retries per `_POLL_FAILURE_BACKOFF_S`, and resets the failure count on
+        any successful poll. Once that many failures happen in a row, it gives up and
+        raises a `RuntimeError` naming `job_id` so the caller can poll the job again
+        later by hand -- the compile itself may well still be running. The overall
+        `compile_timeout_s` wall-clock cap still applies on top of this.
+        """
         job_id = job.get("job_id") if isinstance(job, dict) else getattr(job, "job_id", None)
         if not job_id:
             raise RuntimeError(f"compile_async returned no job_id: {job!r}")
 
         deadline = time.monotonic() + self.compile_timeout_s
+        consecutive_failures = 0
         while True:
-            status_obj = paw.get_compile_status(job_id)
+            failure_exc: Optional[Exception] = None
+            status_obj: Any = None
+            try:
+                status_obj = paw.get_compile_status(job_id)
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                failure_exc = exc
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code if exc.response is not None else None
+                if status_code is not None and 500 <= status_code < 600:
+                    failure_exc = exc
+                else:
+                    raise
+
+            if failure_exc is not None:
+                consecutive_failures += 1
+                if consecutive_failures > self._MAX_CONSECUTIVE_POLL_FAILURES:
+                    raise RuntimeError(
+                        f"ProgramAsWeights compile {job_id} could not be polled: "
+                        f"{consecutive_failures} consecutive transient failures "
+                        f"(last: {type(failure_exc).__name__}: {failure_exc}). The "
+                        "compile may still be running server-side -- poll it again "
+                        f"later with this job_id: {job_id}"
+                    ) from failure_exc
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"ProgramAsWeights compile {job_id} still unreachable after "
+                        f"{self.compile_timeout_s}s"
+                    ) from failure_exc
+                backoff_idx = min(consecutive_failures, len(self._POLL_FAILURE_BACKOFF_S)) - 1
+                time.sleep(self._POLL_FAILURE_BACKOFF_S[backoff_idx])
+                continue
+
+            consecutive_failures = 0
             get = status_obj.get if isinstance(status_obj, dict) else lambda k, d=None: getattr(status_obj, k, d)
             status = str(get("status") or "").lower()
             program_id = get("program_id")

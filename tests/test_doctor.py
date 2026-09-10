@@ -277,6 +277,29 @@ def test_cached_programs_with_adapter_not_offline_ready_is_warn(
     assert "offline_ready=False" in result.detail
 
 
+def test_cached_programs_with_mock_adapter_is_warn_not_fail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--adapter` pointed at a mock-backend manifest (what the default backend and
+    `paw-kit demo` write) must WARN, not FAIL: `ProgramAsWeightsBackend.read_manifest`
+    raises `ValueError` for any manifest whose `backend` isn't "programasweights", and
+    offline readiness simply does not apply to a mock adapter -- it is not a broken
+    environment."""
+    import programasweights as paw
+    from paw_kit.backend.mock import MockPAWBackend
+
+    manifest_path = tmp_path / "mock.paw"
+    MockPAWBackend().compile(spec="demo", examples=[], output_path=str(manifest_path))
+    assert json.loads(manifest_path.read_text())["backend"] == "mock"
+
+    monkeypatch.setattr(paw, "list_cached_programs", lambda: [])
+
+    result = doctor.check_cached_programs(adapter_path=str(manifest_path))
+    assert result.status == "WARN"
+    assert result.status != "FAIL"
+    assert result.detail == "offline readiness does not apply to a mock-backend manifest"
+
+
 # ---------------------------------------------------------------- check_rate_limit_note
 
 
@@ -331,6 +354,81 @@ def test_run_checks_online_uses_service_health_check(
     results = doctor.run_checks(offline=False, api_url="https://fake.example", transport=_transport(handler))
     health = next(r for r in results if r.name == "Upstream service health")
     assert health.status == "PASS"
+
+
+def test_run_checks_skips_sdk_dependent_checks_when_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stock install without the optional SDK used to emit 3-4 opaque
+    ModuleNotFoundError FAILs (llama_cpp, upstream service health's default-URL
+    lookup, base-model cache, cached programs) on top of check #1's one real FAIL.
+    Once `check_sdk_importable()` itself fails, every one of those must be skipped as
+    a WARN instead of actually run -- leaving exactly one FAIL in the whole run."""
+    monkeypatch.setitem(sys.modules, "programasweights", None)
+
+    results = doctor.run_checks(offline=False)
+    by_name = {r.name: r for r in results}
+
+    assert by_name["programasweights SDK"].status == "FAIL"
+    for name in ("llama_cpp", "Upstream service health", "Base model cache", "Cached programs"):
+        assert by_name[name].status == "WARN", name
+        assert by_name[name].detail == "skipped (SDK not installed)"
+
+    fails = [r for r in results if r.status == "FAIL"]
+    assert len(fails) == 1
+    assert fails[0].name == "programasweights SDK"
+
+    # Checks that don't need the SDK at all keep running normally.
+    assert by_name["GPU"].status in ("PASS", "WARN")
+    assert by_name["PAW_API_KEY"].status in ("PASS", "WARN")
+    assert by_name["Rate limits"].status == "PASS"
+
+
+def test_run_checks_offline_message_wins_over_sdk_missing_for_service_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--offline's "skipped (--offline)" message takes priority over the SDK-missing
+    skip for the one check both apply to (upstream service health) -- the two reasons
+    aren't conflated into one ambiguous message."""
+    monkeypatch.setitem(sys.modules, "programasweights", None)
+
+    results = doctor.run_checks(offline=True)
+    health = next(r for r in results if r.name == "Upstream service health")
+    assert health.status == "WARN"
+    assert "--offline" in health.detail
+    assert "SDK not installed" not in health.detail
+
+
+def test_run_checks_sdk_missing_still_runs_service_health_when_api_url_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """check_service_health only needs the SDK to resolve a *default* API URL; an
+    explicit api_url needs no SDK import at all, so it must not be skipped just
+    because the SDK happens to be missing."""
+    monkeypatch.setitem(sys.modules, "programasweights", None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"gpu_services": {"a": "up"}})
+
+    results = doctor.run_checks(offline=False, api_url="https://fake.example", transport=_transport(handler))
+    health = next(r for r in results if r.name == "Upstream service health")
+    assert health.status == "PASS"
+
+
+def test_cli_doctor_exit_code_1_only_for_the_real_fail_when_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: `paw-kit doctor --offline` against the real (unmocked) checks with
+    the SDK unimportable exits 1 (the SDK really is missing -- that is a genuine FAIL),
+    but reports exactly one FAIL rather than a wall of ModuleNotFoundErrors."""
+    monkeypatch.setitem(sys.modules, "programasweights", None)
+
+    result = runner.invoke(app, ["doctor", "--offline", "--json"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    fails = [entry for entry in payload if entry["status"] == "FAIL"]
+    assert len(fails) == 1
+    assert fails[0]["name"] == "programasweights SDK"
 
 
 def test_run_checks_returns_all_expected_check_names(fast_cached_programs: None) -> None:
@@ -392,6 +490,39 @@ def test_cli_doctor_table_renders_status_and_remedy(monkeypatch: pytest.MonkeyPa
     assert "FAIL" in output
     assert "something broke" in output
     assert "run `paw-kit doctor` again" in output
+
+
+def test_cli_doctor_table_remedy_column_folds_long_urls_instead_of_truncating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long remedy (typically a URL) must wrap onto further lines (Rich's "fold"
+    overflow) rather than being truncated with an ellipsis -- a truncated remedy URL
+    is not clickable/copyable as a working link."""
+    long_remedy = (
+        "Get one at https://programasweights.com/settings/really/quite/a/long/path/"
+        "that/would/otherwise/be/truncated/by/the/default/rich/table/overflow/policy"
+    )
+    fake_results = [
+        doctor.CheckResult("PAW_API_KEY", "WARN", "not set", long_remedy),
+    ]
+    monkeypatch.setattr("paw_kit.doctor.run_checks", lambda **kw: fake_results)
+
+    import paw_kit.cli as cli_module
+
+    monkeypatch.setattr(cli_module.console, "width", 60)
+
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    output = strip_ansi(result.stdout)
+    assert "…" not in output
+    # The full remedy text must survive somewhere in the rendered output once its
+    # fold-wrapped line breaks are removed, never cut short with an ellipsis.
+    flat = output.replace("\n", "").replace(" ", "").replace("│", "")
+    assert "programasweights.com" in flat
+    assert "long/path/that/would/otherwise/be/truncated" in flat
+    # And it actually wrapped onto more than one line -- proof "fold" is active
+    # rather than the column simply being wide enough to fit it on one.
+    assert output.count("\n") > 4
 
 
 def test_cli_doctor_json_output_not_mangled_by_rich_markup(monkeypatch: pytest.MonkeyPatch) -> None:

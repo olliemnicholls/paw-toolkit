@@ -377,9 +377,17 @@ def _execute_with_telemetry(
 _WARMUP_INPUT = "ping"
 
 
-def _run_warmup(exec_fn: Callable[[str], Any], state: "ServerState") -> None:
+def _run_warmup(backend: AbstractPAWBackend, adapter_path: str, state: "ServerState") -> None:
     """Run one inference with a fixed short input so `/ready` is 200 before the server
     starts accepting real traffic, instead of 503 until the first request completes.
+
+    Calls `backend.infer(...)` directly -- *not* the schema-validating `load()`
+    wrapper `exec_fn` may be built from when `response_model` is set. The point of a
+    warm-up is to pay the one-time cost of loading the base model into memory; the
+    fixed `_WARMUP_INPUT` ("ping") is not expected to produce output that parses as an
+    arbitrary caller-supplied `response_model`, and warming through that wrapper made
+    `--warm` fail (leaving `/ready` at 503 indefinitely) on essentially every adapter
+    that set one.
 
     A failure here is logged, not raised: `--warm` is a latency optimization, and a
     broken warm-up must not crash `paw-serve` on startup -- it just leaves `/ready` at
@@ -388,7 +396,7 @@ def _run_warmup(exec_fn: Callable[[str], Any], state: "ServerState") -> None:
     """
     t0 = time.perf_counter()
     try:
-        exec_fn(_WARMUP_INPUT)
+        backend.infer(adapter_path, _WARMUP_INPUT)
     except Exception as exc:
         logger.warning(
             "Warm-up inference failed after %.2fs: %s", time.perf_counter() - t0, exc
@@ -452,7 +460,7 @@ def create_app(
         exec_fn = lambda inp: selected_backend.infer(str(path_obj), inp)
 
     if warm:
-        _run_warmup(exec_fn, state)
+        _run_warmup(selected_backend, str(path_obj), state)
 
     # PAW-SERVE-06: the default docs routes are disabled here and re-registered below,
     # behind the same `_verify_auth` gate as everything but `/health`.
@@ -544,7 +552,7 @@ def create_app(
         # PAW-SERVE-06: status/uptime/version only — see HealthResponse's docstring.
         return HealthResponse(status="ok", uptime_seconds=state.get_uptime(), version="0.1.0")
 
-    @app.get("/ready", include_in_schema=False)
+    @app.get("/ready")
     async def ready_check() -> JSONResponse:
         # Readiness, distinct from `/health`'s liveness: 200 only once the adapter has
         # completed one successful inference (a real request or an explicit `--warm`

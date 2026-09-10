@@ -468,19 +468,114 @@ def test_compile_4xx_never_retried(key: None, tmp_path: Path) -> None:
     assert sdk.attempts == 1
 
 
-def test_compile_timeout_exhausted_raises_runtime_error(
+def test_compile_readtimeout_is_never_retried(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read timeout means the request may already have reached the server -- it must
+    raise immediately (never retried), and the message must say the compile may still
+    be running server-side and that a re-run will hit the compile cache."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([httpx.ReadTimeout("timed out"), httpx.ReadTimeout("timed out")])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=3)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    message = str(exc_info.value)
+    assert "may still be running" in message
+    assert "compile cache" in message
+    # Only the one, un-retried attempt was made -- a second ReadTimeout is still
+    # queued in the fake SDK and was never consumed.
+    assert sdk.attempts == 1
+
+
+def test_compile_connect_error_is_retried_then_succeeds(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike a read timeout, a connect error/timeout means the request provably never
+    reached the server -- it is safe to retry, and is."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([httpx.ConnectError("connection refused")])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=1)
+
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    assert sdk.attempts == 2
+    assert json.loads(out.read_text())["program_id"] == "prog-fast"
+
+
+def test_compile_connect_timeout_exhausted_raises_runtime_error(
     key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import paw_kit.backend.programasweights as mod
 
     monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
-    sdk = _FlakyCompileSDK([httpx.ReadTimeout("timed out"), httpx.ReadTimeout("timed out")])
+    sdk = _FlakyCompileSDK([httpx.ConnectTimeout("timed out"), httpx.ConnectTimeout("timed out")])
     backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=1)
 
-    with pytest.raises(RuntimeError, match="timed out") as exc_info:
+    with pytest.raises(RuntimeError, match="unreachable") as exc_info:
         backend.compile("spec", [], str(tmp_path / "a.paw"))
     assert "paw-kit doctor" in str(exc_info.value)
     assert sdk.attempts == 2
+
+
+def test_compile_504_is_never_retried(key: None, tmp_path: Path) -> None:
+    """504 (gateway timeout) carries the same "already landed, still working"
+    ambiguity as a read timeout -- excluded from the retryable 5xx set."""
+    sdk = _FlakyCompileSDK([_status_error(504), _status_error(504)])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=3)
+
+    with pytest.raises(RuntimeError, match="HTTP 504"):
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert sdk.attempts == 1
+
+
+def test_compile_error_appends_response_body_capped_at_300_chars(
+    key: None, tmp_path: Path
+) -> None:
+    """Finding 6: the upstream response body (where the actual 4xx/5xx reason lives)
+    must be appended to the wrapped error, capped at 300 characters."""
+    request = httpx.Request("POST", "https://programasweights.com/api/v1/compile")
+    long_body = "invalid spec: " + ("x" * 500)
+    response = httpx.Response(422, request=request, text=long_body)
+    exc = httpx.HTTPStatusError("HTTP 422", request=request, response=response)
+    sdk = _FlakyCompileSDK([exc])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=0)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    message = str(exc_info.value)
+    assert "invalid spec:" in message
+    # Capped at 300 chars of body text, not the full 500+ characters.
+    assert len(message) < len(long_body)
+
+
+def test_compile_4xx_does_not_advise_running_doctor(key: None, tmp_path: Path) -> None:
+    """Finding 6: a 4xx is a client-side problem (bad spec, bad key, rate limit) that
+    `paw-kit doctor` (an environment/service diagnostic) cannot help with -- that
+    advice is dropped from the 4xx branch specifically."""
+    sdk = _FlakyCompileSDK([_status_error(422)])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=3)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert "paw-kit doctor" not in str(exc_info.value)
+
+
+def test_compile_5xx_still_advises_running_doctor(key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The doctor advice is only dropped for 4xx -- a 5xx (server-side) still gets it."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([_status_error(503), _status_error(503)])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=1)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert "paw-kit doctor" in str(exc_info.value)
 
 
 def test_compile_retries_default_is_one(key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -511,3 +606,82 @@ def test_finetune_compile_submission_5xx_wrapped(
     with pytest.raises(RuntimeError, match="ProgramAsWeights compile service returned HTTP 503"):
         backend.compile("spec", [], str(tmp_path / "ft.paw"))
     assert sdk.attempts == 2
+
+
+# ---------------------------------------------------------------- _wait_for_job poll retry
+
+
+class _FlakyStatusSDK(FakeSDK):
+    """`FakeSDK` variant whose `get_compile_status` raises a scripted queue of
+    exceptions (one per call) before falling through to the real fake behaviour --
+    exercises `_wait_for_job`'s consecutive-transient-failure tolerance."""
+
+    def __init__(self, exceptions: List[Exception], **kwargs: Any):
+        super().__init__(**kwargs)
+        self._status_exceptions = list(exceptions)
+        self.status_attempts = 0
+
+    def get_compile_status(self, job_id: str):
+        self.status_attempts += 1
+        if self._status_exceptions:
+            raise self._status_exceptions.pop(0)
+        return super().get_compile_status(job_id)
+
+
+def test_wait_for_job_tolerates_transient_failures_then_succeeds(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient poll failure (timeout, connect error, or 5xx) must not throw away
+    an in-progress compile -- status polling is idempotent, unlike the submission
+    call. The failure counter resets on the next successful poll."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_POLL_FAILURE_BACKOFF_S", (0.0,) * 5)
+    sdk = _FlakyStatusSDK(
+        [httpx.ReadTimeout("timed out"), httpx.ConnectError("refused")],
+        statuses=["completed"],
+    )
+    backend = ProgramAsWeightsBackend(compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0)
+
+    out = tmp_path / "ft.paw"
+    backend.compile("spec", [], str(out))
+    assert json.loads(out.read_text())["program_id"] == "prog-ft"
+    # 2 failed polls followed by 1 successful poll.
+    assert sdk.status_attempts == 3
+
+
+def test_wait_for_job_gives_up_after_six_consecutive_failures(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tolerates up to 5 consecutive transient poll failures (with backoff); the 6th
+    consecutive failure gives up and raises a RuntimeError naming the job_id so the
+    caller can poll the (possibly still-running) compile again later by hand."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_POLL_FAILURE_BACKOFF_S", (0.0,) * 5)
+    sdk = _FlakyStatusSDK([_status_error(502) for _ in range(6)])
+    backend = ProgramAsWeightsBackend(compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    assert "job-1" in str(exc_info.value)
+    assert sdk.status_attempts == 6
+
+
+def test_wait_for_job_poll_failures_still_bounded_by_total_wall_clock_cap(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The overall `compile_timeout_s` cap still applies on top of the per-failure
+    tolerance: a compile_timeout_s of 0 times out on the very first transient failure
+    instead of working through all 5 tolerated failures (and their backoff) first."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_POLL_FAILURE_BACKOFF_S", (0.0,) * 5)
+    sdk = _FlakyStatusSDK([httpx.ReadTimeout("timed out")] * 6)
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0, compile_timeout_s=0
+    )
+
+    with pytest.raises(TimeoutError):
+        backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    assert sdk.status_attempts == 1

@@ -550,6 +550,19 @@ def test_serve_docs_routes_require_auth_PAW_SERVE_06(mock_adapter: Path) -> None
         assert client.get(path, headers={"Authorization": "Bearer k"}).status_code == 200
 
 
+def test_ready_included_in_openapi_schema_like_health(mock_adapter: Path) -> None:
+    """/ready is polled by orchestration the same way /health is (see docker.py's
+    HEALTHCHECK), so it belongs in the generated OpenAPI schema the same way -- it must
+    not be the one endpoint a client generated from that schema doesn't know about."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="k")
+    client = TestClient(fastapi_app)
+
+    schema = client.get("/openapi.json", headers={"Authorization": "Bearer k"}).json()
+    assert "/ready" in schema["paths"]
+    assert "/health" in schema["paths"]
+
+
 def test_serve_health_response_minimal_PAW_SERVE_06(mock_adapter: Path) -> None:
     """Verify PAW-SERVE-06: /health discloses only status/uptime/version — never the
     adapter filename or backend implementation type it used to — and stays open."""
@@ -797,7 +810,9 @@ def test_docker_exporter_pinned_requirements_txt_PAW_DOCKER_03(
 
     assert (dest / "requirements.txt").exists()
     requirements = (dest / "requirements.txt").read_text(encoding="utf-8")
-    for package in ("paw-kit==", "fastapi==", "uvicorn==", "httpx=="):
+    # Default backend is "real" (see PAW-DOCKER-04 below): paw-kit is pinned with the
+    # real-backend extra, not bare.
+    for package in ("paw-kit[real]==", "fastapi==", "uvicorn==", "httpx=="):
         assert package in requirements
 
     dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
@@ -820,14 +835,75 @@ def test_docker_exporter_healthcheck_hits_ready_with_cold_start_period(
     assert "urlopen('http://localhost:8000/ready')" in dockerfile
     assert "urlopen('http://localhost:8000/health')" not in dockerfile
     assert "--start-period=180s" in dockerfile
-    assert '"paw-serve", "/app/triage.paw", "--host", "0.0.0.0", "--port", "8000", "--warm"' in dockerfile
+    assert (
+        '"paw-serve", "/app/triage.paw", "--host", "0.0.0.0", "--port", "8000", "--backend", "real", "--warm"'
+        in dockerfile
+    )
 
     compose = (dest / "docker-compose.yml").read_text(encoding="utf-8")
     assert "urlopen('http://localhost:8000/ready')" in compose
+
+
+# ---------------------------------------------------------------- PAW-DOCKER-04: --backend scaffold choice
+
+
+def test_docker_exporter_backend_real_default_ships_real_extra_and_warm(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """Default (no `backend=` passed) is "real": a container that can only ever serve
+    the mock backend is a demo, not a deployment. The generated CMD passes `--backend
+    real`, ships `--warm`, requirements.txt pulls in the project's real-backend extra,
+    and the comments describe an actual model being loaded."""
+    out_dir = tmp_path / "docker_real"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
+
+    dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
+    assert '"--backend", "real"' in dockerfile
+    assert '"--warm"' in dockerfile
+    assert "--start-period=180s" in dockerfile
+    assert "cold" in dockerfile.lower()
+    assert "ProgramAsWeights" in dockerfile
+
+    requirements = (dest / "requirements.txt").read_text(encoding="utf-8")
+    assert "paw-kit[real]==" in requirements
+
+    compose = (dest / "docker-compose.yml").read_text(encoding="utf-8")
     assert "start_period: 180s" in compose
 
-    readme = (dest / "README.md").read_text(encoding="utf-8")
-    assert "/ready" in readme
+
+def test_docker_exporter_backend_mock_omits_warm_and_real_extra(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """`backend="mock"` produces a container that only ever serves the deterministic
+    mock: no `--warm` (there is nothing to warm), no real-backend extra in
+    requirements.txt, a short --start-period (no cold model download to wait out), and
+    comments that say so rather than describing a real model load."""
+    out_dir = tmp_path / "docker_mock"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir, backend="mock")
+
+    dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
+    assert (
+        '"paw-serve", "/app/triage.paw", "--host", "0.0.0.0", "--port", "8000", "--backend", "mock"]'
+        in dockerfile
+    )
+    # The literal CMD flag must be absent -- the surrounding prose is allowed to
+    # mention "--warm" descriptively (explaining why it's omitted).
+    assert '"--warm"' not in dockerfile
+    assert "--start-period=10s" in dockerfile
+    assert "mock" in dockerfile.lower()
+
+    requirements = (dest / "requirements.txt").read_text(encoding="utf-8")
+    assert "paw-kit==" in requirements
+    assert "paw-kit[real]==" not in requirements
+
+    compose = (dest / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "start_period: 10s" in compose
+    assert "start_period: 180s" not in compose
+
+
+def test_docker_exporter_rejects_unknown_backend(mock_adapter: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="backend"):
+        export_docker_scaffold(mock_adapter, output_dir=tmp_path / "docker_bad", backend="torch")
 
 
 def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
@@ -843,6 +919,23 @@ def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
     # 2. paw-kit export docker non-existent file
     res_bad_docker = runner.invoke(app, ["export", "docker", str(tmp_path / "none.paw")])
     assert res_bad_docker.exit_code == 1
+
+    # 2a. --backend mock|real threads through to the generated CMD (PAW-DOCKER-04)
+    docker_mock_out = tmp_path / "cli_docker_mock"
+    res_docker_mock = runner.invoke(
+        app, ["export", "docker", str(mock_adapter), "--out-dir", str(docker_mock_out), "--backend", "mock"]
+    )
+    assert res_docker_mock.exit_code == 0
+    mock_dockerfile = (docker_mock_out / "Dockerfile").read_text(encoding="utf-8")
+    assert '"--backend", "mock"' in mock_dockerfile
+    assert '"--warm"' not in mock_dockerfile
+
+    # 2b. an unknown --backend choice is rejected rather than silently accepted
+    res_docker_bad_backend = runner.invoke(
+        app,
+        ["export", "docker", str(mock_adapter), "--out-dir", str(tmp_path / "cli_docker_bad"), "--backend", "torch"],
+    )
+    assert res_docker_bad_backend.exit_code == 1
 
     # 3. paw-kit export dataset -- PAW-CLI-04: built via a real TraceDB/record_trace,
     # not a hand-built `traces` table shaped like the old (never-real) input/output
@@ -1012,6 +1105,45 @@ def test_warm_true_runs_one_inference_before_binding_and_marks_ready(
     # real served request.
     m = client.get("/metrics").json()
     assert m["total_requests"] == 0
+
+
+def test_warm_with_response_model_calls_backend_infer_directly_not_schema_wrapper(
+    mock_adapter: Path,
+) -> None:
+    """--warm must warm through `backend.infer(...)` directly, not through the
+    schema-validating `load()` wrapper `exec_fn` is built from when response_model is
+    set: the fixed warm-up input ("ping") almost never parses as an arbitrary caller
+    schema, so warming through that wrapper raised PAWSchemaError on essentially every
+    adapter with a response_model configured, leaving /ready stuck at 503 forever even
+    though the model itself loaded fine. MockPAWBackend.infer("ping") here returns the
+    non-JSON fallback string "[mock:ping]", which does not parse as TicketSchema --
+    warm-up must still succeed because it never routes through that validation."""
+    calls = []
+
+    class RecordingBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+            calls.append((adapter_path, input_text))
+            return super().infer(adapter_path, input_text, grammar_constraint)
+
+    backend = RecordingBackend()
+    backend.compile(spec="Classify ticket priority", examples=[], output_path=str(mock_adapter))
+
+    fastapi_app = create_app(
+        mock_adapter,
+        backend=backend,
+        response_model=TicketSchema,
+        allow_anonymous=True,
+        warm=True,
+    )
+    # Warm-up ran exactly once, directly against the backend, with the raw fixed input
+    # -- not wrapped, retried, or schema-checked.
+    assert len(calls) == 1
+    assert calls[0] == (str(mock_adapter), "ping")
+
+    client = TestClient(fastapi_app)
+    res = client.get("/ready")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ready"}
 
 
 def test_warm_failure_leaves_ready_503_and_does_not_raise(
