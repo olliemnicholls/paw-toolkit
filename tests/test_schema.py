@@ -1950,3 +1950,44 @@ def test_alias_on_a_nested_model_is_honoured_S_5() -> None:
     payload = '{"detail": {"innerName": "v"}}'
     OuterPlain.model_validate_json(payload)  # precondition
     assert _re.fullmatch(pat, payload) is not None
+
+
+# --- S-8: an unanchored Field(pattern=...) is still full-matched (DECIDED) -----------
+
+
+def test_unanchored_pattern_is_still_full_matched_S_8() -> None:
+    """The decision, pinned: the grammar full-matches even an unanchored pattern.
+
+    pydantic applies `pattern` with *search* semantics, so
+    `Field(pattern=r"[0-9]{5}")` validates `"x90210y"` while the grammar does not. That
+    divergence is deliberate. A full match is a *subset* of a search, so this is the
+    narrowing direction and cannot produce an unsound grammar; emulating search would
+    make the constraint nearly vacuous for a decoder, which is the opposite of the
+    point of constraining one.
+
+    **This test passes at `main` by design**, because S-8 is a recorded decision rather
+    than a defect -- the grammar full-matches today too. What it adds is that the
+    decision is now pinned: the existing
+    `test_field_pattern_constraint_used_in_regex` asserts only that `"90210"` matches,
+    which is true under either semantics, so nothing stopped a later change from
+    quietly switching to search emulation. This is the assertion the bug hunt said was
+    missing.
+    """
+    import re as _re
+
+    from pydantic import ValidationError
+
+    model = create_model("Unanchored", x=(str, Field(pattern=r"[0-9]{5}")))
+    pat = pydantic_to_regex(model, anchors=True)
+
+    # pydantic SEARCHES, so these are legal values for the model...
+    for value in ("x90210y", "902105", "2026-90210"):
+        model(x=value)
+        assert _re.fullmatch(pat, '{"x": "%s"}' % value) is None, (
+            f"the grammar accepted {value!r}: it is emulating search, not full-matching"
+        )
+
+    # ... and the full match is what the grammar emits.
+    assert _re.fullmatch(pat, '{"x": "90210"}') is not None
+    with pytest.raises(ValidationError):
+        model(x="9021")  # too short for either reading

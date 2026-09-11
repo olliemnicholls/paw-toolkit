@@ -673,6 +673,17 @@ def _translate_field_pattern(pattern: str, flags: int = 0) -> str:
     `flags` are the `re` flags of a precompiled `re.Pattern` constraint (0 for a plain
     string one); see `_interegular_flags` for which are honoured and which are refused.
 
+    S-8, DECIDED: the result is spliced into a position that is **full**-matched, even
+    for an unanchored pattern. pydantic applies `pattern` with *search* semantics, so
+    the grammar is narrower than the validator here -- which is the one direction the
+    track's rule 1 permits, and cannot produce an unsound grammar. The alternative,
+    emulating search as `(?:json-safe)*(?:pattern)(?:json-safe)*`, is equally sound and
+    makes the constraint almost vacuous for a decoder, which is the opposite of the
+    point. "Require an anchor and raise otherwise" was explicitly rejected: the
+    `[0-9]{5}` zip-code constraint in `tests/test_schema.py` is unanchored and works
+    today. Documented on `pydantic_to_regex` for users, and pinned by
+    `test_unanchored_pattern_is_still_full_matched_S_8`.
+
     S-3, and the reason `_sanitize_field_pattern` no longer exists. The old approach
     spliced the user's regex *source* between JSON quote marks and defended the splice
     by refusing a literal `"` in the source. That defence is not sufficient and cannot
@@ -1280,6 +1291,25 @@ def pydantic_to_regex(model: Type[BaseModel], anchors: bool = False) -> str:
     class object's identity -- to avoid redundant regex compilation and downstream FSM
     construction costs, including for structurally-identical models created
     dynamically via `pydantic.create_model` (PAW-SCHEMA-07).
+
+    **`Field(pattern=...)` is applied as a FULL match, including when the pattern is
+    unanchored** (S-8). pydantic applies `pattern` with *search* semantics, so
+    `Field(pattern=r"[0-9]+")` validates `"2026-01-02"` -- the compiled grammar does
+    not, and will only emit a value the whole pattern matches. This is deliberate and
+    is the narrowing direction (a full match is a subset of a search, so the grammar
+    can never accept a value pydantic would reject). Emulating search -- wrapping the
+    constraint as `(?:any)*(?:pattern)(?:any)*` -- would be equally sound and would make
+    the constraint nearly vacuous for decoding, which is the opposite of the point of
+    constraining a decoder at all. Anchor a pattern or not as you please; `^`/`$` at the
+    ends are stripped and change nothing. If you want "contains", write it: `.*foo.*`.
+
+    **`Field(alias=...)` decides the object key** (S-5). The grammar requires whichever
+    key(s) pydantic will *validate* -- the validation alias, the field name, or both,
+    according to the model's `populate_by_name` / `validate_by_name` /
+    `validate_by_alias` settings. Note that with an alias and the default settings this
+    is NOT what `model_dump_json()` emits, because that defaults to `by_alias=False`;
+    pydantic will not read its own output back either, and the grammar follows the
+    validator.
 
     Args:
         model: A Pydantic BaseModel subclass.
