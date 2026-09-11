@@ -314,7 +314,6 @@ _MAX_UNROLLED_COLLECTION_CHARS = 1000
 _FieldConstraints = namedtuple(
     "_FieldConstraints", ["min_len", "max_len", "ge", "gt", "le", "lt", "other"]
 )
-_NO_CONSTRAINTS = _FieldConstraints(None, None, None, None, None, None, ())
 
 
 def _field_constraints(field_info: FieldInfo) -> _FieldConstraints:
