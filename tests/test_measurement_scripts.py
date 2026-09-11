@@ -887,3 +887,138 @@ def test_real_backend_records_the_calls_it_ran_and_the_maximum() -> None:
     assert round(0.99 * (a100["warm_calls"] - 1)) == a100["warm_calls"] - 1
     mrb = _load("measure_real_backend")
     assert a100["warm_calls"] < mrb._min_n_for_percentile(0.99)
+
+
+# ================================================================================  B-9
+#
+# SUSPECTED in the report; CONFIRMED here by inspection. `measure_fail_open.py`'s teacher
+# returned one constant marker for every input, so the adapter's only training signal was
+# three identical pairs mapping arbitrary inputs to that string -- and phases 3 and 4 then
+# asserted `out == TEACHER_MARKER`, which a degenerate adapter emitting the memorised marker
+# satisfies with no fallback having occurred. The script is NOT executed by this track: it
+# needs a real PAW_API_KEY and performs a real paid compile.
+
+
+class _FakeDecorated:
+    """Stands in for a `compile_on_hit`-wrapped function: callable, with a fail-open count."""
+
+    def __init__(self, behaviour, fail_open_increments: bool) -> None:
+        self._behaviour = behaviour
+        self._increments = fail_open_increments
+        self._fail_open = 0
+
+    def get_fail_open_count(self) -> int:
+        return self._fail_open
+
+    def __call__(self, text: str) -> str:
+        if self._increments:
+            self._fail_open += 1
+        return self._behaviour(text)
+
+
+def test_fail_open_teacher_output_is_unique_per_call() -> None:
+    """The training signal must not be reproducible by memorisation."""
+    mfo = _load("measure_fail_open")
+    teacher = mfo.UniqueTeacher()
+    outputs = [teacher(f"input {i}") for i in range(5)]
+    assert len(set(outputs)) == 5
+    assert teacher.calls == 5
+    assert teacher.last == outputs[-1]
+    assert teacher.history == outputs
+    assert all(o.startswith(mfo.TEACHER_MARKER) for o in outputs)
+    # And the old constant marker is never what the teacher returns.
+    assert mfo.TEACHER_MARKER not in outputs
+
+
+def test_fail_open_check_fails_for_a_backend_that_echoes_the_marker() -> None:
+    """Report §5's named test for B-9: the check must be falsifiable.
+
+    An adapter that memorised the marker and echoes it, with no fallback having happened,
+    must make the fail-open check FAIL. Under the old `out == TEACHER_MARKER` assertion it
+    passed.
+    """
+    mfo = _load("measure_fail_open")
+    teacher = mfo.UniqueTeacher()
+    # Three traced calls, all mapping to the constant-looking marker family -- the training
+    # set the degenerate adapter would memorise from.
+    for i in range(3):
+        teacher(f"date input {i}")
+
+    memoriser = _FakeDecorated(lambda _t: mfo.TEACHER_MARKER, fail_open_increments=False)
+    verdict = mfo.probe_fallback(memoriser, teacher, "January 1, 2026")
+    assert verdict["is_fallback"] is False
+    assert verdict["returned_this_calls_teacher_output"] is False
+    assert verdict["teacher_called_exactly_once"] is False
+    assert verdict["fallback_counted"] is False
+    # The old assertion, for contrast: this is what used to be checked, and it passes.
+    assert verdict["output"] == mfo.TEACHER_MARKER
+
+    # An adapter that echoes the most recent teacher output verbatim -- a harder fake, since
+    # it defeats the text comparison -- is still caught by the two instrumented signals.
+    echoer = _FakeDecorated(lambda _t: teacher.last, fail_open_increments=False)
+    echo_verdict = mfo.probe_fallback(echoer, teacher, "January 1, 2026")
+    assert echo_verdict["returned_this_calls_teacher_output"] is True
+    assert echo_verdict["teacher_called_exactly_once"] is False
+    assert echo_verdict["fallback_counted"] is False
+    assert echo_verdict["is_fallback"] is False
+
+
+def test_fail_open_check_passes_for_a_real_fallback() -> None:
+    """The converse: a genuine fallback must still be recognised, or the check is useless."""
+    mfo = _load("measure_fail_open")
+    teacher = mfo.UniqueTeacher()
+    for i in range(3):
+        teacher(f"date input {i}")
+
+    falling_open = _FakeDecorated(teacher, fail_open_increments=True)
+    verdict = mfo.probe_fallback(falling_open, teacher, "January 1, 2026")
+    assert verdict["is_fallback"] is True
+    assert verdict["returned_this_calls_teacher_output"] is True
+    assert verdict["teacher_called_exactly_once"] is True
+    assert verdict["fallback_counted"] is True
+    assert verdict["fail_open_after"] == verdict["fail_open_before"] + 1
+
+
+def test_fail_open_served_locally_verdict_catches_memorised_output() -> None:
+    """Phase 2's check: `output != teacher_output` was not enough on its own.
+
+    `measurements/README.md`'s fail-open section records an identically-shaped compile
+    degenerating into constant output. A local call echoing an *earlier* teacher output is
+    that degeneration, and is reported separately from "the teacher was not called".
+    """
+    mfo = _load("measure_fail_open")
+    teacher = mfo.UniqueTeacher()
+    for i in range(3):
+        teacher(f"date input {i}")
+
+    healthy = mfo.served_locally_verdict("2026-01-01", 3, 3, teacher.history)
+    assert healthy["served_locally"] is True
+    assert healthy["output_is_not_any_teacher_output"] is True
+
+    memorised = mfo.served_locally_verdict(teacher.history[0], 3, 3, teacher.history)
+    assert memorised["served_locally"] is True
+    assert memorised["output_is_not_any_teacher_output"] is False
+
+
+def test_fail_open_writes_an_artifact_naming_every_check() -> None:
+    """The script used to write nothing, so there was no record of which checks passed."""
+    mfo = _load("measure_fail_open")
+    log = mfo.CheckLog()
+    assert log.any_failed is False
+    log.record("a passing check", True, detail=1)
+    assert log.any_failed is False
+    log.record("a failing check", False, detail=2)
+    assert log.any_failed is True
+    assert [c["check"] for c in log.checks] == ["a passing check", "a failing check"]
+    assert [c["passed"] for c in log.checks] == [True, False]
+    assert log.checks[0]["evidence"] == {"detail": 1}
+
+    src = (_SCRIPTS / "measure_fail_open.py").read_text()
+    assert "out_path.write_text(json.dumps(artifact" in src
+    assert '"checks": log.checks' in src
+    assert '"checks_passed"' in src and '"all_passed"' in src
+    assert 'f"fail-open-{args.label}-' in src
+    # The old output-text-only assertions are gone.
+    assert "result == TEACHER_MARKER" not in src
+    assert "out != TEACHER_MARKER" not in src
+    assert "live != TEACHER_MARKER" not in src
