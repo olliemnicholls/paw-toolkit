@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "generated": "2026-09-11T10:43:14+0100",
-  "commit": "8ed8e7c79c69f62efdd589338f54953398111382",
-  "note": "Surviving mutants per module, measured by tools/mutate.py. A survivor is a semantic change the suite does not notice. Counts are full-suite survivors: a mutant that survives its module's fast test selection is re-run against the whole suite, and only then counted. Regenerate with `uv run --no-sync python tools/mutate.py --write-baseline tools/mutation-baseline.json`; see tools/README-mutate.md.",
+  "generated": "2026-09-11T15:34:06+0100",
+  "commit": "6f1deb281226578757d162eb56e066c4ae25c59d",
+  "note": "Surviving mutants per module, measured by tools/mutate.py. A survivor is a semantic change the suite does not notice. Counts are full-suite survivors: a mutant that survives its module's fast test selection is re-run against the whole suite, and only then counted. Regenerate with `uv run --no-sync python tools/mutate.py --write-baseline tools/mutation-baseline.json`; see tools/README-mutate.md. Regenerated for paw_kit/schema/grammar.py and paw_kit/schema/logits_processor.py at the end of Track E (bug-hunt-remediation); the other four modules are unchanged from the campaign baseline, since a --modules run measures only what it mutates and writing its output wholesale would drop them and silently un-gate them.",
   "totals": {
-    "mutations": 260,
+    "mutations": 381,
     "survivors": 81
   },
   "modules": {
@@ -705,25 +705,85 @@
       ]
     },
     "paw_kit/schema/grammar.py": {
-      "mutations": 70,
-      "survivors": 13,
+      "mutations": 190,
+      "survivors": 17,
       "survivors_detail": [
         {
-          "id": "paw_kit/schema/grammar.py:89:11:bool:and>or",
-          "fingerprint": "paw_kit/schema/grammar.py|bool|and>or|hasattr(meta, 'pattern') and meta.pattern is not None",
-          "line": 89,
+          "id": "paw_kit/schema/grammar.py:475:11:cmp:>>>=",
+          "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS",
+          "line": 475,
           "col": 11,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "hasattr(meta, 'pattern') and meta.pattern is not None",
-          "expr_after": "hasattr(meta, 'pattern') or meta.pattern is not None",
-          "source_line": "if hasattr(meta, \"pattern\") and meta.pattern is not None:"
+          "kind": "cmp",
+          "old": ">",
+          "new": ">=",
+          "expr_before": "len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS",
+          "expr_after": "len(unbounded_regex) >= _MAX_UNROLLED_COLLECTION_CHARS",
+          "source_line": "or len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS"
         },
         {
-          "id": "paw_kit/schema/grammar.py:211:7:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:856:15:const:True>False",
+          "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
+          "line": 856,
+          "col": 15,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "return True, a_chars & b_chars"
+        },
+        {
+          "id": "paw_kit/schema/grammar.py:897:7:bool:or>and",
+          "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|code < 32 or 127 <= code <= 159",
+          "line": 897,
+          "col": 7,
+          "kind": "bool",
+          "old": "or",
+          "new": "and",
+          "expr_before": "code < 32 or 127 <= code <= 159",
+          "expr_after": "code < 32 and 127 <= code <= 159",
+          "source_line": "if code < 0x20 or 0x7F <= code <= 0x9F:"
+        },
+        {
+          "id": "paw_kit/schema/grammar.py:917:10:cmp:<><=",
+          "fingerprint": "paw_kit/schema/grammar.py|cmp|<><=|start < len(codes)",
+          "line": 917,
+          "col": 10,
+          "kind": "cmp",
+          "old": "<",
+          "new": "<=",
+          "expr_before": "start < len(codes)",
+          "expr_after": "start <= len(codes)",
+          "source_line": "while start < len(codes):"
+        },
+        {
+          "id": "paw_kit/schema/grammar.py:1006:19:const:True>False",
+          "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
+          "line": 1006,
+          "col": 19,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "return \"\", True"
+        },
+        {
+          "id": "paw_kit/schema/grammar.py:1018:23:const:True>False",
+          "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
+          "line": 1018,
+          "col": 23,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "return \"\", True"
+        },
+        {
+          "id": "paw_kit/schema/grammar.py:1259:7:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|seen is None",
-          "line": 211,
+          "line": 1259,
           "col": 7,
           "kind": "cmp",
           "old": "is",
@@ -733,9 +793,9 @@
           "source_line": "if seen is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:237:17:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1285:17:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|val is None",
-          "line": 237,
+          "line": 1285,
           "col": 17,
           "kind": "cmp",
           "old": "is",
@@ -745,9 +805,9 @@
           "source_line": "elif val is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:322:32:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1370:32:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(args) > 1",
-          "line": 322,
+          "line": 1370,
           "col": 32,
           "kind": "cmp",
           "old": ">",
@@ -757,9 +817,9 @@
           "source_line": "value_type = args[1] if len(args) > 1 else Any"
         },
         {
-          "id": "paw_kit/schema/grammar.py:397:7:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1445:7:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|seen is None",
-          "line": 397,
+          "line": 1445,
           "col": 7,
           "kind": "cmp",
           "old": "is",
@@ -769,9 +829,9 @@
           "source_line": "if seen is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:436:30:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1496:30:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|args[1] is Ellipsis",
-          "line": 436,
+          "line": 1496,
           "col": 30,
           "kind": "cmp",
           "old": "is",
@@ -781,9 +841,9 @@
           "source_line": "if len(args) == 2 and args[1] is Ellipsis:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:449:13:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1509:13:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|annotation is Tuple",
-          "line": 449,
+          "line": 1509,
           "col": 13,
           "kind": "cmp",
           "old": "is",
@@ -793,9 +853,9 @@
           "source_line": "elif annotation is Tuple:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:471:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:1531:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|origin is dict or annotation is dict",
-          "line": 471,
+          "line": 1531,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -805,9 +865,9 @@
           "source_line": "if origin is dict or annotation is dict:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:473:32:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1533:32:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(args) > 1",
-          "line": 473,
+          "line": 1533,
           "col": 32,
           "kind": "cmp",
           "old": ">",
@@ -817,9 +877,9 @@
           "source_line": "value_type = args[1] if len(args) > 1 else Any"
         },
         {
-          "id": "paw_kit/schema/grammar.py:491:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:1551:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|annotation is set or annotation is frozenset",
-          "line": 491,
+          "line": 1551,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -829,21 +889,9 @@
           "source_line": "if annotation is set or annotation is frozenset:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:599:62:const:False>True",
-          "fingerprint": "paw_kit/schema/grammar.py|const|False>True|False",
-          "line": 599,
-          "col": 62,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "def pydantic_to_regex(model: Type[BaseModel], anchors: bool = False) -> str:"
-        },
-        {
-          "id": "paw_kit/schema/grammar.py:639:18:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1809:18:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(_regex_cache) > _REGEX_CACHE_MAXSIZE",
-          "line": 639,
+          "line": 1809,
           "col": 18,
           "kind": "cmp",
           "old": ">",
@@ -853,9 +901,9 @@
           "source_line": "while len(_regex_cache) > _REGEX_CACHE_MAXSIZE:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:640:42:const:False>True",
+          "id": "paw_kit/schema/grammar.py:1810:42:const:False>True",
           "fingerprint": "paw_kit/schema/grammar.py|const|False>True|False",
-          "line": 640,
+          "line": 1810,
           "col": 42,
           "kind": "const",
           "old": "False",
@@ -867,25 +915,13 @@
       ]
     },
     "paw_kit/schema/logits_processor.py": {
-      "mutations": 31,
-      "survivors": 12,
+      "mutations": 32,
+      "survivors": 8,
       "survivors_detail": [
         {
-          "id": "paw_kit/schema/logits_processor.py:18:22:int:1000>1001",
-          "fingerprint": "paw_kit/schema/logits_processor.py|int|1000>1001|1000",
-          "line": 18,
-          "col": 22,
-          "kind": "int",
-          "old": "1000",
-          "new": "1001",
-          "expr_before": "1000",
-          "expr_after": "1001",
-          "source_line": "_MAX_PATTERN_LENGTH = 1000"
-        },
-        {
-          "id": "paw_kit/schema/logits_processor.py:30:36:int:5000>5001",
+          "id": "paw_kit/schema/logits_processor.py:58:36:int:5000>5001",
           "fingerprint": "paw_kit/schema/logits_processor.py|int|5000>5001|5000",
-          "line": 30,
+          "line": 58,
           "col": 36,
           "kind": "int",
           "old": "5000",
@@ -895,9 +931,9 @@
           "source_line": "_MAX_ALLOWED_TOKENS_CACHE_ENTRIES = 5_000"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:54:7:cmp:>>>=",
+          "id": "paw_kit/schema/logits_processor.py:92:7:cmp:>>>=",
           "fingerprint": "paw_kit/schema/logits_processor.py|cmp|>>>=|len(pattern) > _MAX_PATTERN_LENGTH",
-          "line": 54,
+          "line": 92,
           "col": 7,
           "kind": "cmp",
           "old": ">",
@@ -907,9 +943,9 @@
           "source_line": "if len(pattern) > _MAX_PATTERN_LENGTH:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:62:11:cmp:>>>=",
+          "id": "paw_kit/schema/logits_processor.py:116:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/logits_processor.py|cmp|>>>=|len(fsm.states) > _MAX_FSM_STATES",
-          "line": 62,
+          "line": 116,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -919,33 +955,9 @@
           "source_line": "if len(fsm.states) > _MAX_FSM_STATES:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:69:65:int:1>2",
-          "fingerprint": "paw_kit/schema/logits_processor.py|int|1>2|1",
-          "line": 69,
-          "col": 65,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)"
-        },
-        {
-          "id": "paw_kit/schema/logits_processor.py:80:31:const:False>True",
-          "fingerprint": "paw_kit/schema/logits_processor.py|const|False>True|False",
-          "line": 80,
-          "col": 31,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "executor.shutdown(wait=False)"
-        },
-        {
-          "id": "paw_kit/schema/logits_processor.py:154:15:bool:or>and",
+          "id": "paw_kit/schema/logits_processor.py:221:15:bool:or>and",
           "fingerprint": "paw_kit/schema/logits_processor.py|bool|or>and|curr is None or not self.fsm.islive(curr)",
-          "line": 154,
+          "line": 221,
           "col": 15,
           "kind": "bool",
           "old": "or",
@@ -955,9 +967,9 @@
           "source_line": "if curr is None or not self.fsm.islive(curr):"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:182:11:cmp:>>>=",
+          "id": "paw_kit/schema/logits_processor.py:249:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/logits_processor.py|cmp|>>>=|len(self._transition_cache) > _MAX_TRANSITION_CACHE_ENTRIES",
-          "line": 182,
+          "line": 249,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -967,9 +979,9 @@
           "source_line": "if len(self._transition_cache) > _MAX_TRANSITION_CACHE_ENTRIES:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:183:48:const:False>True",
+          "id": "paw_kit/schema/logits_processor.py:250:48:const:False>True",
           "fingerprint": "paw_kit/schema/logits_processor.py|const|False>True|False",
-          "line": 183,
+          "line": 250,
           "col": 48,
           "kind": "const",
           "old": "False",
@@ -979,9 +991,9 @@
           "source_line": "self._transition_cache.popitem(last=False)"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:219:11:cmp:>>>=",
+          "id": "paw_kit/schema/logits_processor.py:316:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/logits_processor.py|cmp|>>>=|len(self._allowed_tokens_cache) > _MAX_ALLOWED_TOKENS_CACHE_ENTRIES",
-          "line": 219,
+          "line": 316,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -991,9 +1003,9 @@
           "source_line": "if len(self._allowed_tokens_cache) > _MAX_ALLOWED_TOKENS_CACHE_ENTRIES:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:220:52:const:False>True",
+          "id": "paw_kit/schema/logits_processor.py:317:52:const:False>True",
           "fingerprint": "paw_kit/schema/logits_processor.py|const|False>True|False",
-          "line": 220,
+          "line": 317,
           "col": 52,
           "kind": "const",
           "old": "False",
@@ -1001,18 +1013,6 @@
           "expr_before": "False",
           "expr_after": "True",
           "source_line": "self._allowed_tokens_cache.popitem(last=False)"
-        },
-        {
-          "id": "paw_kit/schema/logits_processor.py:248:15:cmp:not in>in",
-          "fingerprint": "paw_kit/schema/logits_processor.py|cmp|not in>in|token_id not in allowed",
-          "line": 248,
-          "col": 15,
-          "kind": "cmp",
-          "old": "not in",
-          "new": "in",
-          "expr_before": "token_id not in allowed",
-          "expr_after": "token_id in allowed",
-          "source_line": "if token_id not in allowed:"
         }
       ]
     }
