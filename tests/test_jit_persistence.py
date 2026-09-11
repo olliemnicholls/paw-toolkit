@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import threading
 from typing import Any, Callable, Dict, List, Tuple
 
 import pytest
@@ -827,3 +828,418 @@ def test_get_agreement_stats_accepts_a_window_the_cap_can_still_fill_D_9(
         assert db.get_agreement_stats("t", 9, 20, "shadow")["samples"] == 0
     finally:
         db.close()
+
+
+# --- J-7: one SQLite connection per thread, inside one TraceDB -----------------
+
+
+def test_each_thread_gets_its_own_connection_J_7(tmp_path: Path) -> None:
+    """The shadow worker must not share the caller's connection.
+
+    Shadow mode roughly doubled the decorator's caller latency because the worker's
+    `SELECT MAX(seq)` + INSERT + prune contended with the caller for one `TraceDB`
+    connection behind one lock. WAL supports a connection per thread.
+    """
+    db = TraceDB(db_path=str(tmp_path / "threadlocal.db"))
+    try:
+        main_conn = db._conn
+        seen: List[Any] = []
+        # A barrier, because a ThreadPoolExecutor happily runs three instant tasks on
+        # one worker thread -- which would make this assert nothing at all.
+        barrier = threading.Barrier(3)
+
+        def grab() -> Any:
+            barrier.wait(timeout=10)
+            return db._conn
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            for f in [pool.submit(grab) for _ in range(3)]:
+                seen.append(f.result())
+        assert all(c is not main_conn for c in seen), "a worker reused the caller's connection"
+        assert len({id(c) for c in seen}) == 3, "two worker threads shared a connection"
+        # Same thread, same connection -- not a new one per call.
+        assert db._conn is main_conn
+    finally:
+        db.close()
+
+
+def test_close_closes_every_threads_connection_J_7(tmp_path: Path) -> None:
+    """`close()` closes one connection per thread that touched the database, not one."""
+    db = TraceDB(db_path=str(tmp_path / "closeall.db"))
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(lambda i: db.record_trace("t", f"i{i}", "o", 1.0), range(3)))
+    conns = list(db._conns)
+    assert len(conns) == 4, f"expected 4 connections (main + 3 workers), got {len(conns)}"
+    db.close()
+    for conn in conns:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1;")
+    # A thread that never connected must not silently reopen the file either.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with pytest.raises(sqlite3.ProgrammingError):
+            pool.submit(db.get_call_count, "t").result()
+
+
+def test_status_listeners_survive_the_per_thread_connection_J_7(tmp_path: Path) -> None:
+    """A promotion driven from a worker thread still fires the registered listener.
+
+    This is the reason J-7's fix is a thread-local connection inside `TraceDB` rather
+    than a second `TraceDB` per worker: a second instance would carry its own empty
+    `_status_listeners` list, silently stopping `_invalidate_adapter_cache` from
+    firing on the worker's `try_promote`/`try_demote`.
+
+    Green at `main` by design: with one shared connection there is nothing for a
+    listener to get detached from. This pins that J-7 does not detach it.
+    """
+    db = TraceDB(db_path=str(tmp_path / "listener.db"))
+    fired: List[str] = []
+    db.register_status_listener(fired.append)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        db.set_shadow_started("t", "/tmp/t.paw")
+        fired.clear()
+        epoch = db.get_task_routing("t")[2]
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            won = pool.submit(db.try_promote, "t", epoch, 1.0, 20).result()
+        assert won, "the worker-thread promotion did not win"
+        assert fired == ["t"], (
+            f"listener fired {fired!r} -- the adapter-callable cache is no longer "
+            "invalidated by a worker-thread promotion"
+        )
+    finally:
+        db.close()
+
+
+def test_read_modify_write_is_serialised_across_threads_J_7(tmp_path: Path) -> None:
+    """Per-thread connections must not reintroduce D-1 inside a single process.
+
+    The shared lock was what made `record_shadow_pair`'s read-then-write accidentally
+    safe within one process. The moment each thread has its own connection that is
+    gone, and only D-1's explicit `BEGIN IMMEDIATE` is holding it up -- which is why
+    D-1 had to land before J-7 rather than merely before it in a list.
+
+    Green at `main` by design (main's shared lock serialises these threads), so
+    `red-at-main` cannot pin it. Proven red instead against this branch with D-1's
+    `BEGIN IMMEDIATE` removed from `_write_txn` and J-7 left in place: 180 rows with
+    duplicate seq values, i.e. D-1 reproduced inside a single process.
+    """
+    db = TraceDB(db_path=str(tmp_path / "threadrace.db"))
+    threads, per = 6, 30
+    try:
+        db.record_trace("t", "seed", "seed", 1.0)
+
+        def burst(_: int) -> None:
+            for i in range(per):
+                db.record_shadow_pair(
+                    task_id="t", state_epoch=0, phase="shadow", input_payload=f"i{i}",
+                    teacher_output="t", adapter_output="a", verdict="agree",
+                    max_pairs=100000,
+                )
+
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            list(pool.map(burst, range(threads)))
+        seqs = [
+            r[0] for r in db._conn.execute(
+                "SELECT seq FROM shadow_pairs WHERE task_id = 't';"
+            ).fetchall()
+        ]
+    finally:
+        db.close()
+    assert len(seqs) == threads * per
+    assert len(set(seqs)) == len(seqs), (
+        f"{len(seqs) - len(set(seqs))} duplicate seq value(s) across threads"
+    )
+    assert max(seqs) == threads * per
+
+
+# --- J-8: task identity must not collide across distinct functions -------------
+
+
+def _t1(text: str) -> str:
+    return "one:" + text
+
+
+def _t2(text: str) -> str:
+    return "two:" + text
+
+
+def test_same_qualname_in_two_places_gets_two_task_ids_J_8(tmp_path: Path) -> None:
+    """`sha256(module.qualname:spec)` collided across distinct functions.
+
+    Two decorations sharing a task_id share one call_count, one trace corpus, one
+    adapter and one shadow window -- so after promotion, tenant A's adapter serves
+    tenant B's traffic.
+    """
+    from paw_kit import compile_on_hit
+
+    _t2.__qualname__ = _t1.__qualname__
+    _t2.__module__ = _t1.__module__
+    dec = compile_on_hit(spec="j8", threshold=10 ** 9, cache_dir=str(tmp_path / "c"))
+    a, b = dec(_t1), dec(_t2)
+    try:
+        assert a.task_id != b.task_id, (
+            "two distinct functions share one task identity, so they share one "
+            "call_count, one corpus and one adapter"
+        )
+        a("x")
+        a("x")
+        b("y")
+        assert a.get_call_count() == 2 and b.get_call_count() == 1, (
+            "call counts are pooled across the two functions"
+        )
+    finally:
+        a.db.close()
+
+
+def test_decorator_factory_collision_is_warned_J_8(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Source location cannot separate one `def` decorated once per tenant, so warn.
+
+    This is the exact shape the finding describes: `make.<locals>.classify` for every
+    tenant, at the same file and line, so nothing automatic can tell them apart. The
+    warning is what points the user at `task_id=`.
+    """
+    from paw_kit import compile_on_hit
+
+    def make() -> Any:
+        @compile_on_hit(spec="j8-factory", threshold=10 ** 9, cache_dir=str(tmp_path / "f"))
+        def classify(text: str) -> str:
+            return "x"
+        return classify
+
+    first = make()
+    with caplog.at_level("WARNING", logger="paw_kit.jit"):
+        second = make()
+    try:
+        assert first.task_id == second.task_id  # the collision this warns about
+        assert any("already derived for a different function" in r.message
+                   for r in caplog.records), (
+            "a second decoration resolving to an existing task_id was not warned about"
+        )
+    finally:
+        first.db.close()
+
+
+def test_explicit_task_id_override_J_8(tmp_path: Path) -> None:
+    """`task_id=` is the way out of the factory collision."""
+    from paw_kit import compile_on_hit
+
+    def make(tenant: str) -> Any:
+        @compile_on_hit(
+            spec="j8-override", threshold=10 ** 9,
+            cache_dir=str(tmp_path / "o"), task_id=f"tenant-{tenant}",
+        )
+        def classify(text: str) -> str:
+            return f"{tenant}:{text}"
+        return classify
+
+    a, b = make("a"), make("b")
+    try:
+        assert (a.task_id, b.task_id) == ("tenant-a", "tenant-b")
+        a("x")
+        b("y")
+        b("z")
+        assert a.get_call_count() == 1 and b.get_call_count() == 2
+    finally:
+        a.db.close()
+
+
+# --- J-11: one logical call, one payload --------------------------------------
+
+
+def _payloads(wrapper: Any) -> List[str]:
+    return [t["input_payload"] for t in wrapper.db.get_traces(wrapper.task_id)]
+
+
+def test_positional_and_keyword_calls_share_one_payload_J_11(tmp_path: Path) -> None:
+    """`f("hello")` and `f(text="hello")` are the same call and must record the same row.
+
+    They used to record `hello` and `{"args": [], "kwargs": {"text": "hello"}}`, so a
+    caller mixing styles trained the adapter on one encoding and served it another.
+    """
+    from paw_kit import compile_on_hit
+
+    @compile_on_hit(spec="j11-bind", threshold=10 ** 9, cache_dir=str(tmp_path / "b"))
+    def f(text: str) -> str:
+        return "ok"
+
+    try:
+        f("hello")
+        f(text="hello")
+        assert _payloads(f) == ["hello", "hello"]
+    finally:
+        f.db.close()
+
+
+def test_keyword_order_does_not_change_the_payload_J_11(tmp_path: Path) -> None:
+    """`sort_keys=True`: keyword order is a calling detail, not part of the input."""
+    from paw_kit import compile_on_hit
+
+    @compile_on_hit(spec="j11-sort", threshold=10 ** 9, cache_dir=str(tmp_path / "s"))
+    def f(**kw: Any) -> str:
+        return "ok"
+
+    try:
+        f(b=1, a=2)
+        f(a=2, b=1)
+        seen = _payloads(f)
+        assert seen[0] == seen[1], f"keyword order leaked into the payload: {seen}"
+    finally:
+        f.db.close()
+
+
+def test_defaults_are_applied_before_serialising_J_11(tmp_path: Path) -> None:
+    """An omitted default and an explicitly-passed one are the same call."""
+    from paw_kit import compile_on_hit
+
+    @compile_on_hit(spec="j11-def", threshold=10 ** 9, cache_dir=str(tmp_path / "d"))
+    def f(text: str, mode: str = "fast") -> str:
+        return "ok"
+
+    try:
+        f("x")
+        f("x", mode="fast")
+        seen = _payloads(f)
+        assert seen[0] == seen[1], f"an omitted default changed the payload: {seen}"
+    finally:
+        f.db.close()
+
+
+def test_unserializable_argument_is_refused_not_repr_encoded_J_11(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`default=str` embedded `id()`-bearing reprs into the JSON payload.
+
+    Three equal-but-distinct objects therefore produced three distinct payloads that
+    *looked* like clean JSON. The refusal does not make such a payload canonical --
+    nothing can -- but it stops it masquerading as one, and says so in the log.
+    """
+    from paw_kit import compile_on_hit
+    from paw_kit.jit import decorator as dec_mod
+
+    class Opaque:
+        pass
+
+    @compile_on_hit(spec="j11-refuse", threshold=10 ** 9, cache_dir=str(tmp_path / "r"))
+    def f(obj: Any) -> str:
+        return "ok"
+
+    dec_mod._UNSERIALIZABLE_WARNED.discard(f.__qualname__)
+    try:
+        with caplog.at_level("WARNING", logger="paw_kit.jit"):
+            f(Opaque())
+        payload = _payloads(f)[0]
+        assert not payload.startswith('{"args"'), (
+            f"an unserializable argument was still JSON-encoded via repr: {payload}"
+        )
+        assert any("JSON cannot represent" in r.message for r in caplog.records), (
+            "the refusal was silent"
+        )
+    finally:
+        f.db.close()
+
+
+# --- J-12: a window is scored at or past its boundary, exactly once ------------
+
+
+def test_decoration_rejects_a_cap_that_holds_only_one_window_J_12(
+    tmp_path: Path,
+) -> None:
+    """`shadow_max_pairs >= 2 * max(window, audit_window)`. API-breaking, deliberately.
+
+    At exactly one window's worth of retention, one `teacher_error` row makes the
+    boundary unscoreable -- and the window was discarded without ever being retried,
+    while `seq` kept advancing and the stall budget kept counting it.
+    """
+    from paw_kit import compile_on_hit
+
+    with pytest.raises(ValueError, match="2 \\* max"):
+        compile_on_hit(
+            spec="j12", cache_dir=str(tmp_path / "x"),
+            shadow_window=20, audit_window=20, shadow_max_pairs=20,
+        )
+    # Twice the window is accepted, and so are the shipped defaults.
+    compile_on_hit(
+        spec="j12", cache_dir=str(tmp_path / "y"),
+        shadow_window=20, audit_window=20, shadow_max_pairs=40,
+    )
+    compile_on_hit(spec="j12", cache_dir=str(tmp_path / "z"))
+
+
+class _ScriptedStats:
+    """Minimal `TraceDB` stand-in for driving `_maybe_transition` directly."""
+
+    def __init__(self, scripted: List[Dict[str, Any]]) -> None:
+        self.scripted = scripted
+        self.stats_calls = 0
+        self.promotions: List[int] = []
+
+    def get_agreement_stats(self, task_id: str, epoch: int, window: int, phase: str) -> Dict[str, Any]:
+        out = self.scripted[min(self.stats_calls, len(self.scripted) - 1)]
+        self.stats_calls += 1
+        return out
+
+    def try_promote(self, task_id: str, epoch: int, rate: Any, samples: Any, reason: Any = None) -> bool:
+        self.promotions.append(samples)
+        return True
+
+
+def _job(db: Any) -> Any:
+    from paw_kit.jit.shadow import ShadowJob
+
+    return ShadowJob(
+        task_id="t", db_path="/tmp/j12.db", db=db, state_epoch=0, phase="shadow",
+        input_payload="i", shadow_window=20, shadow_threshold=0.8, max_pairs=40,
+    )
+
+
+def test_a_window_short_at_its_boundary_is_retried_J_12() -> None:
+    """The boundary is evaluated at or past its exact multiple, not only on it.
+
+    A window that could not be scored at `seq == window` used to be discarded outright
+    -- the next check was at `2 * window`, over a different set of comparisons -- so a
+    single unscoreable boundary silently threw a whole window away.
+    """
+    from paw_kit.jit.shadow import ShadowRunner
+
+    db = _ScriptedStats([
+        {"rate": 1.0, "samples": 19, "seq": 20},   # short at the boundary
+        {"rate": 1.0, "samples": 20, "seq": 21},   # complete one comparison later
+    ])
+    runner = ShadowRunner()
+    job = _job(db)
+    runner._maybe_transition(job, 20)
+    assert db.promotions == [], "promoted on a window that was one sample short"
+    runner._maybe_transition(job, 21)
+    assert db.promotions == [20], (
+        "the retried boundary was never evaluated -- the whole window was discarded"
+    )
+
+
+def test_a_scored_window_is_not_rescored_on_every_comparison_J_12() -> None:
+    """Evaluating at-or-past a boundary must stay tumbling, not become sliding.
+
+    A sliding window gives a below-threshold adapter a fresh draw on every single
+    comparison and promotes it eventually, which is the exact failure shadow mode
+    exists to prevent.
+
+    Green at `main` by design: `seq % window == 0` does not re-score either. This is
+    the anti-regression half of J-12's at-or-past-the-boundary change, whose positive
+    half (`..._is_retried_J_12`) is red at main.
+    """
+    from paw_kit.jit.shadow import ShadowRunner
+
+    db = _ScriptedStats([{"rate": 1.0, "samples": 20, "seq": 20}])
+    runner = ShadowRunner()
+    job = _job(db)
+    runner._maybe_transition(job, 20)
+    assert db.stats_calls == 1 and db.promotions == [20]
+    for seq in range(21, 40):
+        runner._maybe_transition(job, seq)
+    assert db.stats_calls == 1, (
+        f"the window was re-scored {db.stats_calls - 1} more time(s) before the next "
+        "boundary -- that is a sliding window"
+    )
+    runner._maybe_transition(job, 40)
+    assert db.stats_calls == 2, "the next completed window was not evaluated"

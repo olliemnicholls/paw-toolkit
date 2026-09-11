@@ -61,9 +61,9 @@ _SCHEMA_VERSION = 2
 _STATE_TRANSITIONS_MAX_ROWS = 200
 
 # Prune every N inserts rather than on every one: the oldest-first delete below is
-# index-covered but its subquery still walks `cap` index entries, and it runs while
-# this class's single `self._lock` is held -- the same lock the caller's routing read
-# and `record_trace` take. A cap at or below this interval is pruned on every insert
+# index-covered but its subquery still walks `cap` index entries, and (since D-5) it
+# runs in its own short write transaction, which still contends for SQLite's single
+# writer with the caller's `record_trace`. A cap at or below this interval is pruned
 # instead (the subquery is then trivially small), which is what makes a deliberately
 # tiny cap an exact bound rather than an approximate one. The worst-case row count for
 # a table is therefore `cap + prune_interval - 1`.
@@ -108,16 +108,19 @@ class TraceDB:
         # directory's mode, and mkdir's own `mode` argument is subject to umask, so
         # chmod explicitly.
         self._tighten_dir_best_effort(self.db_path.parent, parent_existed)
+        # J-7: `self._lock` no longer serialises database access -- it guards
+        # `_status_listeners` and nothing else. See `_connection` below.
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(
-            str(self.db_path),
-            check_same_thread=False,
-            timeout=30.0,
-            # PAW-JIT-04: BEGIN IMMEDIATE instead of the default deferred BEGIN --
-            # see the module-level comment on _DB_RETRY_ATTEMPTS.
-            isolation_level="IMMEDIATE",
-        )
-        self._conn.row_factory = sqlite3.Row
+        # One SQLite connection per thread (J-7), all recorded here so `close()` can
+        # close every one of them.
+        self._local = threading.local()
+        self._conns: List[sqlite3.Connection] = []
+        self._conns_lock = threading.Lock()
+        self._closed = False
+        # Connect eagerly for the constructing thread: the `chmod(0o600)` below must
+        # find the database file already created (PAW-JIT-01), and a read-only parent
+        # directory must still raise out of the constructor rather than at first use.
+        self._connect()
         # PAW-JIT-05: callbacks invoked with `task_id` whenever set_status() writes a
         # new status/adapter_path for that task -- the same-process fast-path
         # invalidation hook the adapter-callable cache in jit/decorator.py uses.
@@ -150,6 +153,55 @@ class TraceDB:
         # contain trace data; they don't necessarily inherit the main file's mode.
         self._chmod_best_effort(self.db_path.with_name(self.db_path.name + "-wal"), 0o600)
         self._chmod_best_effort(self.db_path.with_name(self.db_path.name + "-shm"), 0o600)
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open this thread's connection and register it for `close()` (J-7)."""
+        conn = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+            timeout=30.0,
+            # PAW-JIT-04: BEGIN IMMEDIATE instead of the default deferred BEGIN --
+            # see the module-level comment on _DB_RETRY_ATTEMPTS. Single-statement
+            # writes rely on it; read-modify-write goes through `_write_txn`.
+            isolation_level="IMMEDIATE",
+        )
+        conn.row_factory = sqlite3.Row
+        with self._conns_lock:
+            if self._closed:
+                conn.close()
+                raise sqlite3.ProgrammingError(
+                    "Cannot operate on a closed database."
+                )
+            self._conns.append(conn)
+        self._local.conn = conn
+        return conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """This thread's SQLite connection, opened on first use (J-7).
+
+        Shadow mode roughly doubled the decorator's caller latency, contradicting
+        "Nothing in shadow mode adds latency to it": the comparison work is off the
+        request path but its *persistence* was not, because the shadow worker and the
+        caller shared one connection behind one lock and therefore contended for both.
+        WAL supports one connection per thread, so they no longer do.
+
+        This is a **thread-local connection inside one `TraceDB`**, not a second
+        `TraceDB` per worker. A second instance would carry its own empty
+        `_status_listeners` list, silently stopping `_invalidate_adapter_cache` from
+        firing on the worker's `try_promote`/`try_demote` -- a behaviour change no
+        finding asked for.
+
+        What now makes concurrent access safe is D-1's `_write_txn` (an explicit
+        `BEGIN IMMEDIATE`) plus the 30s busy_timeout, exactly as it already was across
+        processes. Before D-1, giving the worker its own connection would have
+        reintroduced D-1 *inside* a single process: the shared lock was what made the
+        racy read-then-write accidentally safe in-process.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._connect()
+        return conn
 
     @staticmethod
     def _chmod_best_effort(path: Path, mode: int) -> None:
@@ -223,6 +275,9 @@ class TraceDB:
         key's own `os.stat` identity component -- but a backstop for a filesystem
         that reports `st_ino == 0` (some SMB/FUSE mounts) or a third-party backend
         that rewrites an adapter file in place rather than via `os.replace`.
+
+        J-7: `self._lock` guards this list and nothing else now -- database access is
+        serialised by SQLite across per-thread connections, not by this lock.
         """
         with self._lock:
             self._status_listeners.append(listener)
@@ -232,9 +287,13 @@ class TraceDB:
         """One write transaction whose **leading read** is already inside it (D-1).
 
         Every read-modify-write method on this class must use this and nothing else.
-        Acquiring `self._lock` and issuing `BEGIN IMMEDIATE` are deliberately the same
-        gesture: a method that forgets the transaction cannot get the lock either, so
-        the two can never drift apart the way they did before D-1.
+        It is the only place `BEGIN IMMEDIATE` is issued, so a method either goes
+        through it and is correct or does not and is visibly not a transaction at all
+        -- there is no third shape to get subtly wrong, which is how D-1 survived.
+
+        Since J-7 the connection is per thread, so this no longer serialises writers
+        in-process: SQLite does, exactly as it already did across processes. That is
+        why D-1 had to land first.
 
         The `in_transaction` guard is load-bearing. A nested `BEGIN IMMEDIATE` raises
         `OperationalError("cannot start a transaction within a transaction")`, which
@@ -250,10 +309,11 @@ class TraceDB:
         writes, and so attracts any blanket rule -- would therefore silently destroy
         the WAL guarantee that this module's concurrency story rests on.
         """
-        with self._lock, self._conn:
-            if not self._conn.in_transaction:
-                self._conn.execute("BEGIN IMMEDIATE;")
-            yield self._conn
+        conn = self._conn
+        with conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE;")
+            yield conn
 
     def _note_write(self, counter: Dict[str, int], task_id: str, interval: int) -> bool:
         """Bump a per-task prune clock and report whether a prune is now due (D-5).
@@ -303,7 +363,10 @@ class TraceDB:
         # as every other write rather than raising OperationalError out of the
         # constructor.
         def _do() -> None:
-            with self._lock, self._conn:
+            # NB: `with self._conn` and deliberately NOT `_write_txn` -- see its
+            # docstring. `PRAGMA journal_mode=WAL` inside an open transaction on a
+            # fresh database silently leaves the file in rollback-journal mode.
+            with self._conn:
                 self._conn.execute("PRAGMA journal_mode=WAL;")
                 self._conn.execute(
                     """
@@ -466,7 +529,7 @@ class TraceDB:
         return self._with_write_retry(_do)
 
     def _get_call_count_locked(self, task_id: str) -> int:
-        """Read call_count for task_id. Caller must already hold self._lock."""
+        """Read call_count for task_id. Runs on this thread's connection."""
         cur = self._conn.execute(
             "SELECT call_count FROM tasks WHERE task_id = ?;", (task_id,)
         )
@@ -475,17 +538,15 @@ class TraceDB:
 
     def get_call_count(self, task_id: str) -> int:
         """Retrieve total calls recorded for task."""
-        with self._lock:
-            return self._get_call_count_locked(task_id)
+        return self._get_call_count_locked(task_id)
 
     def get_status(self, task_id: str) -> str:
         """Retrieve task lifecycle status (tracing | compiling | ready | failed)."""
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT status FROM tasks WHERE task_id = ?;", (task_id,)
-            )
-            row = cur.fetchone()
-            return row["status"] if row else "tracing"
+        cur = self._conn.execute(
+            "SELECT status FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
+        return row["status"] if row else "tracing"
 
     def set_status(
         self,
@@ -496,8 +557,8 @@ class TraceDB:
         """Update task lifecycle status and optional adapter path.
 
         PAW-JIT-05: fires every registered status listener with `task_id` after the
-        write commits (not while `self._lock`/the SQLite transaction is held, so a
-        listener can never deadlock against this method or another TraceDB call).
+        write commits (never while the SQLite transaction is held, so a listener can
+        never deadlock against this method or another TraceDB call).
 
         Track 14: a status *change* also bumps `state_epoch` and writes a
         `state_transitions` row, so the lifecycle is auditable from the database
@@ -564,8 +625,7 @@ class TraceDB:
         that has never failed a compile. Callers that need to tell those two apart use
         `_get_compile_attempts_locked`, which returns `None` for the former (D-7).
         """
-        with self._lock:
-            attempts = self._get_compile_attempts_locked(task_id)
+        attempts = self._get_compile_attempts_locked(task_id)
         return 0 if attempts is None else attempts
 
     def _get_compile_attempts_locked(self, task_id: str) -> Optional[int]:
@@ -574,7 +634,8 @@ class TraceDB:
         D-7: "no task" and "a task that has never failed a compile" both used to read
         0, which is what let `increment_compile_attempts` return 0 forever against a
         missing row and turned `BackgroundCompiler`'s bounded retry into an unbounded,
-        paid one. Caller must already hold self._lock.
+        paid one. Runs on this thread's connection; call it inside `_write_txn` when
+        the value must agree with a write in the same transaction.
         """
         cur = self._conn.execute(
             "SELECT compile_attempts FROM tasks WHERE task_id = ?;", (task_id,)
@@ -622,14 +683,13 @@ class TraceDB:
 
     def get_adapter_path(self, task_id: str) -> Optional[str]:
         """Retrieve path to compiled adapter if task is ready."""
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT adapter_path, status FROM tasks WHERE task_id = ?;", (task_id,)
-            )
-            row = cur.fetchone()
-            if row and row["status"] == "ready":
-                return row["adapter_path"]
-            return None
+        cur = self._conn.execute(
+            "SELECT adapter_path, status FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
+        if row and row["status"] == "ready":
+            return row["adapter_path"]
+        return None
 
     def get_traces(
         self,
@@ -637,21 +697,21 @@ class TraceDB:
         limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve recorded traces for training example generation."""
-        with self._lock:
-            query = "SELECT input_payload, teacher_output, latency_ms, timestamp FROM traces WHERE task_id = ? ORDER BY id ASC"
-            params: List[Any] = [task_id]
-            if limit is not None:
-                query += " LIMIT ?"
-                params.append(limit)
-            cur = self._conn.execute(query, params)
-            return [dict(row) for row in cur.fetchall()]
+        query = "SELECT input_payload, teacher_output, latency_ms, timestamp FROM traces WHERE task_id = ? ORDER BY id ASC"
+        params: List[Any] = [task_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        cur = self._conn.execute(query, params)
+        return [dict(row) for row in cur.fetchall()]
 
     # --- Track 14: shadow mode ---------------------------------------------------
 
     def _get_status_and_epoch_locked(self, task_id: str) -> Tuple[Optional[str], int]:
         """Read (status, state_epoch) for task_id, or (None, 0) if there is no row.
 
-        Caller must already hold self._lock.
+        Call it inside `_write_txn`: this is the leading read of a read-modify-write,
+        and D-1 is precisely what happens when it is not.
         """
         cur = self._conn.execute(
             "SELECT status, state_epoch FROM tasks WHERE task_id = ?;", (task_id,)
@@ -670,15 +730,14 @@ class TraceDB:
         `status == 'ready'` gate and its existing meaning. A task with no row reads
         `("tracing", None, 0)`, matching `get_status`'s default.
         """
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT status, adapter_path, state_epoch FROM tasks WHERE task_id = ?;",
-                (task_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return ("tracing", None, 0)
-            return (row["status"], row["adapter_path"], row["state_epoch"] or 0)
+        cur = self._conn.execute(
+            "SELECT status, adapter_path, state_epoch FROM tasks WHERE task_id = ?;",
+            (task_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return ("tracing", None, 0)
+        return (row["status"], row["adapter_path"], row["state_epoch"] or 0)
 
     def _record_transition_locked(
         self,
@@ -691,7 +750,7 @@ class TraceDB:
         now: str,
         reason: Optional[str] = None,
     ) -> None:
-        """Insert a lifecycle transition row. Caller must already hold self._lock."""
+        """Insert a lifecycle transition row. Caller must be inside `_write_txn`."""
         self._conn.execute(
             """
             INSERT INTO state_transitions
@@ -820,7 +879,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> bool:
-            with self._lock, self._conn:
+            with self._conn:
                 cur = self._conn.execute(
                     """
                     UPDATE tasks
@@ -859,7 +918,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> bool:
-            with self._lock, self._conn:
+            with self._conn:
                 cur = self._conn.execute(
                     """
                     UPDATE tasks
@@ -952,11 +1011,10 @@ class TraceDB:
 
     def get_shadow_config(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Read back the persisted resolved shadow configuration, if any."""
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT shadow_config FROM tasks WHERE task_id = ?;", (task_id,)
-            )
-            row = cur.fetchone()
+        cur = self._conn.execute(
+            "SELECT shadow_config FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
         if row is None or not row["shadow_config"]:
             return None
         try:
@@ -1061,13 +1119,12 @@ class TraceDB:
 
         Survives pruning (unlike `COUNT(*)`), which is what the stall guard needs.
         """
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
-                "WHERE task_id = ? AND state_epoch = ?;",
-                (task_id, state_epoch),
-            )
-            return cur.fetchone()["max_seq"]
+        cur = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
+            "WHERE task_id = ? AND state_epoch = ?;",
+            (task_id, state_epoch),
+        )
+        return cur.fetchone()["max_seq"]
 
     def get_agreement_stats(
         self, task_id: str, state_epoch: int, window: int, phase: str = "shadow"
@@ -1090,43 +1147,42 @@ class TraceDB:
         boundary is simply the first one recorded, so nothing is double-counted or
         missed; with none at all yet, nothing has started, and it reads 0.
         """
-        with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT verdict, COUNT(*) AS n FROM (
-                    SELECT verdict FROM shadow_pairs
-                    WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                      AND verdict != 'teacher_error'
-                    ORDER BY id DESC LIMIT ?
-                ) GROUP BY verdict;
-                """,
-                (task_id, state_epoch, phase, window),
-            ).fetchall()
-            boundary_id = self._conn.execute(
-                """
-                SELECT MIN(id) AS boundary_id FROM (
-                    SELECT id FROM shadow_pairs
-                    WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                      AND verdict != 'teacher_error'
-                    ORDER BY id DESC LIMIT ?
-                );
-                """,
-                (task_id, state_epoch, phase, window),
-            ).fetchone()["boundary_id"]
-            if boundary_id is None:
-                teacher_errors = 0
-            else:
-                teacher_errors = self._conn.execute(
-                    "SELECT COUNT(*) AS n FROM shadow_pairs "
-                    "WHERE task_id = ? AND state_epoch = ? AND phase = ? "
-                    "AND verdict = 'teacher_error' AND id >= ?;",
-                    (task_id, state_epoch, phase, boundary_id),
-                ).fetchone()["n"]
-            seq = self._conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
-                "WHERE task_id = ? AND state_epoch = ?;",
-                (task_id, state_epoch),
-            ).fetchone()["max_seq"]
+        rows = self._conn.execute(
+            """
+            SELECT verdict, COUNT(*) AS n FROM (
+                SELECT verdict FROM shadow_pairs
+                WHERE task_id = ? AND state_epoch = ? AND phase = ?
+                  AND verdict != 'teacher_error'
+                ORDER BY id DESC LIMIT ?
+            ) GROUP BY verdict;
+            """,
+            (task_id, state_epoch, phase, window),
+        ).fetchall()
+        boundary_id = self._conn.execute(
+            """
+            SELECT MIN(id) AS boundary_id FROM (
+                SELECT id FROM shadow_pairs
+                WHERE task_id = ? AND state_epoch = ? AND phase = ?
+                  AND verdict != 'teacher_error'
+                ORDER BY id DESC LIMIT ?
+            );
+            """,
+            (task_id, state_epoch, phase, window),
+        ).fetchone()["boundary_id"]
+        if boundary_id is None:
+            teacher_errors = 0
+        else:
+            teacher_errors = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM shadow_pairs "
+                "WHERE task_id = ? AND state_epoch = ? AND phase = ? "
+                "AND verdict = 'teacher_error' AND id >= ?;",
+                (task_id, state_epoch, phase, boundary_id),
+            ).fetchone()["n"]
+        seq = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
+            "WHERE task_id = ? AND state_epoch = ?;",
+            (task_id, state_epoch),
+        ).fetchone()["max_seq"]
 
         counts = {row["verdict"]: row["n"] for row in rows}
         agree = counts.get("agree", 0)
@@ -1182,24 +1238,22 @@ class TraceDB:
 
         Returns the *persisted* (therefore possibly redacted, see `redact_trace`) text.
         """
-        with self._lock:
-            cur = self._conn.execute(
-                """
-                SELECT input_payload, teacher_output, adapter_output, verdict,
-                       error_type, phase, timestamp
-                FROM shadow_pairs
-                WHERE task_id = ? AND verdict IN ('disagree', 'error')
-                ORDER BY id DESC LIMIT ?;
-                """,
-                (task_id, limit),
-            )
-            return [dict(row) for row in cur.fetchall()]
+        cur = self._conn.execute(
+            """
+            SELECT input_payload, teacher_output, adapter_output, verdict,
+                   error_type, phase, timestamp
+            FROM shadow_pairs
+            WHERE task_id = ? AND verdict IN ('disagree', 'error')
+            ORDER BY id DESC LIMIT ?;
+            """,
+            (task_id, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
     def list_task_ids(self) -> List[str]:
         """Every task_id known to this database, oldest first."""
-        with self._lock:
-            cur = self._conn.execute("SELECT task_id FROM tasks ORDER BY created_at ASC;")
-            return [row["task_id"] for row in cur.fetchall()]
+        cur = self._conn.execute("SELECT task_id FROM tasks ORDER BY created_at ASC;")
+        return [row["task_id"] for row in cur.fetchall()]
 
     def get_task_report(self, task_id: str) -> Dict[str, Any]:
         """Rich per-task view for `wrapper.get_agreement()` and `paw-kit report`.
@@ -1207,9 +1261,8 @@ class TraceDB:
         `get_status` deliberately keeps its bare-`str` signature and return; this is
         the additive rich API rather than a change to it.
         """
-        with self._lock:
-            cur = self._conn.execute("SELECT * FROM tasks WHERE task_id = ?;", (task_id,))
-            row = cur.fetchone()
+        cur = self._conn.execute("SELECT * FROM tasks WHERE task_id = ?;", (task_id,))
+        row = cur.fetchone()
         if row is None:
             base: Dict[str, Any] = {
                 "task_id": task_id, "status": "tracing", "adapter_path": None,
@@ -1278,12 +1331,11 @@ class TraceDB:
         return base
 
     def _prune_shadow_pairs_locked(self, task_id: str, max_pairs: int) -> None:
-        """Oldest-first retention on `shadow_pairs`. Caller must hold self._lock.
+        """Oldest-first retention on `shadow_pairs`. Caller must be inside `_write_txn`.
 
         An id-threshold delete rather than `id NOT IN (SELECT ... LIMIT ?)`: the
         subquery form materialises up to `cap` ids and re-scans them per row, and this
-        runs while the single connection lock the caller's routing read also takes is
-        held.
+        runs inside a write transaction holding SQLite's single writer.
         """
         self._conn.execute(
             """
@@ -1297,7 +1349,7 @@ class TraceDB:
         )
 
     def _prune_transitions_locked(self, task_id: str) -> None:
-        """Oldest-first retention on `state_transitions`. Caller must hold self._lock."""
+        """Oldest-first retention on `state_transitions`. Caller must be inside `_write_txn`."""
         self._conn.execute(
             """
             DELETE FROM state_transitions
@@ -1310,6 +1362,19 @@ class TraceDB:
         )
 
     def close(self) -> None:
-        """Close SQLite connection."""
-        with self._lock:
-            self._conn.close()
+        """Close every connection this TraceDB has handed out (J-7).
+
+        One per thread that has touched it, not one overall. After this, a thread
+        that has never connected gets `ProgrammingError` rather than silently
+        reopening the file -- the same failure a thread holding an already-closed
+        connection sees, which `shadow.py`'s worker already handles.
+        """
+        with self._conns_lock:
+            self._closed = True
+            conns = list(self._conns)
+            self._conns.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:  # pragma: no cover - closing twice, or mid-statement
+                pass
