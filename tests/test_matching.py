@@ -89,6 +89,12 @@ _H4_TABLE = [
     ("1", "1", True),
     ("1", "2", False),
     ("1e400", "1e400", True),           # byte-identical short-circuit
+    # One side finite, one overflowed. Both orders, because the two finiteness checks
+    # are separate statements and a single order only reaches the first of them.
+    ("1", "1e400", False),
+    ("1e400", "1", False),
+    ("2.5", "-1e400", False),
+    ("-1e400", "2.5", False),
     ("[1, 2]", "[1,2]", True),
     ('{"a": 1}', '{"a": 1.0}', True),
     # --- null ------------------------------------------------------------------
@@ -151,6 +157,23 @@ def test_h4_unquoted_does_not_reopen_the_bool_int_hole() -> None:
     quoting artifact nor an equal value."""
     assert values_equivalent_unquoted("true", "1") is False
     assert values_equivalent_unquoted('{"admin": true}', '{"admin": 1}') is False
+
+
+def test_h4_json_values_equal_rejects_a_type_json_never_produces() -> None:
+    """The fallback for a value that is not a JSON type at all.
+
+    `json_values_equal` is public and takes `Any`, so it can be handed a `set`, a
+    `tuple`, or an arbitrary object by a caller that did not go through `json.loads`.
+    Unequal-by-default is the safe answer -- the alternative is reporting two things
+    this function cannot compare as "the same value", in the function whose docstring
+    says it decides every published number.
+    """
+    from paw_kit.test.matching import json_values_equal
+
+    assert json_values_equal(set(), set()) is False
+    assert json_values_equal({1, 2}, {1, 2}) is False
+    assert json_values_equal((1, 2), (1, 2)) is False
+    assert json_values_equal(object(), object()) is False
 
 
 def test_h4_json_values_equal_rejects_non_finite_directly() -> None:
