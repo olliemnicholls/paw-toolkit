@@ -3,11 +3,15 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import sqlite3
+import stat
 import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
+
+logger = logging.getLogger("paw_kit.jit.db")
 
 # INSERT ... ON CONFLICT ... DO UPDATE (used by record_trace) requires SQLite >= 3.24.
 _MIN_SQLITE_VERSION = (3, 24, 0)
@@ -90,6 +94,11 @@ class TraceDB:
                 f"for upsert support (found {sqlite3.sqlite_version})."
             )
         self.db_path = Path(db_path)
+        # D-6: probed *before* the mkdir. `Path.mkdir(exist_ok=True)` returns None
+        # either way, so "did this call create the directory" cannot be inferred from
+        # it -- and the CWD/home carve-out below must not apply to a directory this
+        # constructor made itself.
+        parent_existed = self.db_path.parent.exists()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # PAW-JIT-01: traces.db holds raw, unredacted prompt/response text by default
         # (see decorator.py's `redact_trace`, PAW-JIT-02, for why redaction is not the
@@ -98,7 +107,7 @@ class TraceDB:
         # mkdir(..., exist_ok=True) doesn't retroactively tighten an already-existing
         # directory's mode, and mkdir's own `mode` argument is subject to umask, so
         # chmod explicitly.
-        self._chmod_best_effort(self.db_path.parent, 0o700)
+        self._tighten_dir_best_effort(self.db_path.parent, parent_existed)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(
             str(self.db_path),
@@ -152,6 +161,57 @@ class TraceDB:
         """
         try:
             path.chmod(mode)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _tighten_dir_best_effort(parent: Path, existed: bool) -> None:
+        """Clear group and other bits on the cache directory. Never set an absolute mode.
+
+        D-6: this used to be `chmod(0o700)`, which *sets* rather than tightens. A
+        deliberately group-shared `0o2775` directory was reduced to `0o700` and lost
+        its setgid bit, and a read-only `0o500` directory was silently made writable --
+        so merely importing a module that constructs a `TraceDB` rewrote permissions on
+        a directory the user shares with a group. Worse, `TraceDB("traces.db")` has
+        `Path(...).parent == Path(".")`, so it chmodded the process working directory.
+
+        `stat.S_IMODE(...) & ~0o077` can only ever clear bits, which is what makes
+        every case fall out without a special case: `0o2775` -> `0o2700` (setgid kept),
+        `0o1777` -> `0o1700` (sticky kept), `0o755` -> `0o700`, `0o644` -> `0o600`, and
+        `0o500` -> `0o500`, still not writable.
+
+        The carve-out is deliberately narrow -- warn and skip *only* when the resolved
+        parent is the process CWD or the user's home directory. Anything broader (e.g.
+        "skip a directory the caller didn't create") would stop `TraceDB` tightening a
+        pre-existing `.paw`, which is behaviour this class correctly provides.
+        """
+        try:
+            current = stat.S_IMODE(parent.stat().st_mode)
+        except OSError:
+            return
+        target = current & ~0o077
+        if target == current:
+            # Already closed. An optimisation (fewer syscalls), not a correctness
+            # requirement -- the chmod below would be a no-op anyway.
+            return
+        if existed:
+            try:
+                resolved = parent.resolve()
+                landmarks = {Path.cwd().resolve(), Path.home().resolve()}
+            except (OSError, RuntimeError):  # pragma: no cover - no cwd, no HOME
+                resolved, landmarks = None, set()
+            if resolved is not None and resolved in landmarks:
+                logger.warning(
+                    "paw_kit.jit: refusing to tighten permissions on %s -- it is the "
+                    "process working directory or your home directory, not a paw cache "
+                    "directory. traces.db holds raw prompt and response text; pass a "
+                    "cache_dir (e.g. './.paw') so it lives somewhere this library may "
+                    "restrict to owner-only access. Current mode %s.",
+                    resolved, oct(current),
+                )
+                return
+        try:
+            parent.chmod(target)
         except OSError:
             pass
 
@@ -1073,6 +1133,36 @@ class TraceDB:
         disagree = counts.get("disagree", 0)
         error = counts.get("error", 0)
         samples = agree + disagree + error
+        # D-9: refuse to do arithmetic over a window the retention cap cannot fill.
+        #
+        # A window is scored only at `samples == window`, and pruning bounds `samples`
+        # by `shadow_max_pairs`. With the cap below the window nothing ever completes,
+        # so neither promotion nor demotion can *ever* fire -- silently, with
+        # `paw-kit report` showing a healthy rate over a short window. The shipped
+        # decorator rejects the combination at decoration time; any other caller of
+        # these public methods did not, which is why the guard also belongs here, in
+        # the method that actually does the arithmetic.
+        #
+        # `seq` is the right witness: it is monotone over countable comparisons at this
+        # epoch and survives pruning, so `seq >= window` means at least a window's
+        # worth has been recorded. If fewer than `window` of them are still retained,
+        # retention is the reason and no amount of further traffic will help.
+        #
+        # This raises. `_with_write_retry` catches only `OperationalError`, so it
+        # propagates -- reaching `ShadowRunner._maybe_transition`, whose own
+        # `except Exception: return` swallows it (the comparison is simply not scored,
+        # the caller was served by the teacher either way) and `get_task_report`, where
+        # it surfaces to `paw-kit report`. Neither weakens the fail-open invariant:
+        # nothing on the request path calls this.
+        if window > 0 and seq >= window and samples < window:
+            raise ValueError(
+                f"task {task_id!r} at epoch {state_epoch} has recorded {seq} "
+                f"comparisons but retains only {samples} of the {window} a window "
+                "needs: the retention cap (shadow_max_pairs) is below the window, so "
+                "no window can ever complete and neither promotion nor demotion can "
+                "ever fire. Raise shadow_max_pairs to at least twice "
+                "max(shadow_window, audit_window), or lower the window."
+            )
         return {
             "phase": phase,
             "window": window,

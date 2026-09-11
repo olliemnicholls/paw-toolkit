@@ -595,3 +595,235 @@ def test_background_compiler_fails_closed_when_the_counter_stalls_D_7(
         )
     finally:
         db.close()
+
+
+# --- D-6: the cache directory's permissions are tightened, never set -----------
+
+
+def _mode(p: Path) -> int:
+    return stat.S_IMODE(p.stat().st_mode)
+
+
+def test_group_shared_cache_dir_is_tightened_not_reset_D_6(tmp_path: Path) -> None:
+    """A deliberately group-shared `0o2775` directory keeps its setgid bit.
+
+    The old code *set* `0o700` rather than tightening, so importing a module that
+    constructs a `TraceDB` rewrote permissions on a directory the user shares with a
+    group -- and dropped the setgid bit that makes the sharing work at all.
+    """
+    parent = tmp_path / "shared"
+    parent.mkdir()
+    parent.chmod(0o2775)
+    assert _mode(parent) == 0o2775, "the filesystem under tmp_path dropped setgid"
+    TraceDB(db_path=str(parent / "traces.db")).close()
+    assert _mode(parent) == 0o2700, (
+        f"expected 0o2700 (group/other cleared, setgid preserved), got {oct(_mode(parent))}"
+    )
+
+
+def test_sticky_cache_dir_keeps_its_sticky_bit_D_6(tmp_path: Path) -> None:
+    """`0o1777` -> `0o1700`: the mask clears group/other and touches nothing else."""
+    parent = tmp_path / "sticky"
+    parent.mkdir()
+    parent.chmod(0o1777)
+    TraceDB(db_path=str(parent / "traces.db")).close()
+    assert _mode(parent) == 0o1700, oct(_mode(parent))
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores the write bit")
+def test_read_only_cache_dir_is_not_made_writable_D_6(tmp_path: Path) -> None:
+    """`0o500` stays `0o500`. Masking never adds a bit, so no special case is needed.
+
+    The old code made a deliberately read-only directory writable, which is how the
+    database below gets created at all -- so the assertion that it *cannot* be created
+    is the assertion that the directory was not widened.
+    """
+    parent = tmp_path / "ro"
+    parent.mkdir()
+    parent.chmod(0o500)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            TraceDB(db_path=str(parent / "traces.db"))
+        assert _mode(parent) == 0o500, (
+            f"a read-only directory was widened to {oct(_mode(parent))}"
+        )
+    finally:
+        parent.chmod(0o700)
+
+
+def test_traces_db_does_not_chmod_the_process_cwd_D_6(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`TraceDB("traces.db")` has `parent == Path(".")` -- it must not chmod the CWD.
+
+    The narrow carve-out: always tighten, except when the resolved parent is the
+    process CWD or the user's home directory. Anything broader would stop `TraceDB`
+    tightening a pre-existing `.paw`, which is behaviour it correctly provides.
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    work.chmod(0o755)
+    monkeypatch.chdir(work)
+    TraceDB(db_path="traces.db").close()
+    assert _mode(work) == 0o755, (
+        f"the process working directory was chmodded to {oct(_mode(work))}"
+    )
+
+
+def test_preexisting_cache_dir_is_still_tightened_D_6(tmp_path: Path) -> None:
+    """The carve-out must not stop `.paw` itself being tightened (guard, green at main)."""
+    parent = tmp_path / ".paw"
+    parent.mkdir()
+    parent.chmod(0o755)
+    TraceDB(db_path=str(parent / "traces.db")).close()
+    assert _mode(parent) == 0o700, oct(_mode(parent))
+
+
+# --- D-3 / D-8: atomic_write_text ---------------------------------------------
+
+
+def test_atomic_write_text_fsyncs_the_file_and_the_directory_D_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spy on `os.fsync`, not a simulated power loss.
+
+    The docstring's crash-atomicity guarantee held for a process crash and not for a
+    power loss: `strace` counted `fsync calls: 0`, so on ext4 `data=ordered` the
+    rename can reach disk before the data blocks. The torn-file outcome itself is
+    still unreproduced (it needs failure injection) and is not claimed here.
+    """
+    from paw_kit import atomicio
+
+    seen: List[int] = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (seen.append(fd), real_fsync(fd))[1])
+
+    target = tmp_path / "out" / "manifest.paw"
+    atomicio.atomic_write_text(target, "payload")
+
+    assert target.read_text() == "payload"
+    assert len(seen) >= 2, (
+        f"{len(seen)} fsync call(s): the file and its parent directory must both be "
+        "synced, or the rename can reach disk before the data blocks"
+    )
+
+
+def test_atomic_write_text_follows_a_symlink_target_D_8(tmp_path: Path) -> None:
+    """`os.replace` does not follow symlinks: the link was replaced by a regular file.
+
+    The real target then kept its stale content and every other reader of it saw the
+    old program.
+    """
+    real = tmp_path / "real" / "program.paw"
+    real.parent.mkdir()
+    real.write_text("old")
+    link = tmp_path / "current.paw"
+    link.symlink_to(real)
+
+    from paw_kit.atomicio import atomic_write_text
+
+    atomic_write_text(link, "new")
+
+    assert link.is_symlink(), "the symlink was replaced by a regular file"
+    assert real.read_text() == "new", "the symlink's real target kept stale content"
+    assert not list(tmp_path.glob(".*tmp")), "a temp file was left behind"
+    assert not list(real.parent.glob(".*tmp")), "a temp file was left behind"
+
+
+def test_atomic_write_text_creates_its_temp_file_beside_the_resolved_target_D_8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mkstemp` must use the *resolved* target's directory, or `os.replace` gets EXDEV.
+
+    Same-directory placement is also what guarantees the destination gets a fresh
+    inode on every write, which `decorator.py`'s adapter-callable cache key depends on.
+    """
+    import tempfile as _tempfile
+
+    real = tmp_path / "real" / "program.paw"
+    real.parent.mkdir()
+    real.write_text("old")
+    link = tmp_path / "current.paw"
+    link.symlink_to(real)
+
+    seen: List[str] = []
+    real_mkstemp = _tempfile.mkstemp
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append(str(kwargs.get("dir")))
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(_tempfile, "mkstemp", spy)
+    from paw_kit.atomicio import atomic_write_text
+
+    atomic_write_text(link, "new")
+    assert seen == [str(real.parent)], (
+        f"temp file created in {seen}, not beside the resolved target {real.parent}"
+    )
+
+
+def test_atomic_write_text_preserves_an_existing_destination_mode_D_8(
+    tmp_path: Path
+) -> None:
+    """`mkstemp` creates at 0600, so a destination the user had at 0644 silently lost it.
+
+    The mode is applied to the temp file *before* `os.replace`, not after: applying it
+    afterwards leaves a window in which the destination is readable only by its owner.
+    """
+    from paw_kit.atomicio import atomic_write_text
+
+    target = tmp_path / "manifest.paw"
+    target.write_text("old")
+    target.chmod(0o644)
+    atomic_write_text(target, "new")
+    assert _mode(target) == 0o644, (
+        f"destination mode became {oct(_mode(target))} on rewrite"
+    )
+    # A destination that does not exist yet keeps mkstemp's restrictive default.
+    fresh = tmp_path / "fresh.paw"
+    atomic_write_text(fresh, "x")
+    assert _mode(fresh) == 0o600, oct(_mode(fresh))
+
+
+# --- D-9: a retention cap below the window makes the window unscoreable --------
+
+
+def test_get_agreement_stats_refuses_an_unscoreable_window_D_9(tmp_path: Path) -> None:
+    """`max_pairs < window` means no window can ever complete -- silently.
+
+    A window is scored only at `samples == window` and pruning bounds `samples` by the
+    cap, so neither promotion nor demotion can ever fire while `paw-kit report` shows
+    a healthy rate. The shipped decorator guards the combination at decoration time;
+    any other caller of these public methods did not, which is why the guard also has
+    to live in the method that does the arithmetic.
+    """
+    db = TraceDB(db_path=str(tmp_path / "d9.db"))
+    try:
+        for i in range(30):
+            db.record_shadow_pair(
+                task_id="t", state_epoch=0, phase="shadow", input_payload=f"i{i}",
+                teacher_output="t", adapter_output="a", verdict="agree", max_pairs=5,
+            )
+        with pytest.raises(ValueError, match="retention"):
+            db.get_agreement_stats("t", 0, 20, "shadow")
+    finally:
+        db.close()
+
+
+def test_get_agreement_stats_accepts_a_window_the_cap_can_still_fill_D_9(
+    tmp_path: Path,
+) -> None:
+    """The boundary: `max_pairs == window` is still scoreable, and must not raise."""
+    db = TraceDB(db_path=str(tmp_path / "d9ok.db"))
+    try:
+        for i in range(30):
+            db.record_shadow_pair(
+                task_id="t", state_epoch=0, phase="shadow", input_payload=f"i{i}",
+                teacher_output="t", adapter_output="a", verdict="agree", max_pairs=20,
+            )
+        stats = db.get_agreement_stats("t", 0, 20, "shadow")
+        assert stats["samples"] == 20 and stats["rate"] == 1.0
+        # And an epoch that has simply not run a full window yet reads normally.
+        assert db.get_agreement_stats("t", 9, 20, "shadow")["samples"] == 0
+    finally:
+        db.close()
