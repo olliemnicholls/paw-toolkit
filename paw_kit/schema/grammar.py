@@ -446,19 +446,37 @@ def _bounded_integer_regex(low: int, high: int) -> str:
 
 
 def _resolve_length_bounds(
-    annotation: Any, constraints: _FieldConstraints, unbounded_regex: str
+    annotation: Any, constraints: _FieldConstraints, unbounded_regex: str,
+    field_name: str = "<field>",
 ) -> Tuple[Optional[Tuple[int, Optional[int]]], Optional[str]]:
     """Decide whether a `MinLen`/`MaxLen` can be rendered, and say why not (S-9).
 
     Returns `(bounds, None)` when the bound will be applied, or `(None, reason)` when it
     will not -- either because this annotation's rendering cannot carry one, or because
     unrolling it would blow the decoder's state budget (see the measurements above).
+
+    Raises `PAWSchemaError` when the bounds are incoherent -- `min_length > max_length`,
+    or `max_length == 0` with `min_length > 0` -- rather than silently emitting a broken
+    grammar. This is not a budget question and does not belong in the returned `reason`
+    string: an incoherent bound describes a schema with NO legal value, which is exactly
+    the case the module's "raise rather than render" invariant (rule 4, see `S-3`) covers
+    -- it is unrelated to whether unrolling the bound would be affordable. Left
+    unchecked, `_render_quantifier(low, high)` with `low > high` emits `{5,2}`, a string
+    `re.compile` refuses outright (`re.error: min repeat greater than max repeat`) and
+    that then reaches `RegexLogitsProcessor` as a bare, unwrapped exception -- S-1's and
+    S-15's exact failure shapes, reopened through this door. Found by Phase F review.
     """
     kind = _length_constraint_kind(annotation)
     if kind is None:
         return None, f"min_length/max_length on {annotation!r}"
     low = constraints.min_len or 0
     high = constraints.max_len
+    if high is not None and low > high:
+        raise PAWSchemaError(
+            f"{field_name!r} has min_length={low} greater than max_length={high}: no "
+            "string or collection can satisfy both, so there is no legal value this "
+            "field could ever take."
+        )
     # An open-ended `{m,}` still unrolls its m mandatory repetitions, so the cost
     # question is about whichever end is actually pinned.
     repetitions = high if high is not None else low
@@ -525,8 +543,18 @@ def _warn_dropped_constraints(
 
     One warning per field, not one per constraint: a field with four inexpressible
     constraints is one problem, and four lines would train the reader to filter them.
-    The compile itself is cached by fingerprint, so a model compiled twice does not
-    warn twice either.
+
+    In practice this fires at most once per *fingerprint*, per process, not once per
+    field in any stronger sense: the compile is cached by fingerprint (S-4), and this
+    call sits inside the cached path, so a second call with the identical model
+    (compiled twice) is the only case genuinely deduplicated. A *different* model class
+    that fingerprints identically -- the exact shape `pydantic.create_model` produces
+    on every request, which the fingerprint cache exists to serve -- warns on whichever
+    one compiles first and silently never again for the rest of the process, because
+    the fingerprint carries no class identity. Phase F review, 2026-09-11: filed as an
+    addendum finding (S-21) rather than fixed here, since closing it means deciding
+    whether the fingerprint should include a class identity at all, which is a cache
+    invalidation policy question for the S-4 code, not a docstring fix.
 
     A warning and not a raise. Raising would refuse schemas that compile and work today
     -- `Field(multiple_of=3)` has never been enforced by the grammar -- and the parent
@@ -927,6 +955,16 @@ def _render_char_set(is_positive: bool, chars: FrozenSet[str]) -> str:
 
 
 def _render_quantifier(low: int, high: Optional[int]) -> str:
+    # Second line of defense behind `_resolve_length_bounds`'s raise: every caller of
+    # this function is expected to have already refused an incoherent bound, so this
+    # assertion should never fire in production. It exists because `{5,2}` -- what an
+    # unchecked `low > high` renders -- is exactly the kind of string that looks like a
+    # regex, is accepted this far down the pipeline with no error, and only breaks on
+    # `re.compile`, several call frames away from the field that caused it.
+    assert high is None or low <= high, (
+        f"_render_quantifier({low}, {high}): low must not exceed high -- the caller "
+        "should have raised PAWSchemaError before reaching the renderer"
+    )
     if high is None:
         if low == 0:
             return "*"
@@ -1683,7 +1721,7 @@ def _pydantic_to_regex_impl(
             value_regex = _type_to_regex(annotation, seen=_seen, depth=_depth)
             if constraints.min_len is not None or constraints.max_len is not None:
                 bounds, length_reason = _resolve_length_bounds(
-                    annotation, constraints, value_regex
+                    annotation, constraints, value_regex, field_name
                 )
                 if bounds is not None:
                     value_regex = _type_to_regex(

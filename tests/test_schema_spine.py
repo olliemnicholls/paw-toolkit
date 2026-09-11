@@ -719,3 +719,43 @@ def test_every_pattern_pydantic_accepts_compiles_or_raises_paw_schema_error(patt
             f"pattern {pattern_src!r} compiled to a string the decoder's own engine "
             f"rejects ({type(exc).__name__}: {exc}): {compiled_pattern!r}"
         )
+
+
+# --- arm 5: length-bound coherence (H-1, Phase F review) -----------------------------
+
+LENGTH_BOUND_CASES = [
+    # (annotation, min_length, max_length, must_raise)
+    (str, 5, 2, True),       # H-1: no string can satisfy both
+    (str, 3, 3, False),      # boundary: exactly one length, must still compile
+    (str, 0, 0, False),      # boundary: only the empty string
+    (List[int], 3, 0, True),  # H-1b: max_length=0 silently dropped `low` at main
+    (List[int], 0, 0, False),  # boundary: only the empty list
+    (List[int], 2, 5, False),  # ordinary case, sanity check
+]
+
+
+@pytest.mark.parametrize("annotation,min_len,max_len,must_raise", LENGTH_BOUND_CASES,
+                         ids=[f"{a}_{lo}_{hi}" for a, lo, hi, _ in LENGTH_BOUND_CASES])
+def test_incoherent_length_bounds_raise_paw_schema_error_not_a_broken_regex(
+    annotation, min_len, max_len, must_raise
+) -> None:
+    """H-1: `min_length > max_length` (or `max_length == 0 < min_length`) describes a
+    field with no legal value. Before this fix, `pydantic_to_regex` returned a string
+    Python `re` refuses (`{5,2}`), which then reached `RegexLogitsProcessor` as an
+    unwrapped, non-PAWSchemaError exception -- S-1's and S-15's exact failure shapes,
+    reopened through the length-bound door. A coherent bound must still compile and
+    round-trip normally; only the incoherent ones may raise.
+    """
+    from pydantic import create_model
+
+    model = create_model(
+        "LenCase", x=(annotation, Field(min_length=min_len, max_length=max_len))
+    )
+    if must_raise:
+        with pytest.raises(PAWSchemaError, match="min_length"):
+            pydantic_to_regex(model)
+        return
+
+    compiled_pattern = pydantic_to_regex(model)
+    re.compile(compiled_pattern)  # must not raise re.error
+    interegular.parse_pattern(compiled_pattern).to_fsm()  # decoder must accept it too
