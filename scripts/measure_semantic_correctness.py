@@ -41,8 +41,14 @@ from paw_kit.test.runner import evaluate_assertion
 try:
     import anthropic
 except ImportError:
-    print("pip install anthropic", file=sys.stderr)
-    sys.exit(2)
+    # Deferred, not exit(2) here: this runs at import time, before this module's pure
+    # functions (split_fold_and_eval, ...) are even defined.
+    # tests/test_measurement_scripts.py imports this module by path specifically to
+    # exercise those offline, with no anthropic installed and no network -- exiting here
+    # made that impossible, so every test in that file failed importing the module rather
+    # than testing anything (found 2026-09-11 reproducing a red CI run outside any dev
+    # .venv that happens to have anthropic already installed).
+    anthropic = None  # type: ignore[assignment]
 
 JUDGE_MODEL = "claude-haiku-4-5-20251001"
 
@@ -144,6 +150,10 @@ def main() -> int:
                      help="0 = pure terse spec, no folded examples (default: match docs' own style)")
     ap.add_argument("--out-dir", default="measurements")
     args = ap.parse_args()
+
+    if anthropic is None:
+        print("pip install anthropic", file=sys.stderr)
+        return 2
 
     if not os.environ.get("PAW_API_KEY"):
         print("PAW_API_KEY not set", file=sys.stderr)

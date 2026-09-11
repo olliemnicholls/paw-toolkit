@@ -43,8 +43,14 @@ from paw_kit import ProgramAsWeightsBackend, compile_on_hit
 try:
     import anthropic
 except ImportError:
-    print("pip install anthropic", file=sys.stderr)
-    sys.exit(2)
+    # Deferred, not exit(2) here: this runs at import time, before split_latencies/
+    # SPLIT_PHASES below are even defined. tests/test_measurement_scripts.py imports this
+    # module by path specifically to exercise those pure functions offline, with no
+    # anthropic installed and no network -- exiting here made that impossible, so every
+    # test in that file failed importing the module rather than testing anything (found
+    # 2026-09-11 reproducing a red CI run outside any dev .venv that happens to have
+    # anthropic already installed, which is why this was never seen locally).
+    anthropic = None  # type: ignore[assignment]
 
 TEACHER_MODEL = "claude-haiku-4-5-20251001"
 
@@ -204,6 +210,10 @@ def main() -> int:
     ap.add_argument("--cache-dir", default="./.paw_jit_speedup_demo")
     ap.add_argument("--out-dir", default="measurements")
     args = ap.parse_args()
+
+    if anthropic is None:
+        print("pip install anthropic", file=sys.stderr)
+        return 2
 
     if args.total_calls <= args.threshold:
         print("--total-calls must exceed --threshold to observe any post-swap calls", file=sys.stderr)

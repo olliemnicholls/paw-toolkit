@@ -57,8 +57,14 @@ from paw_kit import ProgramAsWeightsBackend
 try:
     import anthropic
 except ImportError:
-    print("pip install anthropic", file=sys.stderr)
-    sys.exit(2)
+    # Deferred, not exit(2) here: this runs at import time, before this module's pure
+    # functions (assert_folding_pool_disjoint, score_rows, build_summary, ...) are even
+    # defined. tests/test_measurement_scripts.py imports this module by path specifically
+    # to exercise those offline, with no anthropic installed and no network -- exiting
+    # here made that impossible, so every test in that file failed importing the module
+    # rather than testing anything (found 2026-09-11 reproducing a red CI run outside any
+    # dev .venv that happens to have anthropic already installed).
+    anthropic = None  # type: ignore[assignment]
 
 TEACHER_MODEL = "claude-haiku-4-5-20251001"
 
@@ -254,6 +260,10 @@ def main() -> int:
     ap.add_argument("--label", default="unknown")
     ap.add_argument("--out-dir", default="measurements")
     args = ap.parse_args()
+
+    if anthropic is None:
+        print("pip install anthropic", file=sys.stderr)
+        return 2
 
     # B-1: refuse to spend anything if the folding pool and the evaluation set intersect.
     assert_folding_pool_disjoint(FOLDING_TICKETS, TICKETS)
