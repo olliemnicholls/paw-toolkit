@@ -1,12 +1,17 @@
 """Thread-safe SQLite tracing database for paw.jit."""
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import sqlite3
+import stat
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
+
+logger = logging.getLogger("paw_kit.jit.db")
 
 # INSERT ... ON CONFLICT ... DO UPDATE (used by record_trace) requires SQLite >= 3.24.
 _MIN_SQLITE_VERSION = (3, 24, 0)
@@ -14,14 +19,26 @@ _MIN_SQLITE_VERSION = (3, 24, 0)
 T = TypeVar("T")
 
 # PAW-JIT-04: the 30s connection busy_timeout and WAL journal mode already in place
-# (both from Track 03) reduce but don't eliminate multi-process write contention --
-# `isolation_level="IMMEDIATE"` below (making every write transaction acquire
-# SQLite's write lock immediately, via `BEGIN IMMEDIATE`, rather than deferring it
-# until the first write statement executes) closes the specific class of
-# "database is locked" error that a deferred transaction leaves reachable: two
-# connections both starting as readers and then racing to upgrade to a writer at the
-# same moment, which busy_timeout does not always cover cleanly. The retry/backoff
-# loop below is defense-in-depth on top of that, not a replacement for it.
+# (both from Track 03) reduce but don't eliminate multi-process write contention.
+#
+# D-1 (bug hunt 2026-09-11): `isolation_level="IMMEDIATE"` does NOT make a method's
+# leading read part of its write transaction, which is what the comment that used to
+# stand here asserted. Python's sqlite3 emits `BEGIN IMMEDIATE` only immediately
+# before a *DML* statement, so a read-then-write method runs its SELECT in autocommit
+# and opens the transaction on the following write -- leaving the classic lost-update
+# window wide open across processes. Measured on this source: `record_shadow_pair`
+# over 6 processes x 30 writes gave rows=180 with max(seq) 173-175 and up to 4
+# duplicate seq values in 5 of 5 trials, and `set_status`'s epoch bumps over
+# 4 processes x 40 changes gave 160 transitions sharing 40 distinct epochs in 5 of 5
+# trials -- with `PRAGMA integrity_check` reading `ok` throughout, because this is
+# logical corruption the file format cannot see.
+#
+# The fix is `_write_txn()` below: an explicit `BEGIN IMMEDIATE` issued before the
+# leading read, factored into the same context manager that takes the instance lock so
+# a new method cannot acquire one without the other. `isolation_level="IMMEDIATE"` is
+# kept because it still covers every single-statement write correctly.
+#
+# The retry/backoff loop below is defense-in-depth on top of that, not a replacement.
 _DB_RETRY_ATTEMPTS = 5
 _DB_RETRY_BASE_DELAY_SECONDS = 0.05
 
@@ -44,9 +61,9 @@ _SCHEMA_VERSION = 2
 _STATE_TRANSITIONS_MAX_ROWS = 200
 
 # Prune every N inserts rather than on every one: the oldest-first delete below is
-# index-covered but its subquery still walks `cap` index entries, and it runs while
-# this class's single `self._lock` is held -- the same lock the caller's routing read
-# and `record_trace` take. A cap at or below this interval is pruned on every insert
+# index-covered but its subquery still walks `cap` index entries, and (since D-5) it
+# runs in its own short write transaction, which still contends for SQLite's single
+# writer with the caller's `record_trace`. A cap at or below this interval is pruned
 # instead (the subquery is then trivially small), which is what makes a deliberately
 # tiny cap an exact bound rather than an approximate one. The worst-case row count for
 # a table is therefore `cap + prune_interval - 1`.
@@ -77,6 +94,11 @@ class TraceDB:
                 f"for upsert support (found {sqlite3.sqlite_version})."
             )
         self.db_path = Path(db_path)
+        # D-6: probed *before* the mkdir. `Path.mkdir(exist_ok=True)` returns None
+        # either way, so "did this call create the directory" cannot be inferred from
+        # it -- and the CWD/home carve-out below must not apply to a directory this
+        # constructor made itself.
+        parent_existed = self.db_path.parent.exists()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # PAW-JIT-01: traces.db holds raw, unredacted prompt/response text by default
         # (see decorator.py's `redact_trace`, PAW-JIT-02, for why redaction is not the
@@ -85,17 +107,20 @@ class TraceDB:
         # mkdir(..., exist_ok=True) doesn't retroactively tighten an already-existing
         # directory's mode, and mkdir's own `mode` argument is subject to umask, so
         # chmod explicitly.
-        self._chmod_best_effort(self.db_path.parent, 0o700)
+        self._tighten_dir_best_effort(self.db_path.parent, parent_existed)
+        # J-7: `self._lock` no longer serialises database access -- it guards
+        # `_status_listeners` and nothing else. See `_connection` below.
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(
-            str(self.db_path),
-            check_same_thread=False,
-            timeout=30.0,
-            # PAW-JIT-04: BEGIN IMMEDIATE instead of the default deferred BEGIN --
-            # see the module-level comment on _DB_RETRY_ATTEMPTS.
-            isolation_level="IMMEDIATE",
-        )
-        self._conn.row_factory = sqlite3.Row
+        # One SQLite connection per thread (J-7), all recorded here so `close()` can
+        # close every one of them.
+        self._local = threading.local()
+        self._conns: List[sqlite3.Connection] = []
+        self._conns_lock = threading.Lock()
+        self._closed = False
+        # Connect eagerly for the constructing thread: the `chmod(0o600)` below must
+        # find the database file already created (PAW-JIT-01), and a read-only parent
+        # directory must still raise out of the constructor rather than at first use.
+        self._connect()
         # PAW-JIT-05: callbacks invoked with `task_id` whenever set_status() writes a
         # new status/adapter_path for that task -- the same-process fast-path
         # invalidation hook the adapter-callable cache in jit/decorator.py uses.
@@ -105,9 +130,21 @@ class TraceDB:
         # decorator.py back.
         self._status_listeners: List[Callable[[str], None]] = []
         # Track 14: insert counters driving the periodic oldest-first prunes below.
-        # Guarded by self._lock, like every other write on this connection.
-        self._shadow_pair_writes = 0
-        self._transition_writes = 0
+        #
+        # D-5: keyed **per task**, and bumped **outside** the closure
+        # `_with_write_retry` re-runs. One counter across all tasks gated a prune that
+        # deletes rows for a single task, so with T tasks any given task was pruned at
+        # most 1/T of the time -- and under round-robin traffic the Nth call lands on
+        # the same task every time, so in practice exactly one task was ever pruned
+        # (50 tasks held 600 rows each against a documented worst case of 249).
+        # Bumping inside the retried closure additionally advanced the clock twice for
+        # a single persisted row whenever a transaction lost the race and was retried.
+        self._shadow_pair_writes: Dict[str, int] = {}
+        self._transition_writes: Dict[str, int] = {}
+        # Deliberately not `self._lock`: these are bumped outside the write
+        # transaction, and reusing the connection lock for them would pull unrelated
+        # bookkeeping back inside the critical section D-1 just widened.
+        self._counter_lock = threading.Lock()
         # Narrow the window the file spends at the (looser) default permissions
         # sqlite3.connect() just created it with, before any trace data is written.
         self._chmod_best_effort(self.db_path, 0o600)
@@ -116,6 +153,55 @@ class TraceDB:
         # contain trace data; they don't necessarily inherit the main file's mode.
         self._chmod_best_effort(self.db_path.with_name(self.db_path.name + "-wal"), 0o600)
         self._chmod_best_effort(self.db_path.with_name(self.db_path.name + "-shm"), 0o600)
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open this thread's connection and register it for `close()` (J-7)."""
+        conn = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+            timeout=30.0,
+            # PAW-JIT-04: BEGIN IMMEDIATE instead of the default deferred BEGIN --
+            # see the module-level comment on _DB_RETRY_ATTEMPTS. Single-statement
+            # writes rely on it; read-modify-write goes through `_write_txn`.
+            isolation_level="IMMEDIATE",
+        )
+        conn.row_factory = sqlite3.Row
+        with self._conns_lock:
+            if self._closed:
+                conn.close()
+                raise sqlite3.ProgrammingError(
+                    "Cannot operate on a closed database."
+                )
+            self._conns.append(conn)
+        self._local.conn = conn
+        return conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """This thread's SQLite connection, opened on first use (J-7).
+
+        Shadow mode roughly doubled the decorator's caller latency, contradicting
+        "Nothing in shadow mode adds latency to it": the comparison work is off the
+        request path but its *persistence* was not, because the shadow worker and the
+        caller shared one connection behind one lock and therefore contended for both.
+        WAL supports one connection per thread, so they no longer do.
+
+        This is a **thread-local connection inside one `TraceDB`**, not a second
+        `TraceDB` per worker. A second instance would carry its own empty
+        `_status_listeners` list, silently stopping `_invalidate_adapter_cache` from
+        firing on the worker's `try_promote`/`try_demote` -- a behaviour change no
+        finding asked for.
+
+        What now makes concurrent access safe is D-1's `_write_txn` (an explicit
+        `BEGIN IMMEDIATE`) plus the 30s busy_timeout, exactly as it already was across
+        processes. Before D-1, giving the worker its own connection would have
+        reintroduced D-1 *inside* a single process: the shared lock was what made the
+        racy read-then-write accidentally safe in-process.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._connect()
+        return conn
 
     @staticmethod
     def _chmod_best_effort(path: Path, mode: int) -> None:
@@ -130,6 +216,57 @@ class TraceDB:
         except OSError:
             pass
 
+    @staticmethod
+    def _tighten_dir_best_effort(parent: Path, existed: bool) -> None:
+        """Clear group and other bits on the cache directory. Never set an absolute mode.
+
+        D-6: this used to be `chmod(0o700)`, which *sets* rather than tightens. A
+        deliberately group-shared `0o2775` directory was reduced to `0o700` and lost
+        its setgid bit, and a read-only `0o500` directory was silently made writable --
+        so merely importing a module that constructs a `TraceDB` rewrote permissions on
+        a directory the user shares with a group. Worse, `TraceDB("traces.db")` has
+        `Path(...).parent == Path(".")`, so it chmodded the process working directory.
+
+        `stat.S_IMODE(...) & ~0o077` can only ever clear bits, which is what makes
+        every case fall out without a special case: `0o2775` -> `0o2700` (setgid kept),
+        `0o1777` -> `0o1700` (sticky kept), `0o755` -> `0o700`, `0o644` -> `0o600`, and
+        `0o500` -> `0o500`, still not writable.
+
+        The carve-out is deliberately narrow -- warn and skip *only* when the resolved
+        parent is the process CWD or the user's home directory. Anything broader (e.g.
+        "skip a directory the caller didn't create") would stop `TraceDB` tightening a
+        pre-existing `.paw`, which is behaviour this class correctly provides.
+        """
+        try:
+            current = stat.S_IMODE(parent.stat().st_mode)
+        except OSError:
+            return
+        target = current & ~0o077
+        if target == current:
+            # Already closed. An optimisation (fewer syscalls), not a correctness
+            # requirement -- the chmod below would be a no-op anyway.
+            return
+        if existed:
+            try:
+                resolved = parent.resolve()
+                landmarks = {Path.cwd().resolve(), Path.home().resolve()}
+            except (OSError, RuntimeError):  # pragma: no cover - no cwd, no HOME
+                resolved, landmarks = None, set()
+            if resolved is not None and resolved in landmarks:
+                logger.warning(
+                    "paw_kit.jit: refusing to tighten permissions on %s -- it is the "
+                    "process working directory or your home directory, not a paw cache "
+                    "directory. traces.db holds raw prompt and response text; pass a "
+                    "cache_dir (e.g. './.paw') so it lives somewhere this library may "
+                    "restrict to owner-only access. Current mode %s.",
+                    resolved, oct(current),
+                )
+                return
+        try:
+            parent.chmod(target)
+        except OSError:
+            pass
+
     def register_status_listener(self, listener: Callable[[str], None]) -> None:
         """Register a callback invoked with `task_id` after every `set_status` write.
 
@@ -138,9 +275,68 @@ class TraceDB:
         key's own `os.stat` identity component -- but a backstop for a filesystem
         that reports `st_ino == 0` (some SMB/FUSE mounts) or a third-party backend
         that rewrites an adapter file in place rather than via `os.replace`.
+
+        J-7: `self._lock` guards this list and nothing else now -- database access is
+        serialised by SQLite across per-thread connections, not by this lock.
         """
         with self._lock:
             self._status_listeners.append(listener)
+
+    @contextmanager
+    def _write_txn(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction whose **leading read** is already inside it (D-1).
+
+        Every read-modify-write method on this class must use this and nothing else.
+        It is the only place `BEGIN IMMEDIATE` is issued, so a method either goes
+        through it and is correct or does not and is visibly not a transaction at all
+        -- there is no third shape to get subtly wrong, which is how D-1 survived.
+
+        Since J-7 the connection is per thread, so this no longer serialises writers
+        in-process: SQLite does, exactly as it already did across processes. That is
+        why D-1 had to land first.
+
+        The `in_transaction` guard is load-bearing. A nested `BEGIN IMMEDIATE` raises
+        `OperationalError("cannot start a transaction within a transaction")`, which
+        `_with_write_retry` would catch and retry five times with exponential backoff
+        before re-raising -- laundering a programming error into ~0.75s of latency and
+        a lock-shaped message that says nothing about the real cause.
+
+        **`_init_db` deliberately does not use this.** `PRAGMA journal_mode=WAL` issued
+        inside an open transaction on a fresh database returns `"delete"` and leaves
+        the file in rollback-journal mode *with no exception raised* (verified; on an
+        already-populated database it raises instead, which is louder but no better).
+        Wrapping `_init_db` -- whose column-probe-then-`ALTER TABLE` shape reads then
+        writes, and so attracts any blanket rule -- would therefore silently destroy
+        the WAL guarantee that this module's concurrency story rests on.
+        """
+        conn = self._conn
+        with conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE;")
+            yield conn
+
+    def _note_write(self, counter: Dict[str, int], task_id: str, interval: int) -> bool:
+        """Bump a per-task prune clock and report whether a prune is now due (D-5).
+
+        Called *after* `_with_write_retry` returns, never from inside the closure it
+        re-runs: one persisted row must advance the clock exactly once however many
+        attempts it took.
+        """
+        with self._counter_lock:
+            count = counter.get(task_id, 0) + 1
+            counter[task_id] = count
+        return count % interval == 0
+
+    def _after_transition_write(self, task_id: str) -> None:
+        """Advance the `state_transitions` prune clock for `task_id` and prune if due."""
+        if self._note_write(
+            self._transition_writes, task_id, _prune_interval(_STATE_TRANSITIONS_MAX_ROWS)
+        ):
+            def _do() -> None:
+                with self._write_txn():
+                    self._prune_transitions_locked(task_id)
+
+            self._with_write_retry(_do)
 
     def _with_write_retry(self, fn: Callable[[], T]) -> T:
         """Run `fn` (one write transaction) with bounded exponential-backoff retry on
@@ -167,7 +363,10 @@ class TraceDB:
         # as every other write rather than raising OperationalError out of the
         # constructor.
         def _do() -> None:
-            with self._lock, self._conn:
+            # NB: `with self._conn` and deliberately NOT `_write_txn` -- see its
+            # docstring. `PRAGMA journal_mode=WAL` inside an open transaction on a
+            # fresh database silently leaves the file in rollback-journal mode.
+            with self._conn:
                 self._conn.execute("PRAGMA journal_mode=WAL;")
                 self._conn.execute(
                     """
@@ -301,7 +500,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> int:
-            with self._lock, self._conn:
+            with self._write_txn():
                 # 1. Upsert task record and increment call_count
                 # Avoid RETURNING (requires SQLite >= 3.35): follow up with a plain SELECT instead.
                 self._conn.execute(
@@ -330,7 +529,7 @@ class TraceDB:
         return self._with_write_retry(_do)
 
     def _get_call_count_locked(self, task_id: str) -> int:
-        """Read call_count for task_id. Caller must already hold self._lock."""
+        """Read call_count for task_id. Runs on this thread's connection."""
         cur = self._conn.execute(
             "SELECT call_count FROM tasks WHERE task_id = ?;", (task_id,)
         )
@@ -339,17 +538,15 @@ class TraceDB:
 
     def get_call_count(self, task_id: str) -> int:
         """Retrieve total calls recorded for task."""
-        with self._lock:
-            return self._get_call_count_locked(task_id)
+        return self._get_call_count_locked(task_id)
 
     def get_status(self, task_id: str) -> str:
         """Retrieve task lifecycle status (tracing | compiling | ready | failed)."""
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT status FROM tasks WHERE task_id = ?;", (task_id,)
-            )
-            row = cur.fetchone()
-            return row["status"] if row else "tracing"
+        cur = self._conn.execute(
+            "SELECT status FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
+        return row["status"] if row else "tracing"
 
     def set_status(
         self,
@@ -360,62 +557,93 @@ class TraceDB:
         """Update task lifecycle status and optional adapter path.
 
         PAW-JIT-05: fires every registered status listener with `task_id` after the
-        write commits (not while `self._lock`/the SQLite transaction is held, so a
-        listener can never deadlock against this method or another TraceDB call).
+        write commits (never while the SQLite transaction is held, so a listener can
+        never deadlock against this method or another TraceDB call).
 
         Track 14: a status *change* also bumps `state_epoch` and writes a
         `state_transitions` row, so the lifecycle is auditable from the database
         alone. The epoch bump is what makes shadow-window arithmetic immune to
         comparisons that were in flight across a transition.
+
+        D-7: upsert, not a bare `UPDATE ... WHERE task_id = ?`. Against a missing
+        `tasks` row the bare form affected zero rows and reported success, so
+        `set_status(..., 'failed')` silently did nothing and the terminal state was
+        unreachable -- reachable in practice by deleting `.paw/traces.db` (documented
+        as a cache) while a process holds a live wrapper.
         """
         now = datetime.now(timezone.utc).isoformat()
 
-        def _do() -> None:
-            with self._lock, self._conn:
+        def _do() -> bool:
+            with self._write_txn():
                 previous, epoch = self._get_status_and_epoch_locked(task_id)
                 changed = previous is not None and previous != status
                 new_epoch = epoch + 1 if changed else epoch
                 if adapter_path is not None:
                     self._conn.execute(
                         """
-                        UPDATE tasks
-                        SET status = ?, adapter_path = ?, state_epoch = ?, updated_at = ?
-                        WHERE task_id = ?;
+                        INSERT INTO tasks (task_id, call_count, status, adapter_path,
+                                           state_epoch, created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?, ?)
+                        ON CONFLICT(task_id) DO UPDATE SET
+                            status = excluded.status,
+                            adapter_path = excluded.adapter_path,
+                            state_epoch = excluded.state_epoch,
+                            updated_at = excluded.updated_at;
                         """,
-                        (status, adapter_path, new_epoch, now, task_id),
+                        (task_id, status, adapter_path, new_epoch, now, now),
                     )
                 else:
                     self._conn.execute(
                         """
-                        UPDATE tasks
-                        SET status = ?, state_epoch = ?, updated_at = ?
-                        WHERE task_id = ?;
+                        INSERT INTO tasks (task_id, call_count, status, state_epoch,
+                                           created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?)
+                        ON CONFLICT(task_id) DO UPDATE SET
+                            status = excluded.status,
+                            state_epoch = excluded.state_epoch,
+                            updated_at = excluded.updated_at;
                         """,
-                        (status, new_epoch, now, task_id),
+                        (task_id, status, new_epoch, now, now),
                     )
                 if changed:
                     self._record_transition_locked(
                         task_id, previous or "tracing", status, None, None, new_epoch, now
                     )
+                return changed
 
         # PAW-JIT-04: bounded retry/backoff on top of BEGIN IMMEDIATE + busy_timeout.
-        self._with_write_retry(_do)
+        if self._with_write_retry(_do):
+            self._after_transition_write(task_id)
 
         for listener in list(self._status_listeners):
             listener(task_id)
 
     def get_compile_attempts(self, task_id: str) -> int:
-        """Retrieve the number of compilation attempts made so far for task_id (PAW-JIT-03)."""
-        with self._lock:
-            return self._get_compile_attempts_locked(task_id)
+        """Retrieve the number of compilation attempts made so far for task_id (PAW-JIT-03).
 
-    def _get_compile_attempts_locked(self, task_id: str) -> int:
-        """Read compile_attempts for task_id. Caller must already hold self._lock."""
+        Keeps its bare-`int` contract: a task with no row reads 0, exactly like a task
+        that has never failed a compile. Callers that need to tell those two apart use
+        `_get_compile_attempts_locked`, which returns `None` for the former (D-7).
+        """
+        attempts = self._get_compile_attempts_locked(task_id)
+        return 0 if attempts is None else attempts
+
+    def _get_compile_attempts_locked(self, task_id: str) -> Optional[int]:
+        """Read compile_attempts for task_id, or None if there is no row at all.
+
+        D-7: "no task" and "a task that has never failed a compile" both used to read
+        0, which is what let `increment_compile_attempts` return 0 forever against a
+        missing row and turned `BackgroundCompiler`'s bounded retry into an unbounded,
+        paid one. Runs on this thread's connection; call it inside `_write_txn` when
+        the value must agree with a write in the same transaction.
+        """
         cur = self._conn.execute(
             "SELECT compile_attempts FROM tasks WHERE task_id = ?;", (task_id,)
         )
         row = cur.fetchone()
-        return row["compile_attempts"] if row else 0
+        if row is None:
+            return None
+        return row["compile_attempts"] or 0
 
     def increment_compile_attempts(self, task_id: str) -> int:
         """Atomically increment and return the compilation attempt counter for task_id.
@@ -425,28 +653,43 @@ class TraceDB:
         unconditionally on every subsequent call once the task's (never-decreasing)
         call_count has crossed the compilation threshold (the audit's own suggested
         fix, which turns into an unbounded retry loop).
+
+        D-7: upserts, so two consecutive calls return 1 then 2 in every case -- a
+        missing `tasks` row included, which is exactly the case where the bare UPDATE
+        returned 0 forever and every failed compile was retried and paid for again.
         """
         def _do() -> int:
-            with self._lock, self._conn:
+            with self._write_txn():
+                now = datetime.now(timezone.utc).isoformat()
                 self._conn.execute(
-                    "UPDATE tasks SET compile_attempts = compile_attempts + 1 WHERE task_id = ?;",
-                    (task_id,),
+                    """
+                    INSERT INTO tasks (task_id, call_count, compile_attempts, status,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 1, 'tracing', ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        compile_attempts = COALESCE(tasks.compile_attempts, 0) + 1,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (task_id, now, now),
                 )
-                return self._get_compile_attempts_locked(task_id)
+                attempts = self._get_compile_attempts_locked(task_id)
+                # Unreachable after the upsert above. Reporting 0 rather than raising
+                # keeps this off the raising paths the fail-open invariant protects;
+                # BackgroundCompiler fails *closed* when the count does not advance.
+                return 0 if attempts is None else attempts
 
         # PAW-JIT-04: bounded retry/backoff on top of BEGIN IMMEDIATE + busy_timeout.
         return self._with_write_retry(_do)
 
     def get_adapter_path(self, task_id: str) -> Optional[str]:
         """Retrieve path to compiled adapter if task is ready."""
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT adapter_path, status FROM tasks WHERE task_id = ?;", (task_id,)
-            )
-            row = cur.fetchone()
-            if row and row["status"] == "ready":
-                return row["adapter_path"]
-            return None
+        cur = self._conn.execute(
+            "SELECT adapter_path, status FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
+        if row and row["status"] == "ready":
+            return row["adapter_path"]
+        return None
 
     def get_traces(
         self,
@@ -454,21 +697,21 @@ class TraceDB:
         limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve recorded traces for training example generation."""
-        with self._lock:
-            query = "SELECT input_payload, teacher_output, latency_ms, timestamp FROM traces WHERE task_id = ? ORDER BY id ASC"
-            params: List[Any] = [task_id]
-            if limit is not None:
-                query += " LIMIT ?"
-                params.append(limit)
-            cur = self._conn.execute(query, params)
-            return [dict(row) for row in cur.fetchall()]
+        query = "SELECT input_payload, teacher_output, latency_ms, timestamp FROM traces WHERE task_id = ? ORDER BY id ASC"
+        params: List[Any] = [task_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        cur = self._conn.execute(query, params)
+        return [dict(row) for row in cur.fetchall()]
 
     # --- Track 14: shadow mode ---------------------------------------------------
 
     def _get_status_and_epoch_locked(self, task_id: str) -> Tuple[Optional[str], int]:
         """Read (status, state_epoch) for task_id, or (None, 0) if there is no row.
 
-        Caller must already hold self._lock.
+        Call it inside `_write_txn`: this is the leading read of a read-modify-write,
+        and D-1 is precisely what happens when it is not.
         """
         cur = self._conn.execute(
             "SELECT status, state_epoch FROM tasks WHERE task_id = ?;", (task_id,)
@@ -487,15 +730,14 @@ class TraceDB:
         `status == 'ready'` gate and its existing meaning. A task with no row reads
         `("tracing", None, 0)`, matching `get_status`'s default.
         """
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT status, adapter_path, state_epoch FROM tasks WHERE task_id = ?;",
-                (task_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return ("tracing", None, 0)
-            return (row["status"], row["adapter_path"], row["state_epoch"] or 0)
+        cur = self._conn.execute(
+            "SELECT status, adapter_path, state_epoch FROM tasks WHERE task_id = ?;",
+            (task_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return ("tracing", None, 0)
+        return (row["status"], row["adapter_path"], row["state_epoch"] or 0)
 
     def _record_transition_locked(
         self,
@@ -508,7 +750,7 @@ class TraceDB:
         now: str,
         reason: Optional[str] = None,
     ) -> None:
-        """Insert a lifecycle transition row. Caller must already hold self._lock."""
+        """Insert a lifecycle transition row. Caller must be inside `_write_txn`."""
         self._conn.execute(
             """
             INSERT INTO state_transitions
@@ -518,10 +760,9 @@ class TraceDB:
             """,
             (task_id, from_status, to_status, agreement, sample_count, state_epoch, reason, now),
         )
-        self._transition_writes += 1
-        interval = _prune_interval(_STATE_TRANSITIONS_MAX_ROWS)
-        if self._transition_writes % interval == 0:
-            self._prune_transitions_locked(task_id)
+        # D-5: the prune clock is *not* advanced here. Every caller calls
+        # `_after_transition_write(task_id)` once the transaction has committed, so a
+        # retried transaction counts once and the clock is per task, not per database.
 
     def record_state_transition(
         self,
@@ -537,55 +778,79 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 self._record_transition_locked(
                     task_id, from_status, to_status, agreement, sample_count,
                     state_epoch, now, reason,
                 )
 
         self._with_write_retry(_do)
+        self._after_transition_write(task_id)
 
     def set_shadow_started(self, task_id: str, adapter_path: str) -> None:
-        """Move a freshly-compiled task into `shadow`: the adapter exists but does not serve."""
+        """Move a freshly-compiled task into `shadow`: the adapter exists but does not serve.
+
+        D-7: upsert. This is one of the two sites *worse* than the three the hunt
+        named, because it unconditionally writes a `state_transitions` row straight
+        after -- so against a missing `tasks` row the status write vanished and left
+        an orphaned transition record pointing at a task that does not exist.
+        """
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 previous, epoch = self._get_status_and_epoch_locked(task_id)
                 new_epoch = epoch + 1
                 self._conn.execute(
                     """
-                    UPDATE tasks
-                    SET status = 'shadow', adapter_path = ?, shadow_started_at = ?,
-                        state_epoch = ?, updated_at = ?
-                    WHERE task_id = ?;
+                    INSERT INTO tasks (task_id, call_count, status, adapter_path,
+                                       shadow_started_at, state_epoch,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 'shadow', ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        status = 'shadow',
+                        adapter_path = excluded.adapter_path,
+                        shadow_started_at = excluded.shadow_started_at,
+                        state_epoch = excluded.state_epoch,
+                        updated_at = excluded.updated_at;
                     """,
-                    (adapter_path, now, new_epoch, now, task_id),
+                    (task_id, adapter_path, now, new_epoch, now, now),
                 )
                 self._record_transition_locked(
                     task_id, previous or "compiling", "shadow", None, None, new_epoch, now
                 )
 
         self._with_write_retry(_do)
+        self._after_transition_write(task_id)
         for listener in list(self._status_listeners):
             listener(task_id)
 
     def set_ready_from_compile(self, task_id: str, adapter_path: str) -> None:
-        """Promote straight to `ready` on compile -- the `shadow_window=0` path."""
+        """Promote straight to `ready` on compile -- the `shadow_window=0` path.
+
+        D-7: upsert, for the same reason as `set_shadow_started` above.
+        """
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 previous, epoch = self._get_status_and_epoch_locked(task_id)
                 new_epoch = epoch + 1
                 self._conn.execute(
                     """
-                    UPDATE tasks
-                    SET status = 'ready', adapter_path = ?, promoted_at = ?,
-                        promoted_agreement = NULL, state_epoch = ?, updated_at = ?
-                    WHERE task_id = ?;
+                    INSERT INTO tasks (task_id, call_count, status, adapter_path,
+                                       promoted_at, promoted_agreement, state_epoch,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 'ready', ?, ?, NULL, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        status = 'ready',
+                        adapter_path = excluded.adapter_path,
+                        promoted_at = excluded.promoted_at,
+                        promoted_agreement = NULL,
+                        state_epoch = excluded.state_epoch,
+                        updated_at = excluded.updated_at;
                     """,
-                    (adapter_path, now, new_epoch, now, task_id),
+                    (task_id, adapter_path, now, new_epoch, now, now),
                 )
                 self._record_transition_locked(
                     task_id, previous or "compiling", "ready", None, None, new_epoch, now,
@@ -593,6 +858,7 @@ class TraceDB:
                 )
 
         self._with_write_retry(_do)
+        self._after_transition_write(task_id)
         for listener in list(self._status_listeners):
             listener(task_id)
 
@@ -613,7 +879,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> bool:
-            with self._lock, self._conn:
+            with self._conn:
                 cur = self._conn.execute(
                     """
                     UPDATE tasks
@@ -633,6 +899,9 @@ class TraceDB:
 
         won = self._with_write_retry(_do)
         if won:
+            # D-5: a won compare-and-set wrote a `state_transitions` row, so it
+            # advances that task's own prune clock -- outside the retried closure.
+            self._after_transition_write(task_id)
             for listener in list(self._status_listeners):
                 listener(task_id)
         return won
@@ -649,7 +918,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> bool:
-            with self._lock, self._conn:
+            with self._conn:
                 cur = self._conn.execute(
                     """
                     UPDATE tasks
@@ -669,6 +938,9 @@ class TraceDB:
 
         won = self._with_write_retry(_do)
         if won:
+            # D-5: a won compare-and-set wrote a `state_transitions` row, so it
+            # advances that task's own prune clock -- outside the retried closure.
+            self._after_transition_write(task_id)
             for listener in list(self._status_listeners):
                 listener(task_id)
         return won
@@ -693,7 +965,7 @@ class TraceDB:
         encoded = json.dumps(config, sort_keys=True)
 
         def _do() -> bool:
-            with self._lock, self._conn:
+            with self._write_txn():
                 cur = self._conn.execute(
                     "SELECT status, state_epoch, shadow_config FROM tasks WHERE task_id = ?;",
                     (task_id,),
@@ -731,15 +1003,18 @@ class TraceDB:
                     )
                 return changed_mid_run
 
-        return self._with_write_retry(_do)
+        bumped = self._with_write_retry(_do)
+        if bumped:
+            # D-5: the config-change transition row advances this task's own clock.
+            self._after_transition_write(task_id)
+        return bumped
 
     def get_shadow_config(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Read back the persisted resolved shadow configuration, if any."""
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT shadow_config FROM tasks WHERE task_id = ?;", (task_id,)
-            )
-            row = cur.fetchone()
+        cur = self._conn.execute(
+            "SELECT shadow_config FROM tasks WHERE task_id = ?;", (task_id,)
+        )
+        row = cur.fetchone()
         if row is None or not row["shadow_config"]:
             return None
         try:
@@ -754,11 +1029,18 @@ class TraceDB:
         any other process; this one is neither.
         """
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
+                now = datetime.now(timezone.utc).isoformat()
                 self._conn.execute(
-                    "UPDATE tasks SET fail_open_count = COALESCE(fail_open_count, 0) + 1 "
-                    "WHERE task_id = ?;",
-                    (task_id,),
+                    """
+                    INSERT INTO tasks (task_id, call_count, fail_open_count, status,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 1, 'tracing', ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        fail_open_count = COALESCE(tasks.fail_open_count, 0) + 1,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (task_id, now, now),
                 )
 
         self._with_write_retry(_do)
@@ -793,7 +1075,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> Dict[str, int]:
-            with self._lock, self._conn:
+            with self._write_txn():
                 if verdict == "teacher_error":
                     seq = 0
                 else:
@@ -817,25 +1099,32 @@ class TraceDB:
                         adapter_latency_ms, now,
                     ),
                 )
-                self._shadow_pair_writes += 1
-                if self._shadow_pair_writes % _prune_interval(max_pairs) == 0:
-                    self._prune_shadow_pairs_locked(task_id, max_pairs)
                 return {"seq": seq}
 
-        return self._with_write_retry(_do)
+        result = self._with_write_retry(_do)
+        # D-5: per task, and outside the retried closure. The prune is its own short
+        # transaction rather than a tail on the insert's: it is retention maintenance,
+        # not part of the row's atomicity, and keeping it out means a retried insert
+        # cannot re-run a prune that already happened.
+        if self._note_write(self._shadow_pair_writes, task_id, _prune_interval(max_pairs)):
+            def _prune() -> None:
+                with self._write_txn():
+                    self._prune_shadow_pairs_locked(task_id, max_pairs)
+
+            self._with_write_retry(_prune)
+        return result
 
     def get_epoch_seq(self, task_id: str, state_epoch: int) -> int:
         """Highest countable-comparison sequence number reached at this epoch.
 
         Survives pruning (unlike `COUNT(*)`), which is what the stall guard needs.
         """
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
-                "WHERE task_id = ? AND state_epoch = ?;",
-                (task_id, state_epoch),
-            )
-            return cur.fetchone()["max_seq"]
+        cur = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
+            "WHERE task_id = ? AND state_epoch = ?;",
+            (task_id, state_epoch),
+        )
+        return cur.fetchone()["max_seq"]
 
     def get_agreement_stats(
         self, task_id: str, state_epoch: int, window: int, phase: str = "shadow"
@@ -858,49 +1147,78 @@ class TraceDB:
         boundary is simply the first one recorded, so nothing is double-counted or
         missed; with none at all yet, nothing has started, and it reads 0.
         """
-        with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT verdict, COUNT(*) AS n FROM (
-                    SELECT verdict FROM shadow_pairs
-                    WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                      AND verdict != 'teacher_error'
-                    ORDER BY id DESC LIMIT ?
-                ) GROUP BY verdict;
-                """,
-                (task_id, state_epoch, phase, window),
-            ).fetchall()
-            boundary_id = self._conn.execute(
-                """
-                SELECT MIN(id) AS boundary_id FROM (
-                    SELECT id FROM shadow_pairs
-                    WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                      AND verdict != 'teacher_error'
-                    ORDER BY id DESC LIMIT ?
-                );
-                """,
-                (task_id, state_epoch, phase, window),
-            ).fetchone()["boundary_id"]
-            if boundary_id is None:
-                teacher_errors = 0
-            else:
-                teacher_errors = self._conn.execute(
-                    "SELECT COUNT(*) AS n FROM shadow_pairs "
-                    "WHERE task_id = ? AND state_epoch = ? AND phase = ? "
-                    "AND verdict = 'teacher_error' AND id >= ?;",
-                    (task_id, state_epoch, phase, boundary_id),
-                ).fetchone()["n"]
-            seq = self._conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
-                "WHERE task_id = ? AND state_epoch = ?;",
-                (task_id, state_epoch),
-            ).fetchone()["max_seq"]
+        rows = self._conn.execute(
+            """
+            SELECT verdict, COUNT(*) AS n FROM (
+                SELECT verdict FROM shadow_pairs
+                WHERE task_id = ? AND state_epoch = ? AND phase = ?
+                  AND verdict != 'teacher_error'
+                ORDER BY id DESC LIMIT ?
+            ) GROUP BY verdict;
+            """,
+            (task_id, state_epoch, phase, window),
+        ).fetchall()
+        boundary_id = self._conn.execute(
+            """
+            SELECT MIN(id) AS boundary_id FROM (
+                SELECT id FROM shadow_pairs
+                WHERE task_id = ? AND state_epoch = ? AND phase = ?
+                  AND verdict != 'teacher_error'
+                ORDER BY id DESC LIMIT ?
+            );
+            """,
+            (task_id, state_epoch, phase, window),
+        ).fetchone()["boundary_id"]
+        if boundary_id is None:
+            teacher_errors = 0
+        else:
+            teacher_errors = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM shadow_pairs "
+                "WHERE task_id = ? AND state_epoch = ? AND phase = ? "
+                "AND verdict = 'teacher_error' AND id >= ?;",
+                (task_id, state_epoch, phase, boundary_id),
+            ).fetchone()["n"]
+        seq = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
+            "WHERE task_id = ? AND state_epoch = ?;",
+            (task_id, state_epoch),
+        ).fetchone()["max_seq"]
 
         counts = {row["verdict"]: row["n"] for row in rows}
         agree = counts.get("agree", 0)
         disagree = counts.get("disagree", 0)
         error = counts.get("error", 0)
         samples = agree + disagree + error
+        # D-9: refuse to do arithmetic over a window the retention cap cannot fill.
+        #
+        # A window is scored only at `samples == window`, and pruning bounds `samples`
+        # by `shadow_max_pairs`. With the cap below the window nothing ever completes,
+        # so neither promotion nor demotion can *ever* fire -- silently, with
+        # `paw-kit report` showing a healthy rate over a short window. The shipped
+        # decorator rejects the combination at decoration time; any other caller of
+        # these public methods did not, which is why the guard also belongs here, in
+        # the method that actually does the arithmetic.
+        #
+        # `seq` is the right witness: it is monotone over countable comparisons at this
+        # epoch and survives pruning, so `seq >= window` means at least a window's
+        # worth has been recorded. If fewer than `window` of them are still retained,
+        # retention is the reason and no amount of further traffic will help.
+        #
+        # This raises. `_with_write_retry` catches only `OperationalError`, so it
+        # propagates -- reaching `ShadowRunner._maybe_transition`, whose own
+        # `except Exception: return` swallows it (the comparison is simply not scored,
+        # the caller was served by the teacher either way) and `get_task_report`, where
+        # it surfaces to `paw-kit report`. Neither weakens the fail-open invariant:
+        # nothing on the request path calls this.
+        if window > 0 and seq >= window and samples < window:
+            raise ValueError(
+                f"task {task_id!r} at epoch {state_epoch} has recorded {seq} "
+                f"comparisons but retains only {samples} of the {window} a window "
+                "needs: the retention cap (shadow_max_pairs) is below the window, so "
+                "no window can ever complete and neither promotion nor demotion can "
+                "ever fire. Raise shadow_max_pairs to at least twice "
+                "max(shadow_window, audit_window), or lower the window."
+            )
         return {
             "phase": phase,
             "window": window,
@@ -920,24 +1238,22 @@ class TraceDB:
 
         Returns the *persisted* (therefore possibly redacted, see `redact_trace`) text.
         """
-        with self._lock:
-            cur = self._conn.execute(
-                """
-                SELECT input_payload, teacher_output, adapter_output, verdict,
-                       error_type, phase, timestamp
-                FROM shadow_pairs
-                WHERE task_id = ? AND verdict IN ('disagree', 'error')
-                ORDER BY id DESC LIMIT ?;
-                """,
-                (task_id, limit),
-            )
-            return [dict(row) for row in cur.fetchall()]
+        cur = self._conn.execute(
+            """
+            SELECT input_payload, teacher_output, adapter_output, verdict,
+                   error_type, phase, timestamp
+            FROM shadow_pairs
+            WHERE task_id = ? AND verdict IN ('disagree', 'error')
+            ORDER BY id DESC LIMIT ?;
+            """,
+            (task_id, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
     def list_task_ids(self) -> List[str]:
         """Every task_id known to this database, oldest first."""
-        with self._lock:
-            cur = self._conn.execute("SELECT task_id FROM tasks ORDER BY created_at ASC;")
-            return [row["task_id"] for row in cur.fetchall()]
+        cur = self._conn.execute("SELECT task_id FROM tasks ORDER BY created_at ASC;")
+        return [row["task_id"] for row in cur.fetchall()]
 
     def get_task_report(self, task_id: str) -> Dict[str, Any]:
         """Rich per-task view for `wrapper.get_agreement()` and `paw-kit report`.
@@ -945,9 +1261,8 @@ class TraceDB:
         `get_status` deliberately keeps its bare-`str` signature and return; this is
         the additive rich API rather than a change to it.
         """
-        with self._lock:
-            cur = self._conn.execute("SELECT * FROM tasks WHERE task_id = ?;", (task_id,))
-            row = cur.fetchone()
+        cur = self._conn.execute("SELECT * FROM tasks WHERE task_id = ?;", (task_id,))
+        row = cur.fetchone()
         if row is None:
             base: Dict[str, Any] = {
                 "task_id": task_id, "status": "tracing", "adapter_path": None,
@@ -1016,12 +1331,11 @@ class TraceDB:
         return base
 
     def _prune_shadow_pairs_locked(self, task_id: str, max_pairs: int) -> None:
-        """Oldest-first retention on `shadow_pairs`. Caller must hold self._lock.
+        """Oldest-first retention on `shadow_pairs`. Caller must be inside `_write_txn`.
 
         An id-threshold delete rather than `id NOT IN (SELECT ... LIMIT ?)`: the
         subquery form materialises up to `cap` ids and re-scans them per row, and this
-        runs while the single connection lock the caller's routing read also takes is
-        held.
+        runs inside a write transaction holding SQLite's single writer.
         """
         self._conn.execute(
             """
@@ -1035,7 +1349,7 @@ class TraceDB:
         )
 
     def _prune_transitions_locked(self, task_id: str) -> None:
-        """Oldest-first retention on `state_transitions`. Caller must hold self._lock."""
+        """Oldest-first retention on `state_transitions`. Caller must be inside `_write_txn`."""
         self._conn.execute(
             """
             DELETE FROM state_transitions
@@ -1048,6 +1362,19 @@ class TraceDB:
         )
 
     def close(self) -> None:
-        """Close SQLite connection."""
-        with self._lock:
-            self._conn.close()
+        """Close every connection this TraceDB has handed out (J-7).
+
+        One per thread that has touched it, not one overall. After this, a thread
+        that has never connected gets `ProgrammingError` rather than silently
+        reopening the file -- the same failure a thread holding an already-closed
+        connection sees, which `shadow.py`'s worker already handles.
+        """
+        with self._conns_lock:
+            self._closed = True
+            conns = list(self._conns)
+            self._conns.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:  # pragma: no cover - closing twice, or mid-statement
+                pass

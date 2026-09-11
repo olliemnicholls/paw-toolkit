@@ -6,8 +6,9 @@ re-validating both answers, comparing them, writing the `shadow_pairs` row and
 deciding a promotion or demotion -- happens on a daemon worker thread, one per
 `(db_path, task_id)`.
 
-**Why the key includes `db_path`.** `task_id` is `sha256(qualname:spec)` and does not
-include `cache_dir`, so two decorations of the same function and spec against
+**Why the key includes `db_path`.** `task_id` is derived from the function's identity
+and spec (J-8: qualname, spec, `co_filename`, `co_firstlineno`) and does not include
+`cache_dir`, so two decorations of the same function and spec against
 different cache directories -- exactly what the test suite does with `tmp_path` --
 collide on `task_id`. A runner keyed on `task_id` alone would bind one worker to the
 first `TraceDB` it saw and write every later task's pairs into that database.
@@ -132,6 +133,10 @@ class ShadowRunner:
         self._drop_warned: Set[_RunnerKey] = set()
         self._stall_warned: Set[Tuple[_RunnerKey, int]] = set()
         self._seq_cache: Dict[Tuple[_RunnerKey, int], int] = {}
+        # J-12: windows actually *scored* at (key, epoch, phase). See
+        # `_maybe_transition` -- this is what keeps the window tumbling now that a
+        # boundary is evaluated at or past its exact multiple rather than only on it.
+        self._windows_scored: Dict[Tuple[_RunnerKey, int, str], int] = {}
         self._error_logged: Set[Tuple[str, str]] = set()
         # Stall-guard subsampling. Random rather than a deterministic "every Nth job"
         # counter: systematic sampling aliases against periodic traffic (a task called
@@ -336,7 +341,8 @@ class ShadowRunner:
     def _prune_stale_epoch_state(self, key: _RunnerKey, current_epoch: int) -> None:
         """Drop `_seq_cache`/`_stall_warned` entries for `key` at an older epoch.
 
-        Finding 4: both structures are keyed on `(key, state_epoch)`, and without this
+        Finding 4: all three structures are keyed on `(key, state_epoch, ...)`, and
+        without this
         every epoch a long-lived task ever passed through (a compile retry, a
         promotion, a demotion, a config change) left one entry behind for the life of
         the process. `state_epoch` only ever increases for a given task, so anything
@@ -347,6 +353,8 @@ class ShadowRunner:
                 del self._seq_cache[k]
             for k in [k for k in self._stall_warned if k[0] == key and k[1] < current_epoch]:
                 self._stall_warned.discard(k)
+            for k in [k for k in self._windows_scored if k[0] == key and k[1] < current_epoch]:
+                del self._windows_scored[k]
 
     def _run_fail_open_job(self, job: ShadowJob) -> None:
         """Worker-thread side of `submit_fail_open` -- the only thing a fail-open job does."""
@@ -462,13 +470,34 @@ class ShadowRunner:
     def _maybe_transition(self, job: ShadowJob, seq: int) -> None:
         """Evaluate a promotion/demotion once per *completed* window.
 
-        The window is tumbling, not sliding: the trigger is `seq % window == 0` on the
-        just-inserted row, so a 60%-agreement adapter gets one draw per window rather
-        than a fresh draw on every single comparison. A sliding window promotes such an
-        adapter eventually, which is the exact failure this feature exists to prevent.
+        The window is tumbling, not sliding: a 60%-agreement adapter gets one draw per
+        window rather than a fresh draw on every single comparison. A sliding window
+        promotes such an adapter eventually, which is the exact failure this feature
+        exists to prevent.
+
+        J-12: the trigger used to be `seq % window == 0`, tested only at an exact
+        multiple and never retried. A boundary that could not be scored -- one
+        `teacher_error` row at `shadow_max_pairs == window` was enough -- therefore
+        discarded its whole window silently while `seq` kept advancing. The trigger is
+        now "at or past the next unscored boundary", with `_windows_scored` recording
+        how many windows have actually been scored at this `(task, epoch, phase)`.
+        That record is what keeps the window tumbling: without it, evaluating at
+        `seq >= boundary` would re-evaluate on every subsequent comparison, which *is*
+        a sliding window.
+
+        It also makes the stall budget count scored windows rather than merely
+        completed ones, as J-12 asks: with a boundary now retried until it is scored,
+        `seq // window` and the scored count agree, so `get_task_report`'s own
+        seq-based `stalled` flag (db.py, the other of the two places this count lives)
+        stays consistent with the runner without needing a new persisted column.
         """
         window = job.window
-        if window <= 0 or seq <= 0 or seq % window != 0:
+        if window <= 0 or seq <= 0:
+            return
+        cache_key = (job.key, job.state_epoch, job.phase)
+        with self._lock:
+            scored = self._windows_scored.get(cache_key, 0)
+        if seq < (scored + 1) * window:
             return
         if job.phase == "shadow" and seq > _SHADOW_STALL_FACTOR * window:
             # A task that has run `_SHADOW_STALL_FACTOR` full windows at one epoch
@@ -496,8 +525,15 @@ class ShadowRunner:
         rate = stats["rate"]
         samples = stats["samples"]
         # A *full* window, not merely a rate: one agreeing sample gives rate == 1.0.
+        # J-12: returning here no longer burns the window. The next comparison is past
+        # the boundary and `_windows_scored` has not advanced, so it is retried.
         if rate is None or samples != window:
             return
+        with self._lock:
+            # Scored. Catch `_windows_scored` up to where `seq` actually is: a process
+            # that started mid-epoch, or a boundary retried a few comparisons late,
+            # must not then score several windows back to back.
+            self._windows_scored[cache_key] = max(scored + 1, seq // window)
         try:
             if job.phase == "shadow":
                 if rate >= job.shadow_threshold:

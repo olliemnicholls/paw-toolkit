@@ -2,6 +2,7 @@
 
 from functools import partial, wraps
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ import re
 import threading
 import time
 import types
+import weakref
 from typing import Any, Callable, Dict, Optional, Tuple, Type, TypeVar, Union
 from pydantic import BaseModel
 
@@ -107,15 +109,111 @@ def _invalidate_adapter_cache(task_id: str) -> None:
         _ADAPTER_CALLABLE_CACHE.pop(task_id, None)
 
 
-def _serialize_input(args: tuple, kwargs: dict) -> str:
-    """Serialize function arguments into a canonical input string."""
+# J-8: task_id -> the function object it was first derived for, so a second
+# decoration resolving to an existing task_id with a *different* function can be
+# warned about. Weak, so a decorated function going out of scope does not pin it here;
+# a dead entry is replaced silently, since nothing can be colliding with it any more.
+_TASK_ID_OWNERS: "weakref.WeakValueDictionary[str, Any]" = weakref.WeakValueDictionary()
+_TASK_ID_OWNERS_LOCK = threading.Lock()
+
+
+def _warn_on_task_id_collision(task_id: str, func: Callable[..., Any]) -> None:
+    """Warn when two distinct functions resolve to one task_id (J-8).
+
+    With `co_filename` and `co_firstlineno` in the hash this is unreachable for two
+    functions written at different places -- but it is emphatically *not* unreachable
+    for the decorator-factory pattern the finding is about:
+
+        def make(tenant):
+            @compile_on_hit(spec=SPEC, cache_dir=CACHE)
+            def classify(text): ...
+            return classify
+
+    Every tenant's `classify` is a different function object at the *same* source
+    location with the same qualname, so they still share a task_id -- and therefore one
+    call_count, one trace corpus, one adapter and one shadow window. After promotion,
+    tenant A's adapter serves tenant B. Source location cannot distinguish them;
+    nothing automatic can. So this says so, and points at `task_id=`.
+    """
+    with _TASK_ID_OWNERS_LOCK:
+        owner = _TASK_ID_OWNERS.get(task_id)
+        if owner is None:
+            _TASK_ID_OWNERS[task_id] = func
+            return
+        if owner is func:
+            return
+    logger.warning(
+        "paw_kit.jit: task_id=%s was already derived for a different function object "
+        "(%s). Both decorations share one call_count, one trace corpus, one compiled "
+        "adapter and one shadow window, so once it promotes, one caller's adapter "
+        "serves the other's traffic. This is the decorator-factory pattern (one "
+        "decorated function per tenant): pass an explicit task_id= to keep them "
+        "apart, or a distinct cache_dir.",
+        task_id, getattr(func, "__qualname__", func),
+    )
+
+
+# J-11: one WARNING per function whose arguments cannot be JSON-encoded, DEBUG after.
+_UNSERIALIZABLE_WARNED: set = set()
+
+
+def _serialize_input(
+    args: tuple, kwargs: dict, func: Optional[Callable[..., Any]] = None
+) -> str:
+    """Serialize function arguments into a canonical input string.
+
+    J-11: one logical call must produce one payload. It used to produce several.
+    `f("hello")` recorded `hello` while `f(text="hello")` recorded
+    `{"args": [], "kwargs": {"text": "hello"}}`, so a caller who mixes positional and
+    keyword style trains on one encoding and serves another; `kwargs` were unsorted,
+    so keyword order leaked into the payload; and `default=str` embedded `id()`-bearing
+    reprs, so three identical object arguments produced three distinct payloads.
+
+    Three fixes: bind through the signature and apply defaults, so calling style and
+    omitted defaults stop mattering; `sort_keys=True`, so keyword order stops
+    mattering; and no `default=str`, so an argument JSON cannot represent is *refused*
+    rather than silently encoded as its repr.
+
+    "Refuse" means falling back to this function's pre-existing
+    `str(args) + str(kwargs)` branch and logging, never raising: this runs on the
+    request path outside any try/except, and a new raise here would break the caller.
+    Note what that does and does not buy: the payload becomes loud rather than silent,
+    but it is still not canonical for such an argument -- a task whose inputs are not
+    JSON-representable cannot have a stable trace corpus, and the log line is there to
+    say so.
+    """
+    if func is not None:
+        try:
+            bound = inspect.signature(func).bind(*args, **kwargs)
+            bound.apply_defaults()
+            args, kwargs = tuple(bound.args), dict(bound.kwargs)
+        except (TypeError, ValueError):
+            # Not bindable (a builtin with no signature, or a call that will itself
+            # raise TypeError in a moment). Fall through on the raw arguments.
+            pass
     if len(args) == 1 and not kwargs and isinstance(args[0], str):
         return args[0]
     if len(args) == 1 and not kwargs and isinstance(args[0], BaseModel):
         return args[0].model_dump_json()
     try:
-        return json.dumps({"args": args, "kwargs": kwargs}, default=str)
-    except Exception:
+        return json.dumps({"args": args, "kwargs": kwargs}, sort_keys=True)
+    except (TypeError, ValueError):
+        name = getattr(func, "__qualname__", None) or "<unknown>"
+        if name not in _UNSERIALIZABLE_WARNED:
+            _UNSERIALIZABLE_WARNED.add(name)
+            logger.warning(
+                "paw_kit.jit: %s was called with an argument JSON cannot represent, so "
+                "its trace payload falls back to repr(). That payload is not canonical "
+                "-- two equal-but-distinct objects produce different payloads -- so the "
+                "compiled adapter will be trained on inputs it can never be asked for "
+                "again. Pass a str or a pydantic BaseModel. Further occurrences for "
+                "this function log at DEBUG.",
+                name,
+            )
+        else:
+            logger.debug(
+                "paw_kit.jit: %s argument is not JSON-serializable; using repr().", name
+            )
         return str(args) + str(kwargs)
 
 
@@ -238,13 +336,26 @@ def _validate_shadow_params(
         )
     if shadow_queue_size < 1:
         raise ValueError(f"shadow_queue_size must be >= 1, got {shadow_queue_size}")
-    if shadow_max_pairs < max(shadow_window, audit_window):
+    if shadow_max_pairs < 2 * max(shadow_window, audit_window):
+        # J-12: `>= 2 * max(...)`, not `>= max(...)`. At exactly one window's worth of
+        # retention a single `teacher_error` row makes the boundary unscoreable, and
+        # because `seq` keeps advancing while the window is discarded, the whole window
+        # is silently lost -- yet it still counts against the `5 * shadow_window` stall
+        # budget. Two windows' worth leaves room for the boundary to be evaluated at or
+        # past its exact multiple.
+        #
+        # API-BREAKING: a decoration at exactly
+        # `shadow_max_pairs == max(shadow_window, audit_window)` that works today now
+        # raises at decoration time. Shipped defaults (500 vs 20) are unaffected.
         raise ValueError(
-            "shadow_max_pairs must be >= max(shadow_window, audit_window): a retention cap "
-            "below the window prunes the table below a full window before it can ever fill, "
-            "so the task could never promote or demote. Got "
+            "shadow_max_pairs must be >= 2 * max(shadow_window, audit_window): a "
+            "retention cap that holds only one window prunes the oldest comparison of "
+            "a window while the window is still being scored, so a boundary that has "
+            "to be retried can never complete and the task could never promote or "
+            "demote. Got "
             f"shadow_max_pairs={shadow_max_pairs}, shadow_window={shadow_window}, "
-            f"audit_window={audit_window}"
+            f"audit_window={audit_window} "
+            f"(needs at least {2 * max(shadow_window, audit_window)})"
         )
 
 
@@ -265,6 +376,7 @@ def compile_on_hit(
     agreement_fn: Optional[Callable[[Any, Any], bool]] = None,
     shadow_queue_size: int = 8,
     shadow_max_pairs: int = 500,
+    task_id: Optional[str] = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator converting production LLM API calls into local neural functions.
 
@@ -325,6 +437,15 @@ def compile_on_hit(
             comparison is dropped; a dropped comparison is neither an agreement nor a
             disagreement and never enters the window denominator.
         shadow_max_pairs: Per-task retention cap on `shadow_pairs`, oldest-first.
+            Must be at least `2 * max(shadow_window, audit_window)` (J-12).
+        task_id: J-8. Override the derived task identity. The derived one is
+            `sha256(module.qualname : spec : co_filename : co_firstlineno)`, which
+            separates same-named functions in different files but *cannot* separate
+            several decorations of one `def` -- the decorator-factory pattern, one
+            decorated function per tenant. Those share a call_count, a trace corpus,
+            an adapter and a shadow window unless you name them apart here. A second
+            decoration resolving to an existing task_id with a different function
+            object logs a warning.
 
     Returns:
         Decorated callable function with JIT execution and fail-open routing.
@@ -336,6 +457,9 @@ def compile_on_hit(
         shadow_window, shadow_threshold, audit_window, audit_rate,
         demote_threshold, shadow_queue_size, shadow_max_pairs,
     )
+    # J-8: read the parameter here so `decorator` below can bind a local `task_id`
+    # without shadowing it.
+    explicit_task_id = task_id
     resolved_agreement_fn = agreement_fn or default_agreement_fn
     db_path = str(Path(cache_dir) / "traces.db")
     db = TraceDB(db_path=db_path)
@@ -372,7 +496,20 @@ def compile_on_hit(
         # any pre-existing cache entry keyed on the old 16-char id -- not a pure
         # one-liner.
         qualname = f"{func.__module__}.{func.__qualname__}"
-        task_id = hashlib.sha256(f"{qualname}:{spec}".encode("utf-8")).hexdigest()
+        if explicit_task_id is not None:
+            task_id = explicit_task_id
+        else:
+            # J-8: `sha256(qualname:spec)` collided across distinct functions that
+            # merely share a qualname -- `make.<locals>.classify` for every tenant of a
+            # decorator factory, or the same function name in two modules with the same
+            # `__name__`. Source location separates the second case; nothing separates
+            # the first, which is what `task_id=` and the warning below are for.
+            code = getattr(func, "__code__", None)
+            parts = [qualname, spec]
+            if code is not None:
+                parts += [code.co_filename, str(code.co_firstlineno)]
+            task_id = hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()
+        _warn_on_task_id_collision(task_id, func)
 
         # Owned by this closure, never the global `random` module: a caller who seeds
         # `random` for reproducibility must not be perturbed by audit sampling.
@@ -413,7 +550,7 @@ def compile_on_hit(
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             active_backend = backend or get_default_backend()
-            input_payload = _serialize_input(args, kwargs)
+            input_payload = _serialize_input(args, kwargs, func)
 
             # 1. One SELECT decides how this call is routed.
             status, adapter_path, state_epoch = db.get_task_routing(task_id)

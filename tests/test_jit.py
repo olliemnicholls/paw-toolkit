@@ -417,7 +417,17 @@ def test_with_write_retry_gives_up_after_max_attempts_PAW_JIT_04(
 
 
 def test_trace_db_uses_begin_immediate_isolation_PAW_JIT_04(tmp_path: Path) -> None:
-    """Verify the connection is opened with isolation_level="IMMEDIATE"."""
+    """Verify the connection is opened with isolation_level="IMMEDIATE".
+
+    D-1 (bug hunt 2026-09-11): the assertion below is unchanged, but what it means is
+    not. `isolation_level="IMMEDIATE"` alone does **not** confer the read-modify-write
+    safety its name suggests -- Python emits `BEGIN IMMEDIATE` only immediately before
+    a DML statement, so a method that reads then writes still runs its leading SELECT
+    in autocommit. This test passed for the whole life of that defect. It now asserts
+    only what it actually checks: that every *single-statement* write is covered. The
+    read-modify-write guarantee is `TraceDB._write_txn`'s, and it is pinned by
+    `tests/test_jit_persistence.py`'s multiprocess matrix, not by this test.
+    """
     db = TraceDB(db_path=str(tmp_path / "immediate.db"))
     assert db._conn.isolation_level == "IMMEDIATE"
     db.close()

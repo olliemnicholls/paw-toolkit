@@ -195,8 +195,19 @@ def _build_v1_db(
 
 
 def _task_id_for(func: Callable[..., Any], spec: str) -> str:
+    """Mirror of `compile_on_hit`'s derived task_id.
+
+    J-8 widened the hash to include `co_filename` and `co_firstlineno` so that two
+    distinct functions sharing a qualname no longer share a task_id (and therefore a
+    call_count, a trace corpus, an adapter and a shadow window). This helper tracks
+    that formula; it is not an independent check of it.
+    """
     qualname = f"{func.__module__}.{func.__qualname__}"
-    return hashlib.sha256(f"{qualname}:{spec}".encode("utf-8")).hexdigest()
+    code = func.__code__
+    return hashlib.sha256(
+        "\x00".join([qualname, spec, code.co_filename, str(code.co_firstlineno)])
+        .encode("utf-8")
+    ).hexdigest()
 
 
 # --- Lifecycle and equivalence ------------------------------------------------
@@ -1251,12 +1262,26 @@ def test_two_cache_dirs_same_spec_do_not_share_a_shadow_worker(tmp_path: Path) -
 
 
 def test_caller_latency_unaffected_by_worker_prune(tmp_path: Path) -> None:
-    """TraceDB is one connection behind one lock, so the worker's prune runs against the
-    caller's critical section. Upper-bound wall-clock assertion on the caller only."""
+    """The worker's prune must not show up in the caller's wall clock.
+
+    The docstring here used to say "TraceDB is one connection behind one lock, so the
+    worker's prune runs against the caller's critical section". That premise is
+    falsified by J-7: the worker now has its own connection and the lock no longer
+    serialises database access, so the prune contends only for SQLite's single writer.
+    The assertion is unchanged and still holds; only the reason it holds has changed.
+
+    `shadow_queue_size` is raised from 32 because removing the shared lock also
+    removed the accidental backpressure it applied to the caller -- the caller now
+    enqueues faster than the worker drains and a size-32 queue drops comparisons (27
+    of 60 observed). That is J-7 working, not a regression, but a dropped comparison
+    never enters a window, so this test's retention assertion needs the queue to hold.
+    `shadow_max_pairs` is 40 rather than 20 because J-12 requires
+    `>= 2 * max(shadow_window, audit_window)`.
+    """
     backend = ScriptedBackend()
     svc, _ = _make(
         tmp_path, "prunelatency", backend,
-        shadow_window=20, shadow_max_pairs=20, shadow_queue_size=32,
+        shadow_window=20, shadow_max_pairs=40, shadow_queue_size=128,
     )
     svc("a")
     svc("b")
@@ -1268,7 +1293,7 @@ def test_caller_latency_unaffected_by_worker_prune(tmp_path: Path) -> None:
     assert elapsed < 2.0, f"60 calls took {elapsed:.2f}s while the worker was pruning"
     _drain(svc)
     count = _query(svc.db, "SELECT COUNT(*) AS n FROM shadow_pairs;")[0]["n"]
-    assert count <= 20
+    assert count <= 40
 
 
 def test_process_exit_with_queued_shadow_jobs_neither_raises_nor_hangs(
