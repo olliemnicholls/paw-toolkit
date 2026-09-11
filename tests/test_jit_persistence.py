@@ -314,3 +314,284 @@ def test_write_txn_does_not_begin_inside_an_open_transaction_D_1(
         assert db.get_status("n") == "tracing"
     finally:
         db.close()
+
+
+# --- D-5: retention caps are enforced per task, not per database ----------------
+
+
+def test_retention_cap_is_enforced_for_every_task_D_5(tmp_path: Path) -> None:
+    """`2 * cap` rows across several concurrently-active tasks, every task in bound.
+
+    The counters gating the periodic prune used to count writes across *all* tasks
+    while the prune they gate deletes rows for only the task that wrote on the Nth
+    call. Under round-robin traffic the Nth call lands on the same task every time
+    (N and the task count share a factor), so with T tasks any given task is pruned
+    at most 1/T of the time -- measured in the hunt as 50 tasks holding 600 rows each
+    against a documented worst case of 249.
+    """
+    from paw_kit.jit.db import _PRUNE_EVERY, _prune_interval
+
+    cap = _PRUNE_EVERY + 10          # > _PRUNE_EVERY, so the prune really is periodic
+    bound = cap + _prune_interval(cap) - 1   # the documented worst case
+    tasks = [f"task{i}" for i in range(5)]
+    db = TraceDB(db_path=str(tmp_path / "retention.db"))
+    try:
+        for i in range(2 * cap * len(tasks)):
+            t = tasks[i % len(tasks)]
+            db.record_shadow_pair(
+                task_id=t, state_epoch=0, phase="shadow", input_payload=f"in{i}",
+                teacher_output="t", adapter_output="a", verdict="agree",
+                max_pairs=cap,
+            )
+        held = {
+            t: db._conn.execute(
+                "SELECT COUNT(*) FROM shadow_pairs WHERE task_id = ?;", (t,)
+            ).fetchone()[0]
+            for t in tasks
+        }
+    finally:
+        db.close()
+    over = {t: n for t, n in held.items() if n > bound}
+    assert not over, (
+        f"{len(over)} of {len(tasks)} tasks are over the documented bound of {bound} "
+        f"rows: {over} (all tasks: {held})"
+    )
+
+
+def test_transition_retention_cap_is_enforced_for_every_task_D_5(tmp_path: Path) -> None:
+    """The same, for `state_transitions` -- the table the hunt actually measured."""
+    from paw_kit.jit.db import _STATE_TRANSITIONS_MAX_ROWS, _prune_interval
+
+    cap = _STATE_TRANSITIONS_MAX_ROWS
+    bound = cap + _prune_interval(cap) - 1
+    # Two tasks, not three: the shared counter's Nth call only ever lands on one task
+    # when the task count and `_prune_interval` share a factor, which is exactly the
+    # traffic shape the hunt measured (50 tasks, interval 50, only `t49` ever pruned).
+    # With three the residues cycle and the defect happens to hide.
+    tasks = [f"tr{i}" for i in range(2)]
+    db = TraceDB(db_path=str(tmp_path / "transitions.db"))
+    try:
+        for i in range(2 * cap * len(tasks)):
+            t = tasks[i % len(tasks)]
+            db.record_state_transition(t, "shadow", "ready", state_epoch=i)
+        held = {
+            t: db._conn.execute(
+                "SELECT COUNT(*) FROM state_transitions WHERE task_id = ?;", (t,)
+            ).fetchone()[0]
+            for t in tasks
+        }
+    finally:
+        db.close()
+    over = {t: n for t, n in held.items() if n > bound}
+    assert not over, (
+        f"{len(over)} of {len(tasks)} tasks are over the documented bound of {bound} "
+        f"rows: {over} (all tasks: {held})"
+    )
+
+
+def test_prune_counter_is_not_advanced_twice_by_a_retry_D_5(tmp_path: Path) -> None:
+    """A retried write transaction counts as one write, not two.
+
+    Both counters used to be incremented *inside* the closure `_with_write_retry`
+    re-runs, so a transaction that rolled back at commit and succeeded on the retry
+    advanced the prune clock twice for one persisted row.
+    """
+    import contextlib
+
+    db = TraceDB(db_path=str(tmp_path / "retrycount.db"))
+    try:
+        real = db._write_txn
+        state = {"failed": False}
+
+        @contextlib.contextmanager
+        def flaky():
+            with real() as conn:
+                yield conn
+                if not state["failed"]:
+                    state["failed"] = True
+                    # After the INSERT, before the commit -- the real shape of a
+                    # write that loses the race and is retried.
+                    raise sqlite3.OperationalError("database is locked")
+
+        db._write_txn = flaky  # type: ignore[method-assign]
+        db.record_shadow_pair(
+            task_id="r", state_epoch=0, phase="shadow", input_payload="i",
+            teacher_output="t", adapter_output="a", verdict="agree",
+        )
+        db._write_txn = real  # type: ignore[method-assign]
+        assert state["failed"], "the injected failure never fired"
+        rows = db._conn.execute(
+            "SELECT COUNT(*) FROM shadow_pairs WHERE task_id = 'r';"
+        ).fetchone()[0]
+        assert rows == 1
+        assert db._shadow_pair_writes.get("r") == 1, (
+            f"one persisted row, but the prune clock advanced to "
+            f"{db._shadow_pair_writes.get('r')}"
+        )
+    finally:
+        db.close()
+
+
+# --- D-7: a write against an unknown task_id must not vanish -------------------
+
+
+@pytest.mark.parametrize(
+    "call,column,expected",
+    [
+        (lambda db, t: db.set_status(t, "failed"), "status", "failed"),
+        (lambda db, t: db.set_shadow_started(t, "/tmp/a.paw"), "status", "shadow"),
+        (lambda db, t: db.set_ready_from_compile(t, "/tmp/a.paw"), "status", "ready"),
+        (lambda db, t: db.increment_compile_attempts(t), "compile_attempts", 1),
+        (lambda db, t: db.increment_fail_open(t), "fail_open_count", 1),
+    ],
+    ids=["set_status", "set_shadow_started", "set_ready_from_compile",
+         "increment_compile_attempts", "increment_fail_open"],
+)
+def test_write_against_a_missing_task_row_does_not_vanish_D_7(
+    tmp_path: Path, call: Callable[[Any, str], Any], column: str, expected: Any
+) -> None:
+    """All five bare `UPDATE ... WHERE task_id = ?` sites upsert.
+
+    Against a missing `tasks` row a bare UPDATE affects zero rows and reports
+    success. `increment_compile_attempts` then returns 0 forever, so
+    `BackgroundCompiler`'s `attempts < _MAX_COMPILE_ATTEMPTS` bound is never reached
+    and every failed compile is retried -- and paid for -- on every subsequent call.
+    `set_status(..., 'failed')` silently does nothing, so the terminal state is
+    unreachable. Reachable by deleting `.paw/traces.db` (documented as a cache) while
+    a process holds a live wrapper.
+    """
+    db = TraceDB(db_path=str(tmp_path / f"missing_{column}.db"))
+    try:
+        call(db, "ghost")
+        row = db._conn.execute(
+            f"SELECT {column} FROM tasks WHERE task_id = 'ghost';"  # noqa: S608
+        ).fetchone()
+        assert row is not None, "the write vanished: no tasks row was created"
+        assert row[0] == expected
+    finally:
+        db.close()
+
+
+def test_no_orphaned_transition_against_a_missing_task_row_D_7(tmp_path: Path) -> None:
+    """`set_shadow_started`/`set_ready_from_compile` are worse than the three named.
+
+    Each unconditionally writes a `state_transitions` row straight after its UPDATE,
+    so against a missing `tasks` row they left an orphaned transition record
+    referencing a task that does not exist.
+    """
+    db = TraceDB(db_path=str(tmp_path / "orphan.db"))
+    try:
+        db.set_shadow_started("ghost1", "/tmp/a.paw")
+        db.set_ready_from_compile("ghost2", "/tmp/a.paw")
+        orphans = db._conn.execute(
+            "SELECT COUNT(*) FROM state_transitions st "
+            "WHERE NOT EXISTS (SELECT 1 FROM tasks t WHERE t.task_id = st.task_id);"
+        ).fetchone()[0]
+        assert orphans == 0, f"{orphans} transition row(s) reference no task"
+    finally:
+        db.close()
+
+
+def test_increment_compile_attempts_returns_one_then_two_from_nothing_D_7(
+    tmp_path: Path,
+) -> None:
+    """Two consecutive increments return 1 then 2 in every case, missing row included."""
+    db = TraceDB(db_path=str(tmp_path / "attempts.db"))
+    try:
+        assert db.increment_compile_attempts("fresh") == 1
+        assert db.increment_compile_attempts("fresh") == 2
+        # And with a pre-existing row, unchanged behaviour.
+        db.record_trace("known", "i", "o", 1.0)
+        assert db.increment_compile_attempts("known") == 1
+        assert db.increment_compile_attempts("known") == 2
+    finally:
+        db.close()
+
+
+def test_compile_attempts_distinguishes_no_row_from_zero_D_7(tmp_path: Path) -> None:
+    """The counter read can tell "no task" from "a task that has never failed"."""
+    db = TraceDB(db_path=str(tmp_path / "distinguish.db"))
+    try:
+        db.record_trace("known", "i", "o", 1.0)
+        assert db._get_compile_attempts_locked("absent") is None
+        assert db._get_compile_attempts_locked("known") == 0
+        # The public accessor keeps its bare-int contract.
+        assert db.get_compile_attempts("absent") == 0
+        assert db.get_compile_attempts("known") == 0
+    finally:
+        db.close()
+
+
+def test_background_compiler_attempts_stay_bounded_after_a_db_deletion_D_7(
+    tmp_path: Path,
+) -> None:
+    """A failing compile reaches `failed` in a bounded number of attempts.
+
+    The reachable case: the user deletes `.paw/traces.db` (documented as a cache)
+    while a process holds a live wrapper. Every one of those compiles is paid for, so
+    an unbounded retry loop is a money bug, not just a correctness one.
+    """
+    from paw_kit.jit.compiler import BackgroundCompiler
+
+    class _Failing:
+        def compile(self, **kwargs: Any) -> str:
+            raise RuntimeError("compile failed")
+
+    db_file = tmp_path / "bounded" / "traces.db"
+    db = TraceDB(db_path=str(db_file))
+    db.record_trace("t", "i", "o", 1.0)
+    compiler = BackgroundCompiler()
+    try:
+        # The deletion the finding describes: the file goes, the live handle stays.
+        # SQLite keeps writing to the unlinked inode, so every tasks row is gone.
+        db._conn.execute("DELETE FROM tasks;")
+        db._conn.commit()
+        for _ in range(BackgroundCompiler._MAX_COMPILE_ATTEMPTS + 3):
+            compiler.trigger_compilation(
+                task_id="t", spec="s", db=db, backend=_Failing(),  # type: ignore[arg-type]
+                output_path=str(tmp_path / "t.paw"), sync=True,
+            )
+            if db.get_status("t") == "failed":
+                break
+        assert db.get_status("t") == "failed", (
+            f"status is {db.get_status('t')!r} after "
+            f"{BackgroundCompiler._MAX_COMPILE_ATTEMPTS + 3} failing compiles; the "
+            "retry bound was never reached"
+        )
+        assert db.get_compile_attempts("t") <= BackgroundCompiler._MAX_COMPILE_ATTEMPTS
+    finally:
+        db.close()
+
+
+def test_background_compiler_fails_closed_when_the_counter_stalls_D_7(
+    tmp_path: Path,
+) -> None:
+    """A counter that never advances must terminate the retry, not licence it.
+
+    `attempts < _MAX_COMPILE_ATTEMPTS` is only a bound if the count moves. TraceDB's
+    upsert makes a stalled counter unreachable; this pins the compiler side so the
+    bound holds whatever the database underneath does.
+    """
+    from paw_kit.jit.compiler import BackgroundCompiler
+
+    class _Failing:
+        def compile(self, **kwargs: Any) -> str:
+            raise RuntimeError("compile failed")
+
+    db = TraceDB(db_path=str(tmp_path / "stalled" / "traces.db"))
+    db.record_trace("t", "i", "o", 1.0)
+    # The historical symptom, injected directly: the write reports success and the
+    # count stays put.
+    db.increment_compile_attempts = lambda task_id: 0  # type: ignore[method-assign]
+    compiler = BackgroundCompiler()
+    try:
+        compiler.trigger_compilation(
+            task_id="t", spec="s", db=db, backend=_Failing(),  # type: ignore[arg-type]
+            output_path=str(tmp_path / "t.paw"), sync=True,
+        )
+        assert db.get_status("t") == "failed", (
+            "a stalled attempt counter reset the task to 'tracing', which is the "
+            "unbounded paid-retry loop the counter exists to prevent"
+        )
+    finally:
+        db.close()

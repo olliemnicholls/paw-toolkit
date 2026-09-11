@@ -118,9 +118,21 @@ class TraceDB:
         # decorator.py back.
         self._status_listeners: List[Callable[[str], None]] = []
         # Track 14: insert counters driving the periodic oldest-first prunes below.
-        # Guarded by self._lock, like every other write on this connection.
-        self._shadow_pair_writes = 0
-        self._transition_writes = 0
+        #
+        # D-5: keyed **per task**, and bumped **outside** the closure
+        # `_with_write_retry` re-runs. One counter across all tasks gated a prune that
+        # deletes rows for a single task, so with T tasks any given task was pruned at
+        # most 1/T of the time -- and under round-robin traffic the Nth call lands on
+        # the same task every time, so in practice exactly one task was ever pruned
+        # (50 tasks held 600 rows each against a documented worst case of 249).
+        # Bumping inside the retried closure additionally advanced the clock twice for
+        # a single persisted row whenever a transaction lost the race and was retried.
+        self._shadow_pair_writes: Dict[str, int] = {}
+        self._transition_writes: Dict[str, int] = {}
+        # Deliberately not `self._lock`: these are bumped outside the write
+        # transaction, and reusing the connection lock for them would pull unrelated
+        # bookkeeping back inside the critical section D-1 just widened.
+        self._counter_lock = threading.Lock()
         # Narrow the window the file spends at the (looser) default permissions
         # sqlite3.connect() just created it with, before any trace data is written.
         self._chmod_best_effort(self.db_path, 0o600)
@@ -182,6 +194,29 @@ class TraceDB:
             if not self._conn.in_transaction:
                 self._conn.execute("BEGIN IMMEDIATE;")
             yield self._conn
+
+    def _note_write(self, counter: Dict[str, int], task_id: str, interval: int) -> bool:
+        """Bump a per-task prune clock and report whether a prune is now due (D-5).
+
+        Called *after* `_with_write_retry` returns, never from inside the closure it
+        re-runs: one persisted row must advance the clock exactly once however many
+        attempts it took.
+        """
+        with self._counter_lock:
+            count = counter.get(task_id, 0) + 1
+            counter[task_id] = count
+        return count % interval == 0
+
+    def _after_transition_write(self, task_id: str) -> None:
+        """Advance the `state_transitions` prune clock for `task_id` and prune if due."""
+        if self._note_write(
+            self._transition_writes, task_id, _prune_interval(_STATE_TRANSITIONS_MAX_ROWS)
+        ):
+            def _do() -> None:
+                with self._write_txn():
+                    self._prune_transitions_locked(task_id)
+
+            self._with_write_retry(_do)
 
     def _with_write_retry(self, fn: Callable[[], T]) -> T:
         """Run `fn` (one write transaction) with bounded exponential-backoff retry on
@@ -408,10 +443,16 @@ class TraceDB:
         `state_transitions` row, so the lifecycle is auditable from the database
         alone. The epoch bump is what makes shadow-window arithmetic immune to
         comparisons that were in flight across a transition.
+
+        D-7: upsert, not a bare `UPDATE ... WHERE task_id = ?`. Against a missing
+        `tasks` row the bare form affected zero rows and reported success, so
+        `set_status(..., 'failed')` silently did nothing and the terminal state was
+        unreachable -- reachable in practice by deleting `.paw/traces.db` (documented
+        as a cache) while a process holds a live wrapper.
         """
         now = datetime.now(timezone.utc).isoformat()
 
-        def _do() -> None:
+        def _do() -> bool:
             with self._write_txn():
                 previous, epoch = self._get_status_and_epoch_locked(task_id)
                 changed = previous is not None and previous != status
@@ -419,44 +460,69 @@ class TraceDB:
                 if adapter_path is not None:
                     self._conn.execute(
                         """
-                        UPDATE tasks
-                        SET status = ?, adapter_path = ?, state_epoch = ?, updated_at = ?
-                        WHERE task_id = ?;
+                        INSERT INTO tasks (task_id, call_count, status, adapter_path,
+                                           state_epoch, created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?, ?)
+                        ON CONFLICT(task_id) DO UPDATE SET
+                            status = excluded.status,
+                            adapter_path = excluded.adapter_path,
+                            state_epoch = excluded.state_epoch,
+                            updated_at = excluded.updated_at;
                         """,
-                        (status, adapter_path, new_epoch, now, task_id),
+                        (task_id, status, adapter_path, new_epoch, now, now),
                     )
                 else:
                     self._conn.execute(
                         """
-                        UPDATE tasks
-                        SET status = ?, state_epoch = ?, updated_at = ?
-                        WHERE task_id = ?;
+                        INSERT INTO tasks (task_id, call_count, status, state_epoch,
+                                           created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?)
+                        ON CONFLICT(task_id) DO UPDATE SET
+                            status = excluded.status,
+                            state_epoch = excluded.state_epoch,
+                            updated_at = excluded.updated_at;
                         """,
-                        (status, new_epoch, now, task_id),
+                        (task_id, status, new_epoch, now, now),
                     )
                 if changed:
                     self._record_transition_locked(
                         task_id, previous or "tracing", status, None, None, new_epoch, now
                     )
+                return changed
 
         # PAW-JIT-04: bounded retry/backoff on top of BEGIN IMMEDIATE + busy_timeout.
-        self._with_write_retry(_do)
+        if self._with_write_retry(_do):
+            self._after_transition_write(task_id)
 
         for listener in list(self._status_listeners):
             listener(task_id)
 
     def get_compile_attempts(self, task_id: str) -> int:
-        """Retrieve the number of compilation attempts made so far for task_id (PAW-JIT-03)."""
-        with self._lock:
-            return self._get_compile_attempts_locked(task_id)
+        """Retrieve the number of compilation attempts made so far for task_id (PAW-JIT-03).
 
-    def _get_compile_attempts_locked(self, task_id: str) -> int:
-        """Read compile_attempts for task_id. Caller must already hold self._lock."""
+        Keeps its bare-`int` contract: a task with no row reads 0, exactly like a task
+        that has never failed a compile. Callers that need to tell those two apart use
+        `_get_compile_attempts_locked`, which returns `None` for the former (D-7).
+        """
+        with self._lock:
+            attempts = self._get_compile_attempts_locked(task_id)
+        return 0 if attempts is None else attempts
+
+    def _get_compile_attempts_locked(self, task_id: str) -> Optional[int]:
+        """Read compile_attempts for task_id, or None if there is no row at all.
+
+        D-7: "no task" and "a task that has never failed a compile" both used to read
+        0, which is what let `increment_compile_attempts` return 0 forever against a
+        missing row and turned `BackgroundCompiler`'s bounded retry into an unbounded,
+        paid one. Caller must already hold self._lock.
+        """
         cur = self._conn.execute(
             "SELECT compile_attempts FROM tasks WHERE task_id = ?;", (task_id,)
         )
         row = cur.fetchone()
-        return row["compile_attempts"] if row else 0
+        if row is None:
+            return None
+        return row["compile_attempts"] or 0
 
     def increment_compile_attempts(self, task_id: str) -> int:
         """Atomically increment and return the compilation attempt counter for task_id.
@@ -466,14 +532,30 @@ class TraceDB:
         unconditionally on every subsequent call once the task's (never-decreasing)
         call_count has crossed the compilation threshold (the audit's own suggested
         fix, which turns into an unbounded retry loop).
+
+        D-7: upserts, so two consecutive calls return 1 then 2 in every case -- a
+        missing `tasks` row included, which is exactly the case where the bare UPDATE
+        returned 0 forever and every failed compile was retried and paid for again.
         """
         def _do() -> int:
             with self._write_txn():
+                now = datetime.now(timezone.utc).isoformat()
                 self._conn.execute(
-                    "UPDATE tasks SET compile_attempts = compile_attempts + 1 WHERE task_id = ?;",
-                    (task_id,),
+                    """
+                    INSERT INTO tasks (task_id, call_count, compile_attempts, status,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 1, 'tracing', ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        compile_attempts = COALESCE(tasks.compile_attempts, 0) + 1,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (task_id, now, now),
                 )
-                return self._get_compile_attempts_locked(task_id)
+                attempts = self._get_compile_attempts_locked(task_id)
+                # Unreachable after the upsert above. Reporting 0 rather than raising
+                # keeps this off the raising paths the fail-open invariant protects;
+                # BackgroundCompiler fails *closed* when the count does not advance.
+                return 0 if attempts is None else attempts
 
         # PAW-JIT-04: bounded retry/backoff on top of BEGIN IMMEDIATE + busy_timeout.
         return self._with_write_retry(_do)
@@ -559,10 +641,9 @@ class TraceDB:
             """,
             (task_id, from_status, to_status, agreement, sample_count, state_epoch, reason, now),
         )
-        self._transition_writes += 1
-        interval = _prune_interval(_STATE_TRANSITIONS_MAX_ROWS)
-        if self._transition_writes % interval == 0:
-            self._prune_transitions_locked(task_id)
+        # D-5: the prune clock is *not* advanced here. Every caller calls
+        # `_after_transition_write(task_id)` once the transaction has committed, so a
+        # retried transaction counts once and the clock is per task, not per database.
 
     def record_state_transition(
         self,
@@ -585,9 +666,16 @@ class TraceDB:
                 )
 
         self._with_write_retry(_do)
+        self._after_transition_write(task_id)
 
     def set_shadow_started(self, task_id: str, adapter_path: str) -> None:
-        """Move a freshly-compiled task into `shadow`: the adapter exists but does not serve."""
+        """Move a freshly-compiled task into `shadow`: the adapter exists but does not serve.
+
+        D-7: upsert. This is one of the two sites *worse* than the three the hunt
+        named, because it unconditionally writes a `state_transitions` row straight
+        after -- so against a missing `tasks` row the status write vanished and left
+        an orphaned transition record pointing at a task that does not exist.
+        """
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
@@ -596,23 +684,33 @@ class TraceDB:
                 new_epoch = epoch + 1
                 self._conn.execute(
                     """
-                    UPDATE tasks
-                    SET status = 'shadow', adapter_path = ?, shadow_started_at = ?,
-                        state_epoch = ?, updated_at = ?
-                    WHERE task_id = ?;
+                    INSERT INTO tasks (task_id, call_count, status, adapter_path,
+                                       shadow_started_at, state_epoch,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 'shadow', ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        status = 'shadow',
+                        adapter_path = excluded.adapter_path,
+                        shadow_started_at = excluded.shadow_started_at,
+                        state_epoch = excluded.state_epoch,
+                        updated_at = excluded.updated_at;
                     """,
-                    (adapter_path, now, new_epoch, now, task_id),
+                    (task_id, adapter_path, now, new_epoch, now, now),
                 )
                 self._record_transition_locked(
                     task_id, previous or "compiling", "shadow", None, None, new_epoch, now
                 )
 
         self._with_write_retry(_do)
+        self._after_transition_write(task_id)
         for listener in list(self._status_listeners):
             listener(task_id)
 
     def set_ready_from_compile(self, task_id: str, adapter_path: str) -> None:
-        """Promote straight to `ready` on compile -- the `shadow_window=0` path."""
+        """Promote straight to `ready` on compile -- the `shadow_window=0` path.
+
+        D-7: upsert, for the same reason as `set_shadow_started` above.
+        """
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
@@ -621,12 +719,19 @@ class TraceDB:
                 new_epoch = epoch + 1
                 self._conn.execute(
                     """
-                    UPDATE tasks
-                    SET status = 'ready', adapter_path = ?, promoted_at = ?,
-                        promoted_agreement = NULL, state_epoch = ?, updated_at = ?
-                    WHERE task_id = ?;
+                    INSERT INTO tasks (task_id, call_count, status, adapter_path,
+                                       promoted_at, promoted_agreement, state_epoch,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 'ready', ?, ?, NULL, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        status = 'ready',
+                        adapter_path = excluded.adapter_path,
+                        promoted_at = excluded.promoted_at,
+                        promoted_agreement = NULL,
+                        state_epoch = excluded.state_epoch,
+                        updated_at = excluded.updated_at;
                     """,
-                    (adapter_path, now, new_epoch, now, task_id),
+                    (task_id, adapter_path, now, new_epoch, now, now),
                 )
                 self._record_transition_locked(
                     task_id, previous or "compiling", "ready", None, None, new_epoch, now,
@@ -634,6 +739,7 @@ class TraceDB:
                 )
 
         self._with_write_retry(_do)
+        self._after_transition_write(task_id)
         for listener in list(self._status_listeners):
             listener(task_id)
 
@@ -674,6 +780,9 @@ class TraceDB:
 
         won = self._with_write_retry(_do)
         if won:
+            # D-5: a won compare-and-set wrote a `state_transitions` row, so it
+            # advances that task's own prune clock -- outside the retried closure.
+            self._after_transition_write(task_id)
             for listener in list(self._status_listeners):
                 listener(task_id)
         return won
@@ -710,6 +819,9 @@ class TraceDB:
 
         won = self._with_write_retry(_do)
         if won:
+            # D-5: a won compare-and-set wrote a `state_transitions` row, so it
+            # advances that task's own prune clock -- outside the retried closure.
+            self._after_transition_write(task_id)
             for listener in list(self._status_listeners):
                 listener(task_id)
         return won
@@ -772,7 +884,11 @@ class TraceDB:
                     )
                 return changed_mid_run
 
-        return self._with_write_retry(_do)
+        bumped = self._with_write_retry(_do)
+        if bumped:
+            # D-5: the config-change transition row advances this task's own clock.
+            self._after_transition_write(task_id)
+        return bumped
 
     def get_shadow_config(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Read back the persisted resolved shadow configuration, if any."""
@@ -796,10 +912,17 @@ class TraceDB:
         """
         def _do() -> None:
             with self._write_txn():
+                now = datetime.now(timezone.utc).isoformat()
                 self._conn.execute(
-                    "UPDATE tasks SET fail_open_count = COALESCE(fail_open_count, 0) + 1 "
-                    "WHERE task_id = ?;",
-                    (task_id,),
+                    """
+                    INSERT INTO tasks (task_id, call_count, fail_open_count, status,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 1, 'tracing', ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        fail_open_count = COALESCE(tasks.fail_open_count, 0) + 1,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (task_id, now, now),
                 )
 
         self._with_write_retry(_do)
@@ -858,12 +981,20 @@ class TraceDB:
                         adapter_latency_ms, now,
                     ),
                 )
-                self._shadow_pair_writes += 1
-                if self._shadow_pair_writes % _prune_interval(max_pairs) == 0:
-                    self._prune_shadow_pairs_locked(task_id, max_pairs)
                 return {"seq": seq}
 
-        return self._with_write_retry(_do)
+        result = self._with_write_retry(_do)
+        # D-5: per task, and outside the retried closure. The prune is its own short
+        # transaction rather than a tail on the insert's: it is retention maintenance,
+        # not part of the row's atomicity, and keeping it out means a retried insert
+        # cannot re-run a prune that already happened.
+        if self._note_write(self._shadow_pair_writes, task_id, _prune_interval(max_pairs)):
+            def _prune() -> None:
+                with self._write_txn():
+                    self._prune_shadow_pairs_locked(task_id, max_pairs)
+
+            self._with_write_retry(_prune)
+        return result
 
     def get_epoch_seq(self, task_id: str, state_epoch: int) -> int:
         """Highest countable-comparison sequence number reached at this epoch.

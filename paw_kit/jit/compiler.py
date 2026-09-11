@@ -91,8 +91,19 @@ class BackgroundCompiler:
             except Exception:
                 # PAW-JIT-03: bounded retry, not an unconditional reset to "tracing"
                 # (see _MAX_COMPILE_ATTEMPTS docstring) and not a permanent deadlock.
+                #
+                # D-7: fail *closed* when the counter does not advance. The bound is
+                # only a bound if the count actually moves; when it does not (the
+                # historical case: a bare UPDATE against a missing `tasks` row
+                # affecting zero rows and reporting success) "attempts < max" is true
+                # forever, the task is reset to `tracing` after every failure, and
+                # every retried compile is paid for again. TraceDB's upsert makes that
+                # unreachable; this makes it *provably* bounded from here regardless of
+                # what the database underneath does.
+                before = db.get_compile_attempts(task_id)
                 attempts = db.increment_compile_attempts(task_id)
-                if attempts < self._MAX_COMPILE_ATTEMPTS:
+                advanced = attempts > before
+                if advanced and attempts < self._MAX_COMPILE_ATTEMPTS:
                     db.set_status(task_id, "tracing")
                 else:
                     db.set_status(task_id, "failed")
