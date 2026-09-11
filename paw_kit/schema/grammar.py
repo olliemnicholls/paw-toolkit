@@ -140,6 +140,45 @@ def _json_string_literal_regex(val: str) -> str:
     return re.escape(json.dumps(val, ensure_ascii=False))
 
 
+def _is_escaped(pattern: str, index: int) -> bool:
+    """Return True if the character at `index` is preceded by an odd run of backslashes."""
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and pattern[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def _strip_anchors(pattern: str) -> str:
+    """Remove leading `^` and trailing `$` anchors, honouring backslash escapes (S-7).
+
+    The previous spelling was `pattern.lstrip("^").rstrip("$")`, which is
+    *character-wise*: it removes every trailing `$` regardless of what precedes it. So
+    `r"a\$"` -- a perfectly ordinary currency pattern meaning "a followed by a literal
+    dollar sign" -- became `a\`, and the stray trailing backslash then escaped the
+    closing quote of the JSON string the pattern was spliced into. The grammar ended up
+    accepting `{"x": "a"}` (which pydantic rejects) and rejecting `{"x": "a$"}` (which
+    pydantic accepts) -- silently wrong in both directions.
+
+    A leading `^` at index 0 is always an anchor (there is nothing in front of it to
+    escape it), so a run of them is stripped outright. A trailing `$` is an anchor only
+    when it is not itself escaped, which is an odd/even backslash-run question:
+    `r"a\$"` (one backslash) is a literal dollar and stays, while `r"a\\$"` (an
+    escaped backslash, then the anchor) loses its `$`.
+
+    An anchor anywhere else -- `(?:a$)b` -- is left in place deliberately, and the
+    translation that follows refuses it by name rather than guessing at its intent.
+    """
+    start = 0
+    while start < len(pattern) and pattern[start] == "^":
+        start += 1
+    end = len(pattern)
+    while end > start and pattern[end - 1] == "$" and not _is_escaped(pattern, end - 1):
+        end -= 1
+    return pattern[start:end]
+
+
 def _sanitize_field_pattern(pattern: str) -> str:
     """Validate a `Field(pattern=...)` regex constraint for safe JSON-string embedding.
 
@@ -161,7 +200,7 @@ def _sanitize_field_pattern(pattern: str) -> str:
     for anyone who writes the "obvious" single-backslash escape. So: no quote
     character is permitted in a pattern constraint at all, escaped or not.
     """
-    clean = pattern.lstrip("^").rstrip("$")
+    clean = _strip_anchors(pattern)
     if '"' in clean:
         raise PAWSchemaError(
             f"Invalid field pattern constraint {pattern!r}: double quote characters "

@@ -1079,3 +1079,35 @@ def test_json_string_excludes_lone_surrogate_escapes_S_2() -> None:
         assert _re.match(pat, surrogate) is None, f"grammar accepts lone surrogate {surrogate!r}"
         with pytest.raises(Exception):
             TextModel.model_validate_json(surrogate)
+
+
+# --- S-7: anchors are stripped structurally, honouring backslash escapes -------------
+
+
+def test_anchor_stripping_honours_backslash_escapes_S_7() -> None:
+    """`rstrip("$")` is character-wise, so `r"a\\$"` lost its literal dollar (S-7)."""
+    from paw_kit.schema.grammar import _strip_anchors
+
+    assert _strip_anchors(r"^abc$") == "abc"
+    assert _strip_anchors(r"a$") == "a"
+    assert _strip_anchors(r"a\$") == r"a\$", "an escaped dollar is a literal, not an anchor"
+    assert _strip_anchors(r"^\$[0-9]+\.[0-9]{2}$") == r"\$[0-9]+\.[0-9]{2}"
+    assert _strip_anchors("a\\\\$") == "a\\\\", "an escaped backslash does not escape the anchor"
+    assert _strip_anchors(r"[a$]") == r"[a$]", "a dollar inside a class is not a trailing anchor"
+
+
+def test_currency_pattern_keeps_its_dollar_sign_S_7() -> None:
+    """A currency `Field(pattern=...)` must accept the value with its dollar sign (S-7).
+
+    Before the fix the grammar accepted `{"x": "a"}` (pydantic rejects it) and rejected
+    `{"x": "a$"}` (pydantic accepts it) -- wrong in both directions, silently.
+    """
+    import re as _re
+
+    class CurrencyModel(BaseModel):
+        x: str = Field(pattern=r"a\$")
+
+    CurrencyModel.model_validate_json('{"x":"a$"}')  # precondition: pydantic accepts it
+    pat = pydantic_to_regex(CurrencyModel, anchors=True)
+    assert _re.match(pat, '{"x":"a$"}') is not None, "grammar rejects the legal value"
+    assert _re.match(pat, '{"x":"a"}') is None, "grammar still accepts the value pydantic rejects"
