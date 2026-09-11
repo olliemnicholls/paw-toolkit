@@ -154,6 +154,12 @@ TARGETS: dict[str, Target] = {
         default=False,
         note="slow (~37s per run)",
     ),
+    "paw_kit/atomicio.py": Target(
+        "tests/test_cli.py tests/test_jit.py",
+        default=False,
+        note="added for Track G (D-3/D-8); had no TARGETS entry at all before, so "
+        "--modules paw_kit/atomicio.py used to hard-error in resolve_modules.",
+    ),
 }
 
 FULL_SUITE = ""  # empty selection == run everything
