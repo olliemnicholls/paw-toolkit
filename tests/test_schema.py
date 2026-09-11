@@ -2380,3 +2380,79 @@ def test_calendar_date_grammar_agrees_with_datetime_date_exhaustively_S_11() -> 
                 if accepted != real:
                     mismatches.append((value, accepted, real))
     assert not mismatches, f"{len(mismatches)} disagreements, e.g. {mismatches[:5]}"
+
+
+# --- S-12: a final state with no EOS id raises instead of masking everything ---------
+
+
+def test_final_state_without_eos_token_raises_S_12() -> None:
+    """An all-`-inf` mask is NaN after softmax, so say so instead of returning it.
+
+    `RegexLogitsProcessor(pattern, vocab)` defaults `eos_token_id=None`. At a final
+    state `get_allowed_tokens` returned `set()` and `filter_logits` returned `-inf`
+    everywhere; softmax of that is NaN in every framework, so the caller's sampler
+    produced garbage with no exception, no warning, and nothing naming the cause. Every
+    existing test passed an explicit EOS id, so nothing covered it.
+
+    The message has to distinguish this from a dead state: they look identical from the
+    outside (no legal token) and have completely different fixes.
+    """
+    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage"}
+    processor = RegexLogitsProcessor(regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab)
+
+    state = processor.get_next_state(processor.initial_state, 0)
+    state = processor.get_next_state(state, 1)
+    assert processor.is_final_state(state), "the corpus is wrong: this is not a final state"
+
+    with pytest.raises(PAWSchemaError) as exc:
+        processor.get_allowed_tokens(state)
+    message = str(exc.value)
+    assert "eos_token_id=None" in message, "the message must name the actual cause"
+    assert "not a dead state" in message, (
+        "the message must distinguish this from a dead state, which looks identical "
+        "from outside and has a different fix"
+    )
+
+    # ... and through the masking path too, which is where the NaN was produced.
+    with pytest.raises(PAWSchemaError):
+        processor.filter_logits(state, [1.0, 1.0, 1.0])
+
+
+def test_eos_token_id_stays_optional_S_12() -> None:
+    """The fix must not make the parameter required -- that is an API break.
+
+    `RegexLogitsProcessor` is a public export and four existing constructions in this
+    file pass no EOS id. They never walk to a final state, so raising in that one state
+    breaks none of them; requiring the parameter would break all four.
+
+    Passes at `main` by design: it guards the fix against over-reaching, rather than
+    pinning a defect that precedes it.
+    """
+    import inspect
+
+    signature = inspect.signature(RegexLogitsProcessor.__init__)
+    assert signature.parameters["eos_token_id"].default is None
+
+    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage"}
+    processor = RegexLogitsProcessor(regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab)
+    # Everything short of a final state keeps working exactly as before.
+    assert processor.get_allowed_tokens(processor.initial_state) == {0}
+    assert processor.filter_logits(processor.initial_state, [1.0, 1.0, 1.0]) == [
+        1.0, -float("inf"), -float("inf")
+    ]
+
+
+def test_final_state_with_an_eos_token_does_not_raise_S_12() -> None:
+    """The raise is scoped to the missing-EOS case and nothing else.
+
+    Passes at `main` by design, for the same reason as its sibling above: it is the
+    boundary of the new raise, not the defect.
+    """
+    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage", 3: "<eos>"}
+    processor = RegexLogitsProcessor(
+        regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab, eos_token_id=3
+    )
+    state = processor.get_next_state(processor.initial_state, 0)
+    state = processor.get_next_state(state, 1)
+    assert processor.is_final_state(state)
+    assert processor.get_allowed_tokens(state) == {3}

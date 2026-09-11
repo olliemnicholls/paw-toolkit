@@ -164,7 +164,10 @@ class RegexLogitsProcessor:
         Args:
             regex_pattern: Full-match regular expression pattern.
             vocabulary: Mapping of token ID to decoded string token.
-            eos_token_id: Token ID denoting end-of-sequence (EOS).
+            eos_token_id: Token ID denoting end-of-sequence (EOS). Optional, but
+                without it `get_allowed_tokens` raises PAWSchemaError as soon as the
+                walk reaches an accepting state (S-12): the grammar is satisfied,
+                stopping is the only legal move, and no token expresses it.
         """
         # Strip anchors if present, as interegular full-matches by default
         clean_pattern = regex_pattern.lstrip("^").rstrip("$")
@@ -277,6 +280,36 @@ class RegexLogitsProcessor:
         # reach it otherwise, whether or not it also happens to appear in vocabulary.
         if self.eos_token_id is not None and self.get_next_state(state, self.eos_token_id) is not None:
             allowed.add(self.eos_token_id)
+
+        # S-12: at a final state with no EOS token configured there is nothing legal
+        # left to emit -- the grammar is satisfied and the only legal move is to stop,
+        # but `eos_token_id=None` means no token expresses stopping. The old behaviour
+        # was to return an empty set, which `filter_logits` turned into an all-`-inf`
+        # mask; softmax of that is NaN in every framework, so the caller's sampler
+        # produced garbage (or raised somewhere far away) with no exception, no warning
+        # and nothing naming the cause. Every test in the suite passed an explicit EOS
+        # id, so nothing covered it.
+        #
+        # The parameter deliberately stays optional. Making it required would be an API
+        # break on a public export and would break four existing constructions that
+        # never walk to a final state; raising only in this one state breaks none of
+        # them.
+        #
+        # Only this case raises. An empty set at a NON-final state means something else
+        # entirely -- a dead state, or a vocabulary that cannot spell the grammar's next
+        # character -- and those are not this finding, so they keep their existing
+        # behaviour rather than acquiring a new raise on a live path.
+        if not allowed and self.is_final_state(state):
+            raise PAWSchemaError(
+                f"No token is legal at FSM state {state}. That state is FINAL "
+                "(accepting): the pattern is already satisfied, so the only legal move "
+                "is to stop -- but this RegexLogitsProcessor was constructed with "
+                "eos_token_id=None, so no token expresses stopping and the mask would "
+                "be -inf everywhere (softmax of which is NaN). This is not a dead "
+                "state and not an over-constrained grammar; it is a missing EOS id. "
+                "Pass eos_token_id=<your tokenizer's EOS token id> to "
+                "RegexLogitsProcessor."
+            )
 
         self._allowed_tokens_cache[state] = allowed
         self._allowed_tokens_cache.move_to_end(state)
