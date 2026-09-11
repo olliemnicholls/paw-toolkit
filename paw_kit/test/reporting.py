@@ -24,8 +24,21 @@ sites and found it arithmetically false at four of them:
 * `JudgeReport.unparseable_count` -- documented as folded into `pass_count`.
 
 Only `expected_total` vs `expected_matched` is a genuine partition. So the abstraction
-here is one helper **called once per printed rate**, not once per report, and the
-partition check is opt-in (`partition=True`) at the one kind of site where it holds.
+here is one helper **called once per printed rate**, not once per report.
+
+**A partition check was specified and is deliberately absent.** Phase 0 asked for an
+opt-in `partition=True` argument, to be passed "at the sites where the buckets genuinely
+are a partition". Implementing it showed the idea does not survive contact with the call
+sites: at every one of them `scored` is *derived* from the exclusions
+(`expected_total - expected_abstained - expected_errored`,
+`total_cases - error_count`), so `scored + sum(excluded) == total` is an identity, and
+checking it asserts nothing about anything. `tools/mutate.py` confirmed this
+empirically -- flipping the flag to `False` changed no observable behaviour in any of
+the three places it was passed. An argument that cannot fail is worse than no argument:
+it reads, to the next person, like a guarantee that is being enforced.
+
+What IS worth checking at these sites is the non-tautological part -- a numerator may
+not exceed its denominator -- and `ScoredRate.rate` does that.
 """
 
 from __future__ import annotations
@@ -111,7 +124,21 @@ class ScoredRate:
         `VerdictDiffReport.flip_rate`), so swapping a call site onto this helper cannot
         change a no-cases run from "0.0%" into a crash. The *reason* a 0.0 here is not
         misleading the way the findings' 0.0s were is that `note` is printed with it.
+
+        Raises `ValueError` if `numerator` exceeds `scored`. That is the one part of
+        the bucket arithmetic that is not an identity at these call sites (see the
+        module docstring), and it is the shape a miscount would take: "11/10 (110.0%)"
+        printed with a straight face. A caller has no sensible recovery from it, and
+        every call site here is building a report that is already wrong.
         """
+        if numerator < 0:
+            raise ValueError(f"{self.label}: numerator must not be negative, got {numerator}")
+        if numerator > self.scored:
+            raise ValueError(
+                f"{self.label}: numerator ({numerator}) exceeds the denominator "
+                f"({self.scored}). Something is counted in the numerator that was "
+                "excluded from the denominator -- the rate would print above 100%."
+            )
         return (numerator / self.scored * 100.0) if self.scored > 0 else 0.0
 
     def render(self, numerator: int) -> str:
@@ -130,7 +157,6 @@ def scored_denominator(
     scored: int,
     excluded: Mapping[str, int],
     label: str,
-    partition: bool = False,
 ) -> ScoredRate:
     """Build a `ScoredRate`, validating the arithmetic the caller claims.
 
@@ -139,18 +165,9 @@ def scored_denominator(
         scored: the rate's denominator -- how many of `total` actually got a verdict.
         excluded: named counts for the gap, e.g. `{"abstained": 2, "errored": 1}`.
         label: what is being rated, for the caller's own disambiguation.
-        partition: when True, require `scored + sum(excluded.values()) == total`.
-            **Opt-in on purpose.** Phase 0 of this track found that four of the six
-            sites that print a rate here do not partition their total (see the module
-            docstring), so a mandatory check would have to be either wrong or disabled
-            at most call sites. Pass it at the sites where the buckets genuinely are a
-            partition -- `expected_total` split into matched/abstained/errored is the
-            one such shape in this package -- and the arithmetic is then enforced
-            rather than assumed.
 
     Raises:
-        ValueError: on a negative count, a `scored` above `total`, or (with
-            `partition=True`) buckets that do not add up.
+        ValueError: on a negative count, or a `scored` above `total`.
     """
     if total < 0:
         raise ValueError(f"{label}: total must not be negative, got {total}")
@@ -164,14 +181,5 @@ def scored_denominator(
     for name, count in excluded.items():
         if count < 0:
             raise ValueError(f"{label}: excluded[{name!r}] must not be negative, got {count}")
-
-    if partition:
-        excluded_total = sum(excluded.values())
-        if scored + excluded_total != total:
-            raise ValueError(
-                f"{label}: buckets do not partition the total -- scored ({scored}) + "
-                f"excluded ({excluded_total}) != total ({total}). Either a case is being "
-                "counted twice or one is falling through every bucket."
-            )
 
     return ScoredRate(label=label, total=total, scored=scored, excluded=dict(excluded))

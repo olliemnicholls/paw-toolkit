@@ -1029,3 +1029,49 @@ def test_g4_expected_disagreement_is_not_collapsed_as_a_quoting_difference(
     assert row in report.differing_rows
     assert row not in report.equivalent_only_rows
     assert row in report.genuinely_differing_rows
+
+
+def test_expected_disagreement_promotes_a_byte_identical_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`differing_rows`'s H-5 disjunct must actually be reachable.
+
+    Mutation-found: weakening `r.expected is not None` to `is None` in that disjunct
+    changed nothing any test noticed, because in every other fixture the two adapters
+    already differ byte-for-byte. This is the case where they do not: adapter A raises
+    (so `_infer_safely` writes the "[EXECUTION_ERROR]" placeholder and A gets no
+    verdict) while adapter B legitimately returns that same literal string and is
+    graded against the key. Identical output, identical pass status, opposite answers
+    about whether the case was scored at all.
+    """
+    monkeypatch.chdir(tmp_path)
+    from paw_kit.test.suite import EXECUTION_ERROR_PLACEHOLDER
+
+    _write_lookup_adapter(tmp_path / "a.paw", {"case-0": "RG-0"})
+    _write_lookup_adapter(tmp_path / "b.paw", {"case-0": EXECUTION_ERROR_PLACEHOLDER})
+    (tmp_path / "suite.yaml").write_text(
+        "task_name: promote\nspec: s\nadapter_path: \"a.paw\"\n"
+        'standard_cases:\n  - input: "case-0"\n    expected: "RG-0"\n'
+        "assertions:\n  - rule: max_length\n    value: 100\n"
+        "active_learning:\n  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    class _ARaises(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str) -> str:  # type: ignore[override]
+            if adapter_path.endswith("a.paw"):
+                raise RuntimeError("a is broken")
+            return super().infer(adapter_path, input_text)
+
+    report = compare_adapters("a.paw", "b.paw", suite, _ARaises(), include_fuzz=False)
+    row = report.rows[0]
+
+    # The premise: nothing about the outputs or the assertions tells these two apart.
+    assert row.identical is True
+    assert row.pass_a == row.pass_b
+    # But only one of them was actually scored against the answer key.
+    assert row.a_expected_match is None   # errored -- no verdict
+    assert row.b_expected_match is False  # answered, and wrong
+    assert row in report.differing_rows
+    assert row in report.expected_disagreeing_rows

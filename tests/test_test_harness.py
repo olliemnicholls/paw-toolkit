@@ -639,6 +639,9 @@ def test_active_learning_teacher_exception_recorded_as_teacher_errors(
     assert report.stuck_reason == "teacher_errors"
     assert report.rejected_labels_count == 1
     assert report.rejected_labels[0].teacher_error == "teacher API down"
+    # H-8 added a structured `reason`; a teacher that raised failed no rule, so
+    # `failed_rule_names` alone cannot say why the label was refused.
+    assert report.rejected_labels[0].reason == "teacher_error"
     assert report.rejected_labels[0].failed_rule_names == []
     assert report.recompiled is False
 
@@ -1971,3 +1974,84 @@ def test_h13_an_ordinary_suite_still_loads() -> None:
     mappings -- e.g. `input:` once per standard case."""
     config = load_suite(SAMPLE_SUITE_YAML)
     assert len(config.standard_cases) == 2
+
+
+# =====================================================================================
+# Mutation-gate follow-ups (bug-hunt-remediation Track B). Each of these pins a
+# behaviour `tools/mutate.py` found unasserted in code THIS TRACK added -- so the
+# track does not hand back a module with more unasserted behaviour than it found.
+# =====================================================================================
+
+
+def test_abstain_value_does_not_blanket_pass_every_assertion() -> None:
+    """`evaluate_assertion`'s abstain short-circuit must require the output to actually
+    BE the abstain value.
+
+    Mutation-found: weakening `abstain_value is not None and output == abstain_value`
+    to `or` makes every assertion pass unconditionally for any suite that sets an
+    `abstain_value` at all -- and nothing noticed. That is the same
+    everything-passes shape as H-1/H-2, in the function both of them route through.
+    """
+    rule = AssertionRule(rule="regex_match", pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+    # The escape hatch fires only on an exact match.
+    passed, _ = evaluate_assertion("UNPARSEABLE", rule, abstain_value="UNPARSEABLE")
+    assert passed is True
+
+    # A different wrong output is still wrong, even with abstain_value set.
+    failed, _ = evaluate_assertion("not-a-date", rule, abstain_value="UNPARSEABLE")
+    assert failed is False
+    # Including one that merely contains the abstain value.
+    near, _ = evaluate_assertion("UNPARSEABLE!", rule, abstain_value="UNPARSEABLE")
+    assert near is False
+    # And with no abstain_value configured, nothing is excused.
+    none_set, _ = evaluate_assertion("UNPARSEABLE", rule, abstain_value=None)
+    assert none_set is False
+
+
+def test_expected_match_rate_refuses_to_print_above_one_hundred_percent() -> None:
+    """`expected_match_rate` must not be able to report more matches than it scored.
+
+    Phase 0 specified an opt-in `partition=True` check on the shared helper for this
+    site. Implementing it showed it is tautological: `expected_scored` is *derived* as
+    `expected_total - expected_abstained - expected_errored`, so
+    `scored + excluded == total` holds by construction and asserts nothing about
+    anything. `tools/mutate.py` confirmed it -- flipping the flag changed no observable
+    behaviour, which is exactly how an inert guard looks. It was removed rather than
+    left in place reading, to the next person, like a guarantee being enforced.
+
+    What is left is the part that can actually fail: a numerator drawn from a wider
+    population than its denominator -- "11/10 (110.0%)", the same
+    metric-that-can-be-wrong-while-looking-right shape as the rest of this cluster.
+    """
+    ok = TestRunReport(
+        task_name="t", adapter_path="a", total_cases=3,
+        expected_total=3, expected_matched=1, expected_abstained=1, expected_errored=1,
+    )
+    assert ok.expected_scored == 1
+    assert ok.expected_match_rate == 100.0
+
+    # Three keyed cases, one abstained -- so at most two can have matched.
+    miscounted = TestRunReport(
+        task_name="t", adapter_path="a", total_cases=3,
+        expected_total=3, expected_matched=3, expected_abstained=1, expected_errored=0,
+    )
+    assert miscounted.expected_scored == 2
+    with pytest.raises(ValueError, match="exceeds the denominator"):
+        _ = miscounted.expected_match_rate
+
+
+def test_dataset_fingerprint_ignores_key_order() -> None:
+    """H-9's recompile gate is a hash of the training set, so it must depend on the
+    set's *content* and not on dict key order -- otherwise an incidental reordering
+    would read as "something changed" and buy a paid recompile.
+
+    Mutation-found: `sort_keys=True` was unasserted.
+    """
+    from paw_kit.test.active import _dataset_fingerprint
+
+    a = [{"input": "x", "output": "y"}]
+    b = [{"output": "y", "input": "x"}]
+    assert _dataset_fingerprint(a) == _dataset_fingerprint(b)
+    # ... and still notices a real change.
+    assert _dataset_fingerprint(a) != _dataset_fingerprint([{"input": "x", "output": "z"}])

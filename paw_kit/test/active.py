@@ -222,10 +222,8 @@ def _dataset_fingerprint(dataset: List[Dict[str, str]]) -> str:
     ).hexdigest()
 
 
-def _upsert_example(dataset: List[Dict[str, str]], inp: str, output: str) -> bool:
+def _upsert_example(dataset: List[Dict[str, str]], inp: str, output: str) -> None:
     """Set `inp`'s label to `output`, replacing any existing entry for that input.
-
-    Returns whether the dataset actually changed.
 
     H-8: de-duplication is by **input**, not by (input, output). The finding is that a
     teacher's label was appended *next to* the seeded correct pair for the same input,
@@ -235,17 +233,20 @@ def _upsert_example(dataset: List[Dict[str, str]], inp: str, output: str) -> boo
     label that survives the gates replaces, and one that does not is never added.
 
     H-9's "deduplicate `(input, output)` on append" is subsumed: re-labelling an input
-    with the value it already has is a no-op and returns False, so an idempotent
-    teacher cannot drive a recompile.
+    with the value it already has leaves the dataset byte-identical, which
+    `_dataset_fingerprint` detects, so an idempotent teacher cannot drive a recompile.
+
+    Deliberately returns nothing. An earlier draft returned "did the dataset change",
+    and the recompile gate then ignored it in favour of the fingerprint -- an unused
+    return value with its own untested branch. The fingerprint is the single source of
+    truth for "is there anything new to compile"; two answers to that question is one
+    too many.
     """
     for existing in dataset:
         if existing.get("input") == inp:
-            if existing.get("output") == output:
-                return False
             existing["output"] = output
-            return True
+            return
     dataset.append({"input": inp, "output": output})
-    return True
 
 
 def run_active_learning_loop(

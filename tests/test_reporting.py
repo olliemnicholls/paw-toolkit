@@ -89,26 +89,31 @@ def test_impossible_arithmetic_raises(kwargs: dict) -> None:
         scored_denominator(label="pass", **kwargs)
 
 
-def test_partition_is_enforced_only_when_asked_for() -> None:
+def test_non_partitioning_buckets_are_allowed() -> None:
     """Phase 0 found four of six candidate sites do not partition their total, so the
-    check is opt-in. Where it *is* a partition (expected_total split into
-    matched/abstained/errored) it is enforced rather than assumed."""
-    # Not a partition: allowed by default, because at four of six sites it isn't one.
+    helper must accept buckets that overlap their siblings -- `errored` cases that are
+    also counted as failures, `unparseable` folded into `pass_count`."""
     sr = scored_denominator(total=10, scored=10, excluded={"errored": 3}, label="pass")
     assert sr.scored == 10
+    assert sr.note == "10 of 10 scored; 3 errored, not scored"
 
-    # The same numbers, claimed as a partition, are rejected.
-    with pytest.raises(ValueError, match="do not partition"):
-        scored_denominator(
-            total=10, scored=10, excluded={"errored": 3}, label="expected", partition=True
-        )
 
-    # A real partition passes.
-    ok = scored_denominator(
-        total=10,
-        scored=7,
-        excluded={"abstained": 2, "errored": 1},
-        label="expected",
-        partition=True,
+def test_a_numerator_above_the_denominator_is_refused() -> None:
+    """The one piece of bucket arithmetic that is NOT an identity at these call sites,
+    and the shape a miscount would take: "11/10 (110.0%)" printed with a straight face.
+
+    (The `partition=True` argument Phase 0 specified is deliberately absent -- at every
+    call site `scored` is *derived* from the exclusions, so the identity it would check
+    holds by construction. `tools/mutate.py` confirmed it: flipping the flag changed
+    nothing observable. See the module docstring.)
+    """
+    sr = scored_denominator(
+        total=10, scored=7, excluded={"abstained": 2, "errored": 1}, label="expected"
     )
-    assert ok.scored == 7
+    assert sr.rate(7) == 100.0
+    with pytest.raises(ValueError, match="exceeds the denominator"):
+        sr.rate(8)
+    with pytest.raises(ValueError, match="must not be negative"):
+        sr.rate(-1)
+    with pytest.raises(ValueError, match="exceeds the denominator"):
+        sr.render(8)

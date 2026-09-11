@@ -230,7 +230,6 @@ class TestRunReport(BaseModel):
             scored=self.expected_scored,
             excluded={"abstained": self.expected_abstained, "errored": self.expected_errored},
             label="correct against expected",
-            partition=True,
         )
 
     @property

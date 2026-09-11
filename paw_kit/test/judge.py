@@ -192,7 +192,6 @@ class JudgeReport(BaseModel):
             scored=self.total_cases - self.error_count,
             excluded={"errored": self.error_count},
             label="judged pass",
-            partition=True,
         )
 
 

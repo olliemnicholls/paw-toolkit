@@ -93,9 +93,26 @@ _H4_TABLE = [
     ('{"a": 1}', '{"a": 1.0}', True),
     # --- null ------------------------------------------------------------------
     ("null", "null", True),
+    # Reaches `json_values_equal(None, None)` WITHOUT the byte-identical
+    # short-circuit, which the row above takes. Mutation testing found the
+    # `a is None and b is None` return was otherwise unasserted.
+    ("null", " null ", True),
+    ('{"a": null}', '{"a":null}', True),
     ("null", "0", False),
     ("null", "false", False),
     ('{"a": null}', '{"a": 0}', False),
+    # --- a container against a non-container ------------------------------------
+    # These pin the `isinstance(a, list) and isinstance(b, list)` / dict guards. With
+    # `and` weakened to `or` the recursion reaches `len()` on an int or `.keys()` on a
+    # list and raises, which no test noticed before these rows.
+    ("0", "[]", False),
+    ("[]", "0", False),
+    ("0", "{}", False),
+    ("{}", "0", False),
+    ("[]", "{}", False),
+    ("{}", "[]", False),
+    ('"x"', "[]", False),
+    ("[1]", '{"a": 1}', False),
     # --- nested ----------------------------------------------------------------
     ('{"a": [true]}', '{"a": [1]}', False),
     ('{"a": {"b": false}}', '{"a": {"b": 0}}', False),

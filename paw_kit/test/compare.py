@@ -254,7 +254,6 @@ class CompareReport(BaseModel):
             scored=self.expected_total - abstained - errored,
             excluded={"abstained": abstained, "errored": errored},
             label=f"{side} correct against expected",
-            partition=True,
         )
 
     @property
