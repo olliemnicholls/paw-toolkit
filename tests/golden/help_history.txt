@@ -1,0 +1,20 @@
+$ paw-kit history --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit history [OPTIONS] {adapter_path}
+
+ Print the append-only compile lineage log for an adapter.
+
+ Every `compile()` call (on any `AbstractPAWBackend` shipped by paw-kit) appends
+ one line to `<adapter>.history.jsonl` -- the compiled manifest minus its spec
+ text. A manifest itself only ever points at its immediate parent (an overwritten
+ file cannot be read back), so this sidecar is the only place the full compile
+ lineage of a repeatedly-recompiled adapter survives.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    adapter_path      <path>  Path to a compiled .paw adapter artifact [required]                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

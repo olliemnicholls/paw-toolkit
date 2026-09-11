@@ -1,0 +1,4 @@
+$ paw-kit export docker adapter.paw -b gpt
+exit code: 1
+--- stdout ---
+Error: Unknown --backend 'gpt'. Expected 'mock' or 'real'.

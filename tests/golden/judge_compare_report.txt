@@ -1,0 +1,17 @@
+$ paw-test judge compare.json --suite suite.yaml --out verdicts.json
+exit code: 0
+--- stdout ---
+Verdict differs between A and B (1/3):
+
+  Input: today
+    A: 2026-09-11 -> True (matches the ISO-8601 shape the spec asks for)
+    B: tomorrow -> False (not an ISO-8601 date)
+
+judge disagrees with assertions (A) (1/3):
+  24ace1fa8338f08f016c356168cb8b3e37a2b238ef733f0456bf877d18d1120b: rule_passed=True judge=False (not an ISO-8601 date)
+
+judge disagrees with assertions (B) (1/3):
+  24ace1fa8338f08f016c356168cb8b3e37a2b238ef733f0456bf877d18d1120b: rule_passed=True judge=False (not an ISO-8601 date)
+
+Summary: A pass rate 66.7% (2/3), unparseable A 0, errored A 0, B pass rate 33.3% (1/3), unparseable B 0, errored B 0
+Wrote verdicts to verdicts.json

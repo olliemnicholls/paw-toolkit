@@ -1,0 +1,16 @@
+$ paw-test check suite.yaml
+exit code: 1
+--- stdout ---
+Running paw.test check on: golden_date_normalizer (quoted.paw) (backend: MockPAWBackend)
+  [FAIL] Input: 'today' -> '"2026-09-11"'
+         regex_match: Output '"2026-09-11"' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
+         expected: got "2026-09-11" want 2026-09-11
+  [FAIL] Input: 'new year' -> '"2026-01-01"'
+         regex_match: Output '"2026-01-01"' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
+         expected: got "2026-01-01" want 2026-01-01
+  [FAIL] Input: 'February 30th' -> '"INVALID"'
+         regex_match: Output '"INVALID"' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
+Correct against expected: 0/2 (0.0%)
+Correct after unquoting a JSON string: 2/2 (100.0%) -- the adapter wraps its answers in quotes
+
+Pass rate: 0.0% (0/3) (backend: MockPAWBackend)

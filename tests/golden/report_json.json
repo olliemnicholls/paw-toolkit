@@ -1,0 +1,43 @@
+{
+  "db": ".paw/traces.db",
+  "tasks": [
+    {
+      "task_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "ready",
+      "adapter_path": "<WORKDIR.......................................................>/adapter.paw",
+      "call_count": 2,
+      "compile_attempts": 0,
+      "state_epoch": 2,
+      "created_at": "<TIMESTAMP>",
+      "updated_at": "<TIMESTAMP>",
+      "shadow_started_at": "<TIMESTAMP>",
+      "promoted_at": "<TIMESTAMP>",
+      "promoted_agreement": 0.5,
+      "demoted_at": null,
+      "demoted_agreement": null,
+      "fail_open_count": 1,
+      "agreement": {
+        "phase": "audit",
+        "rate": null,
+        "window": 2,
+        "samples": 0,
+        "agree": 0,
+        "disagree": 0,
+        "error": 0,
+        "teacher_error": 0,
+        "stalled": false
+      },
+      "last_disagreements": [
+        {
+          "input_payload": "world",
+          "teacher_output": "teacher:world",
+          "adapter_output": "[v2] wrong",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "<TIMESTAMP>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+$ paw-kit demo --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit demo [OPTIONS]
+
+ Run an interactive zero-hardware demo showcasing JIT compilation or schema enforcement.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --scenario  -s      <str>  Demo scenario: triage | pii [default: triage]                                             │
+│ --help                     Show this message and exit.                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

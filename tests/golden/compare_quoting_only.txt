@@ -1,0 +1,15 @@
+$ paw-test compare alpha.paw beta.paw loose.yaml
+exit code: 0
+--- stdout ---
+
+Whitespace- or quoting-only differences (3/3): same value once parsed as JSON (or, if either side isn't JSON, once
+Unicode-normalized and whitespace-collapsed), or one side is the other as a JSON string scalar -- not byte-identical,
+but not a real disagreement either. Collapsed to input only:
+
+  today
+  new year
+  February 30th
+
+Summary: 3 cases, 0 identical output (byte-for-byte), 0 equivalent output (byte-for-byte + JSON/whitespace-normalized),
+3 equivalent output once unwrapped (also counting a JSON-string-quoted/bare pair), alpha pass 3/3, beta pass 3/3,
+only-alpha-pass 0, only-beta-pass 0, errored 0/3

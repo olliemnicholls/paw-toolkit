@@ -1,0 +1,5 @@
+$ paw-kit lint-spec do it
+exit code: 1
+--- stdout ---
+ERROR [spec-too-short] Spec is only 5 character(s) -- too short to convey a task to the compiler. Write a fuller
+specification.

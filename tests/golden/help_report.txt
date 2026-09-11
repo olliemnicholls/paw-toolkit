@@ -1,0 +1,20 @@
+$ paw-kit report --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit report [OPTIONS]
+
+ Report @compile_on_hit task state, shadow-mode agreement and recent disagreements.
+
+ NOTE: this command OPENS the trace database with the library's own TraceDB, which
+ migrates a pre-v2 file to the current schema in place. It therefore *writes*. That
+ is deliberate: the alternative is a hand-rolled read-only connection duplicating
+ schema knowledge that would rot.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --db                     <path>  Path to SQLite trace database [default: .paw/traces.db]                             │
+│ --task                   <str>   Show only this task_id                                                              │
+│ --disagreements  -n      <int>   Disagreements to show per task [default: 5]                                         │
+│ --json                           Machine-readable JSON instead of a table                                            │
+│ --help                           Show this message and exit.                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

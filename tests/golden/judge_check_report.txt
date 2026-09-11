@@ -1,0 +1,17 @@
+$ paw-test judge check.json --suite suite.yaml --out verdicts.json
+exit code: 0
+--- stdout ---
+Judge said NO (2/3):
+
+  Input: today
+    Output: tomorrow
+    Reason: not an ISO-8601 date
+  Input: February 30th
+    Output: INVALID
+    Reason: not an ISO-8601 date
+
+judge disagrees with assertions (1/3):
+  24ace1fa8338f08f016c356168cb8b3e37a2b238ef733f0456bf877d18d1120b: rule_passed=True judge=False (not an ISO-8601 date)
+
+Pass rate: 33.3% (1/3), unparseable 0, errored 0
+Wrote verdicts to verdicts.json

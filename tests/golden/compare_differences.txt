@@ -1,0 +1,13 @@
+$ paw-test compare alpha.paw beta.paw suite.yaml --json compare.json
+exit code: 0
+--- stdout ---
+Differences (1/3):
+
+  Input: today
+    alpha -> 2026-09-11
+    beta -> tomorrow
+    pass differs: alpha=True beta=False
+
+Summary: 3 cases, 2 identical output (byte-for-byte), 2 equivalent output (byte-for-byte + JSON/whitespace-normalized),
+alpha pass 3/3, beta pass 2/3, only-alpha-pass 1, only-beta-pass 0, errored 0/3
+Wrote JSON report to compare.json

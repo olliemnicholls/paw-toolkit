@@ -1,0 +1,4 @@
+$ paw-kit export dataset -o traces.jsonl
+exit code: 0
+--- stdout ---
+Warning: No traces found in .paw/traces.db.

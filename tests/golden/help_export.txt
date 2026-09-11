@@ -1,0 +1,15 @@
+$ paw-kit export --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit export [OPTIONS] COMMAND [ARGS]...
+
+ Export PAW adapters and traces to external formats
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ docker   Generate a Dockerfile and docker-compose scaffold for serving an adapter.                                   │
+│ dataset  Export traced SQLite teacher-student interaction pairs to standard JSONL format.                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

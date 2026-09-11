@@ -1,0 +1,19 @@
+$ paw-test --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-test [OPTIONS] COMMAND [ARGS]...
+
+ paw-test: Test runner and active-learning self-healing suite
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --install-completion          Install completion for the current shell.                                              │
+│ --show-completion             Show completion for the current shell, to copy it or customize the installation.       │
+│ --help                        Show this message and exit.                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ check    Run test suite assertions and active-learning self-healing loop on a .paw adapter.                          │
+│ compare  Run every suite case through two compiled adapters and diff the results, per case.                          │
+│ judge    Score a `compare`/`check` report's outputs with an LLM judge, or diff two prior                             │
+│          verdict runs to check reproducibility.                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

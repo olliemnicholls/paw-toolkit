@@ -1,0 +1,73 @@
+{
+  "task_name": "golden_date_normalizer",
+  "adapter_a": "alpha.paw",
+  "adapter_b": "beta.paw",
+  "label_a": "alpha",
+  "label_b": "beta",
+  "manifest_a": {
+    "backend": "mock",
+    "manifest_version": 2
+  },
+  "manifest_b": {
+    "backend": "mock",
+    "manifest_version": 2
+  },
+  "total_cases": 3,
+  "identical_count": 2,
+  "equivalent_count": 2,
+  "equivalent_unquoted_count": 2,
+  "a_pass_count": 3,
+  "b_pass_count": 2,
+  "only_a_pass_count": 1,
+  "only_b_pass_count": 0,
+  "errored_count": 0,
+  "rows": [
+    {
+      "input": "today",
+      "output_a": "2026-09-11",
+      "output_b": "tomorrow",
+      "identical": false,
+      "match_kind": "different",
+      "pass_a": true,
+      "pass_b": false,
+      "failed_rules_a": [],
+      "failed_rules_b": [
+        "regex_match: Output 'tomorrow' does not match pattern '^(\\d{4}-\\d{2}-\\d{2}|INVALID)$'"
+      ],
+      "latency_a_ms": "<DURATION>",
+      "latency_b_ms": "<DURATION>",
+      "execution_error_a": null,
+      "execution_error_b": null
+    },
+    {
+      "input": "new year",
+      "output_a": "2026-01-01",
+      "output_b": "2026-01-01",
+      "identical": true,
+      "match_kind": "byte_identical",
+      "pass_a": true,
+      "pass_b": true,
+      "failed_rules_a": [],
+      "failed_rules_b": [],
+      "latency_a_ms": "<DURATION>",
+      "latency_b_ms": "<DURATION>",
+      "execution_error_a": null,
+      "execution_error_b": null
+    },
+    {
+      "input": "February 30th",
+      "output_a": "INVALID",
+      "output_b": "INVALID",
+      "identical": true,
+      "match_kind": "byte_identical",
+      "pass_a": true,
+      "pass_b": true,
+      "failed_rules_a": [],
+      "failed_rules_b": [],
+      "latency_a_ms": "<DURATION>",
+      "latency_b_ms": "<DURATION>",
+      "execution_error_a": null,
+      "execution_error_b": null
+    }
+  ]
+}

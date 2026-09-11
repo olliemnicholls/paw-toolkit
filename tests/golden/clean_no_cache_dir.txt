@@ -1,0 +1,4 @@
+$ paw-kit clean
+exit code: 0
+--- stdout ---
+Cache directory '.paw' does not exist. Nothing to clean.

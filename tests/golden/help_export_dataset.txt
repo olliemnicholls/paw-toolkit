@@ -1,0 +1,14 @@
+$ paw-kit export dataset --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit export dataset [OPTIONS]
+
+ Export traced SQLite teacher-student interaction pairs to standard JSONL format.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --db             <path>  Path to SQLite trace database [default: .paw/traces.db]                                     │
+│ --out    -o      <path>  Path to output JSONL file [default: traces.jsonl]                                           │
+│ --force  -f              Overwrite --out without prompting for confirmation                                          │
+│ --help                   Show this message and exit.                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

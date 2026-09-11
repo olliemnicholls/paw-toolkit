@@ -1,0 +1,4 @@
+$ paw-test compare alpha.paw beta.paw nope.yaml
+exit code: 1
+--- stdout ---
+Error: Suite file 'nope.yaml' does not exist.

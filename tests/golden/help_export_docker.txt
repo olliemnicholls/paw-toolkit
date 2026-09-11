@@ -1,0 +1,21 @@
+$ paw-kit export docker --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit export docker [OPTIONS] {adapter_path}
+
+ Generate a Dockerfile and docker-compose scaffold for serving an adapter.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    adapter_path      <path>  Path to compiled .paw adapter artifact [required]                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --out-dir  -o      <path>  Output directory for Docker assets [default: docker]                                      │
+│ --backend  -b      <str>   Backend the generated container actually serves: mock | real. Threaded into the generated │
+│                            CMD's --backend flag, requirements.txt (real pulls in the SDK extra), and the             │
+│                            HEALTHCHECK/comments, so none of them describe a backend the container doesn't run.       │
+│                            Defaults to real -- a container that only ever serves the mock is a demo, not a           │
+│                            deployment.                                                                               │
+│                            [default: real]                                                                           │
+│ --help                     Show this message and exit.                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,4 @@
+$ paw-kit export dataset -o traces.jsonl
+exit code: 1
+--- stdout ---
+Error: Trace database '.paw/traces.db' does not exist.

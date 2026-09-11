@@ -1,0 +1,10 @@
+$ paw-kit lint-spec do it --json
+exit code: 1
+--- stdout ---
+[
+  {
+    "rule_id": "spec-too-short",
+    "severity": "error",
+    "message": "Spec is only 5 character(s) -- too short to convey a task to the compiler. Write a fuller specification."
+  }
+]

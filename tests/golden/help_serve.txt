@@ -1,0 +1,27 @@
+$ paw-kit serve --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit serve [OPTIONS] {adapter_path}
+
+ Serve an adapter over HTTP with OpenAI- and Anthropic-compatible endpoints.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    adapter_path      <path>  Path to compiled .paw adapter artifact [required]                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --host             -H               <str>  Host interface to bind [default: 127.0.0.1]                               │
+│ --port             -p               <int>  Port to listen on [default: 8000]                                         │
+│ --backend          -b               <str>  Backend engine: mock | real [default: mock]                               │
+│ --api-key          -k               <str>  Optional secret bearer token for authentication. Prefer setting the       │
+│                                            PAW_API_KEY environment variable instead of this flag where possible.     │
+│                                            [env var: PAW_API_KEY]                                                    │
+│ --allow-anonymous                          Disable authentication entirely (PAW-SERVE-01). Without this flag, an     │
+│                                            ephemeral bearer token is generated and printed to stderr if no --api-key │
+│                                            or PAW_API_KEY is configured.                                             │
+│ --warm                 --no-warm           Run one inference before binding so /ready is 200 from the start, instead │
+│                                            of 503 until the first real request completes (a cold Qwen3-0.6B load can │
+│                                            take up to ~110s -- see measurements/README.md).                          │
+│                                            [default: no-warm]                                                        │
+│ --help                                     Show this message and exit.                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

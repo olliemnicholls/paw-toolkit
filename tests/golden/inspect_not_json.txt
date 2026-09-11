@@ -1,0 +1,4 @@
+$ paw-kit inspect weights.bin --json
+exit code: 1
+--- stdout ---
+Error: 'weights.bin' is not JSON adapter metadata.

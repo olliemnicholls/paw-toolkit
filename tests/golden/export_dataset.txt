@@ -1,0 +1,4 @@
+$ paw-kit export dataset -o traces.jsonl
+exit code: 0
+--- stdout ---
+Successfully exported 2 traces to: <WORKDIR.......................................................>/traces.jsonl

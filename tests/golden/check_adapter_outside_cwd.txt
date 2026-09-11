@@ -1,0 +1,4 @@
+$ paw-test check suite.yaml --adapter /etc/escape.paw
+exit code: 1
+--- stdout ---
+Error: --adapter '/etc/escape.paw' resolves to /etc/escape.paw, which is not contained within the expected root <WORKDIR.......................................................>. Refusing to touch it.

@@ -1,0 +1,8 @@
+$ paw-kit lint-spec --file spec.txt
+exit code: 0
+--- stdout ---
+WARN [output-format-unpinned] Spec asks for consistent/normalized/standard formatting but contains no concrete example
+output (no "Example", "Input:"/"Output:", "->"/"=>", or code fence). A real compiled adapter given an equivalent spec
+("...format it consistently") scored 0.0% structural pass with no examples folded in, and 92.5% once 8 examples pinned
+down the exact output format (measurements/README.md, "Does folding examples into the spec text actually help?"). Add at
+least one concrete Input:/Output: example showing the exact output shape.

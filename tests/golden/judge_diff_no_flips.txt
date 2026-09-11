@@ -1,0 +1,6 @@
+$ paw-test judge --diff old.json new.json
+exit code: 0
+--- stdout ---
+No flips -- every comparable verdict matched.
+
+Flip rate: 0.0% (0/2)

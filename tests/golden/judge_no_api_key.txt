@@ -1,0 +1,5 @@
+$ paw-test judge check.json --spec s
+exit code: 2
+--- stdout ---
+Error: No judge is configured: ANTHROPIC_API_KEY is not set. Set it, or pass a different --judge. Refusing to silently
+skip judging.

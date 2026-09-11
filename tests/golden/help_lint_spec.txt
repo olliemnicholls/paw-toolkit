@@ -1,0 +1,22 @@
+$ paw-kit lint-spec --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit lint-spec [OPTIONS] [spec_text]
+
+ Lint a spec for failure modes measured against real compiled PAW adapters.
+
+ Exits 1 only if a finding's severity is "error" (spec-too-long / spec-too-short);
+ "warn" and "info" findings are printed but do not fail the command.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   spec_text      <str>  Spec text to lint. Omit and use --file to read it from a file instead.                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --file            <path>  Read the spec from this file instead of the positional argument                            │
+│ --schema          <str>   Pydantic response model to check, as 'module:ClassName' (enables the schema-all-required   │
+│                           rule)                                                                                      │
+│ --examples        <path>  JSONL file of {"input": ..., "output": ...} pairs (enables the examples-single-form rule)  │
+│ --json                    Print findings as JSON                                                                     │
+│ --help                    Show this message and exit.                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

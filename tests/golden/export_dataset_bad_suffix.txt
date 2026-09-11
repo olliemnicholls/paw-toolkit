@@ -1,0 +1,4 @@
+$ paw-kit export dataset -o traces.txt
+exit code: 1
+--- stdout ---
+Error: --out must have a '.jsonl' extension: traces.txt

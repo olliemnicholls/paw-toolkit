@@ -1,0 +1,42 @@
+{
+  "task_name": "golden_date_normalizer",
+  "adapter_path": "good.paw",
+  "total_cases": 3,
+  "passed_cases": 3,
+  "failed_cases": 0,
+  "expected_total": 2,
+  "expected_matched": 2,
+  "expected_matched_unquoted": 2,
+  "results": [
+    {
+      "input": "today",
+      "output": "2026-09-11",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "expected_match": true,
+      "latency_ms": "<DURATION>",
+      "execution_error": null
+    },
+    {
+      "input": "new year",
+      "output": "2026-01-01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "expected_match": true,
+      "latency_ms": "<DURATION>",
+      "execution_error": null
+    },
+    {
+      "input": "February 30th",
+      "output": "INVALID",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "expected_match": null,
+      "latency_ms": "<DURATION>",
+      "execution_error": null
+    }
+  ]
+}

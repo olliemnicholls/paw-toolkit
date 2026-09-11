@@ -1,0 +1,24 @@
+$ paw-kit inspect adapter.paw --json
+exit code: 0
+--- stdout ---
+{
+  "backend": "mock",
+  "manifest_version": 2,
+  "spec": "Convert a natural-language date to ISO-8601, or INVALID.",
+  "examples": [],
+  "examples_count": 0,
+  "rules": {
+    "today": "2026-09-11"
+  },
+  "default_response": null,
+  "program_id": "prog_golden_0001",
+  "compiler": "golden-fixture",
+  "spec_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "examples_folded_into_spec": 2,
+  "folded_example_ids": [
+    "ex-0",
+    "ex-1"
+  ],
+  "public": true,
+  "unknown_third_party_field": "kept, sorted after the known ones"
+}

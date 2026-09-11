@@ -1,0 +1,13 @@
+$ paw-test check suite.yaml
+exit code: 1
+--- stdout ---
+Running paw.test check on: golden_date_normalizer (al.paw) (backend: MockPAWBackend)
+  [ACTION] Active learning: Querying frontier teacher for 'You are an authoritative labeling teache'...
+
+Iteration 1: 2/3 passed (66.7%)
+  [ACTION] Recompiling adapter with augmented edge-case pairs...
+
+Iteration 2: 2/3 passed (66.7%)
+Correct against expected: 2/2 (100.0%)
+
+[FAIL] Assertions failed after 2 iteration(s).

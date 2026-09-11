@@ -1,0 +1,4 @@
+$ paw-kit clean
+exit code: 0
+--- stdout ---
+No cached artifacts found in '.paw'.
