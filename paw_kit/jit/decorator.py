@@ -552,19 +552,37 @@ def compile_on_hit(
             active_backend = backend or get_default_backend()
             input_payload = _serialize_input(args, kwargs, func)
 
-            # 1. One SELECT decides how this call is routed.
-            status, adapter_path, state_epoch = db.get_task_routing(task_id)
-
-            # Escape hatch. `shadow_window=0` must also rescue a task that a previous
-            # run left sitting in `shadow`: otherwise the opt-out strands exactly the
-            # users who tried the default first -- teacher forever, adapter compiled
-            # and never used.
-            if shadow_window == 0 and status == "shadow" and adapter_path:
-                try:
-                    db.try_promote(task_id, state_epoch, None, 0, reason="shadow_disabled")
-                except Exception:  # pragma: no cover - never break the request path
-                    pass
+            # 1. One SELECT decides how this call is routed (own fault boundary --
+            #    J-1). A DB fault here is the most dangerous of the three: the
+            #    teacher has not been called yet, so there is no answer at all to
+            #    fall back on except by falling through to step 3 below. The
+            #    default ("tracing", None, 0) does exactly that -- it cannot equal
+            #    "shadow" or "ready", so a faulted read can also never reach step
+            #    2's serving branch or step 5's shadow-job submission (gated on
+            #    status == "shadow") with a wrong or default state_epoch.
+            #
+            #    This needs its own new fail-open signal: a bare default-and-
+            #    continue here would itself be a *new*, silent fail-open --
+            #    get_fail_open_count() staying at 0 while every call quietly
+            #    serves the teacher -- exactly the "the value is right but the
+            #    claim about where it came from is wrong" shape S-14 exists to
+            #    fix elsewhere in this same track.
+            try:
                 status, adapter_path, state_epoch = db.get_task_routing(task_id)
+
+                # Escape hatch. `shadow_window=0` must also rescue a task that a
+                # previous run left sitting in `shadow`: otherwise the opt-out
+                # strands exactly the users who tried the default first -- teacher
+                # forever, adapter compiled and never used.
+                if shadow_window == 0 and status == "shadow" and adapter_path:
+                    try:
+                        db.try_promote(task_id, state_epoch, None, 0, reason="shadow_disabled")
+                    except Exception:  # pragma: no cover - never break the request path
+                        pass
+                    status, adapter_path, state_epoch = db.get_task_routing(task_id)
+            except Exception as exc:
+                _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
+                status, adapter_path, state_epoch = "tracing", None, 0
 
             # 2. Promoted: the adapter serves, with the fail-open path unchanged.
             if status == "ready" and adapter_path:
@@ -615,19 +633,33 @@ def compile_on_hit(
             # returning e.g. a tuple now serializes identically on every path.
             teacher_output_str = stringify_answer(teacher_result)
 
-            # 4. Record trace and increment counter
+            # 4. Record trace and increment counter (own fault boundary -- J-1).
+            #    Deliberately its own try/except, separate from step 5 below: a
+            #    record_trace fault must not also suppress step 5's shadow-job
+            #    submission as a side effect of sharing a try block with it. Step 5
+            #    depends only on `status` from step 1, not on this succeeding.
             # PAW-JIT-02: redaction (opt-in, see redact_trace docstring above) is
             # applied only to what gets persisted -- input_payload/teacher_result
             # above are untouched, so the function's actual return value to the
             # caller is never redacted.
             traced_input = redact_sensitive_text(input_payload) if redact_trace else input_payload
             traced_output = redact_sensitive_text(teacher_output_str) if redact_trace else teacher_output_str
-            call_count = db.record_trace(
-                task_id=task_id,
-                input_payload=traced_input,
-                teacher_output=traced_output,
-                latency_ms=latency_ms,
-            )
+            try:
+                call_count = db.record_trace(
+                    task_id=task_id,
+                    input_payload=traced_input,
+                    teacher_output=traced_output,
+                    latency_ms=latency_ms,
+                )
+            except Exception as exc:
+                # Fail-Open Safety: the teacher has already answered by this point --
+                # this fault must not raise into the caller. call_count stays None
+                # so step 6 below skips the compile-trigger check this round rather
+                # than acting on a fabricated count; the next successful call
+                # catches up exactly the way a step-1 routing-read fault does (see
+                # the "Note, don't fix" comment in step 6 below).
+                _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
+                call_count = None
 
             # 5. In shadow, hand the same input to the adapter off the request path.
             #    One put_nowait of a frozen dataclass: no I/O on this thread.
@@ -643,7 +675,8 @@ def compile_on_hit(
                     ),
                 )
 
-            # 6. Trigger background compilation once threshold reached.
+            # 6. Trigger background compilation once threshold reached (own fault
+            #    boundary -- J-1).
             #    The status here must be a *fresh* read, not the routing snapshot
             #    above: that snapshot predates the teacher call, which can take
             #    seconds, and a background compile finishing during it would leave the
@@ -651,17 +684,30 @@ def compile_on_hit(
             #    running shadow worker (compiler.py's duplicate guard is skipped
             #    entirely when sync=True). One extra SELECT, on a path already gated
             #    behind call_count >= threshold, is the correct price.
-            if call_count >= threshold and db.get_status(task_id) == "tracing":
-                target_adapter_path = str(Path(cache_dir) / f"{task_id}.paw")
-                _GLOBAL_COMPILER.trigger_compilation(
-                    task_id=task_id,
-                    spec=spec,
-                    db=db,
-                    backend=active_backend,
-                    output_path=target_adapter_path,
-                    sync=sync_compile,
-                    promote_to="shadow" if shadow_window else "ready",
-                )
+            #
+            #    Note, don't fix: a step-1 routing-read fault also lets steps 3-4
+            #    run once (teacher called again, a spurious trace row, call_count
+            #    bumped) before this fresh re-read correctly sees the task's real
+            #    status again and skips (or correctly takes) the trigger. That
+            #    fresh re-read is now load-bearing for J-1 too, not just for the
+            #    reason above.
+            if call_count is not None and call_count >= threshold:
+                try:
+                    current_status = db.get_status(task_id)
+                except Exception as exc:
+                    _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
+                    current_status = None
+                if current_status == "tracing":
+                    target_adapter_path = str(Path(cache_dir) / f"{task_id}.paw")
+                    _GLOBAL_COMPILER.trigger_compilation(
+                        task_id=task_id,
+                        spec=spec,
+                        db=db,
+                        backend=active_backend,
+                        output_path=target_adapter_path,
+                        sync=sync_compile,
+                        promote_to="shadow" if shadow_window else "ready",
+                    )
 
             return teacher_result
 
