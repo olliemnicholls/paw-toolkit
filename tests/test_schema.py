@@ -116,6 +116,40 @@ def test_logits_processor_latency_guarantee() -> None:
 
     assert min(times) < 2.0  # Must be under 2ms per generation step
 
+    # M-3: the dense path of filter_logits had NO behavioural assertion anywhere in the
+    # suite -- inverting `token_id not in allowed` passed all 546 tests, which is how
+    # the finding was discovered (by mutation survival, not by reading). The timing
+    # assertion above measures that the call is fast; it cannot notice that the call is
+    # wrong. These assertions are ADDED to it, never substituted for it -- three
+    # existing tests in this repo assert defects as correct, so "assertions were quietly
+    # removed while fixing something" is the named hazard of the whole campaign and a
+    # replacement here would look exactly like one.
+    allowed = processor.get_allowed_tokens(processor.initial_state)
+    assert allowed, "the corpus is wrong: no token is legal at the initial state"
+    assert allowed != set(range(len(logits))), (
+        "the corpus is wrong: every token is legal, so masking cannot be observed"
+    )
+
+    masked = processor.filter_logits(processor.initial_state, logits)
+    assert len(masked) == len(logits)
+    for token_id, value in enumerate(masked):
+        if token_id in allowed:
+            assert value == logits[token_id], (
+                f"token {token_id} is allowed but its logit was masked to {value!r}"
+            )
+        else:
+            assert value == -float("inf"), (
+                f"token {token_id} is forbidden but kept the logit {value!r}"
+            )
+
+    # ... and the dense and sparse paths must be the same function of the same inputs.
+    masked_dict = processor.filter_logits(
+        processor.initial_state, {i: v for i, v in enumerate(logits)}
+    )
+    assert masked_dict == {i: v for i, v in enumerate(masked)}, (
+        "the dict path and the dense path disagree about which tokens are allowed"
+    )
+
 
 def test_paw_load_success_validation(tmp_path) -> None:
     """Verify paw.load binds adapter to Pydantic model and returns validated instance."""
@@ -2456,3 +2490,79 @@ def test_final_state_with_an_eos_token_does_not_raise_S_12() -> None:
     state = processor.get_next_state(state, 1)
     assert processor.is_final_state(state)
     assert processor.get_allowed_tokens(state) == {3}
+
+
+# --- M-3: the dense path of filter_logits, asserted behaviourally --------------------
+
+
+def test_filter_logits_dense_and_dict_paths_agree_at_every_state_M_3() -> None:
+    """Walk the whole FSM and compare the two masking paths value by value.
+
+    M-3 is a *test gap*, not a source defect: the report's own disposition is "none
+    needed in the source". It was found by mutation survival -- inverting
+    `token_id not in allowed` in the dense branch passed all 546 tests -- so this test
+    passes at `main` by construction and Gate 1 does not apply to it. Gate 3 is its
+    verification: `logits_processor.py cmp not in -> in` must now be dead.
+
+    Assertions on the returned VALUES, not on latency: allowed tokens keep their exact
+    logit and every other position is `-inf`, at every state the walk reaches, with the
+    dict path checked against the dense one as an independent second opinion.
+    """
+    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage", 3: "<eos>", 4: '{"status'}
+    processor = RegexLogitsProcessor(
+        regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab, eos_token_id=3
+    )
+    logits = [0.5, -1.25, 3.0, 0.0, 7.5]
+
+    seen_masked = False
+    states = [processor.initial_state]
+    visited = set()
+    while states:
+        state = states.pop()
+        if state in visited:
+            continue
+        visited.add(state)
+        allowed = processor.get_allowed_tokens(state)
+
+        dense = processor.filter_logits(state, logits)
+        assert isinstance(dense, list) and len(dense) == len(logits)
+        for token_id, value in enumerate(dense):
+            expected = logits[token_id] if token_id in allowed else -float("inf")
+            assert value == expected, (
+                f"state {state}, token {token_id}: expected {expected!r}, got {value!r} "
+                f"(allowed={sorted(allowed)})"
+            )
+            seen_masked = seen_masked or value == -float("inf")
+
+        sparse = processor.filter_logits(state, {i: v for i, v in enumerate(logits)})
+        assert sparse == {i: v for i, v in enumerate(dense)}
+
+        for token_id in range(len(logits)):
+            nxt = processor.get_next_state(state, token_id)
+            if nxt is not None and nxt != state:
+                states.append(nxt)
+
+    assert len(visited) > 1, "the walk never left the initial state"
+    assert seen_masked, "no token was ever masked, so the assertions proved nothing"
+
+
+def test_filter_logits_preserves_the_input_container_M_3() -> None:
+    """Masking returns a new container of the input's type and leaves the input alone."""
+    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage", 3: "<eos>"}
+    processor = RegexLogitsProcessor(
+        regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab, eos_token_id=3
+    )
+    dense_in = [1.0, 2.0, 3.0, 4.0]
+    dense_out = processor.filter_logits(processor.initial_state, dense_in)
+    assert dense_in == [1.0, 2.0, 3.0, 4.0], "filter_logits mutated its dense input"
+    assert dense_out is not dense_in
+    assert isinstance(dense_out, list)
+
+    # A tuple is a legal dense input too, and must come back as a list.
+    tuple_out = processor.filter_logits(processor.initial_state, (1.0, 2.0, 3.0, 4.0))
+    assert tuple_out == dense_out
+
+    sparse_in = {0: 1.0, 2: 3.0}
+    sparse_out = processor.filter_logits(processor.initial_state, sparse_in)
+    assert sparse_in == {0: 1.0, 2: 3.0}, "filter_logits mutated its dict input"
+    assert sparse_out == {0: 1.0, 2: -float("inf")}
