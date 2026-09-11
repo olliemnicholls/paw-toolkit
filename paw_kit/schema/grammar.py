@@ -552,7 +552,7 @@ def _warn_dropped_constraints(
     on every request, which the fingerprint cache exists to serve -- warns on whichever
     one compiles first and silently never again for the rest of the process, because
     the fingerprint carries no class identity. Phase F review, 2026-09-11: filed as an
-    addendum finding (S-21) rather than fixed here, since closing it means deciding
+    addendum finding (S-21b) rather than fixed here, since closing it means deciding
     whether the fingerprint should include a class identity at all, which is a cache
     invalidation policy question for the S-4 code, not a docstring fix.
 
@@ -1811,6 +1811,14 @@ def pydantic_to_regex(model: Type[BaseModel], anchors: bool = False) -> str:
     field and the constraint, once per field. It is a warning and not an error because
     those schemas compile and work today; what was wrong was that the grammar quietly
     did not enforce them.
+
+    **Caveat on `set`/`frozenset`/`dict` (S-21, not yet closed):** `max_length` on these
+    is sound (a JSON array can only lose entries when read back as a set or dict, so an
+    upper bound on rendered items stays an upper bound after that collapse) but
+    `min_length` is currently **not enforced and not warned about**: the grammar bounds
+    the rendered item *count*, and `{"x": [1, 1, 1]}` satisfies a `min_length=3` bound
+    while pydantic's resulting `{1}` fails it. Prefer `list` with a `pattern=` if you
+    need a real lower bound on a deduplicating container.
 
     Args:
         model: A Pydantic BaseModel subclass.

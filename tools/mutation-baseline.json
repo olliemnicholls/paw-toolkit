@@ -4,7 +4,7 @@
   "commit": "6f1deb281226578757d162eb56e066c4ae25c59d",
   "note": "Surviving mutants per module, measured by tools/mutate.py. A survivor is a semantic change the suite does not notice. Counts are full-suite survivors: a mutant that survives its module's fast test selection is re-run against the whole suite, and only then counted. Regenerate with `uv run --no-sync python tools/mutate.py --write-baseline tools/mutation-baseline.json`; see tools/README-mutate.md. Regenerated for paw_kit/schema/grammar.py and paw_kit/schema/logits_processor.py at the end of Track E (bug-hunt-remediation); the other four modules are unchanged from the campaign baseline, since a --modules run measures only what it mutates and writing its output wholesale would drop them and silently un-gate them.",
   "totals": {
-    "mutations": 381,
+    "mutations": 387,
     "survivors": 81
   },
   "modules": {
@@ -705,13 +705,13 @@
       ]
     },
     "paw_kit/schema/grammar.py": {
-      "mutations": 190,
+      "mutations": 196,
       "survivors": 17,
       "survivors_detail": [
         {
-          "id": "paw_kit/schema/grammar.py:475:11:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:493:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS",
-          "line": 475,
+          "line": 493,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -721,9 +721,9 @@
           "source_line": "or len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS"
         },
         {
-          "id": "paw_kit/schema/grammar.py:856:15:const:True>False",
+          "id": "paw_kit/schema/grammar.py:884:15:const:True>False",
           "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
-          "line": 856,
+          "line": 884,
           "col": 15,
           "kind": "const",
           "old": "True",
@@ -733,9 +733,9 @@
           "source_line": "return True, a_chars & b_chars"
         },
         {
-          "id": "paw_kit/schema/grammar.py:897:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:925:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|code < 32 or 127 <= code <= 159",
-          "line": 897,
+          "line": 925,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -745,9 +745,9 @@
           "source_line": "if code < 0x20 or 0x7F <= code <= 0x9F:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:917:10:cmp:<><=",
+          "id": "paw_kit/schema/grammar.py:945:10:cmp:<><=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|<><=|start < len(codes)",
-          "line": 917,
+          "line": 945,
           "col": 10,
           "kind": "cmp",
           "old": "<",
@@ -757,9 +757,9 @@
           "source_line": "while start < len(codes):"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1006:19:const:True>False",
+          "id": "paw_kit/schema/grammar.py:1044:19:const:True>False",
           "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
-          "line": 1006,
+          "line": 1044,
           "col": 19,
           "kind": "const",
           "old": "True",
@@ -769,9 +769,9 @@
           "source_line": "return \"\", True"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1018:23:const:True>False",
+          "id": "paw_kit/schema/grammar.py:1056:23:const:True>False",
           "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
-          "line": 1018,
+          "line": 1056,
           "col": 23,
           "kind": "const",
           "old": "True",
@@ -781,9 +781,9 @@
           "source_line": "return \"\", True"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1259:7:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1297:7:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|seen is None",
-          "line": 1259,
+          "line": 1297,
           "col": 7,
           "kind": "cmp",
           "old": "is",
@@ -793,9 +793,9 @@
           "source_line": "if seen is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1285:17:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1323:17:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|val is None",
-          "line": 1285,
+          "line": 1323,
           "col": 17,
           "kind": "cmp",
           "old": "is",
@@ -805,9 +805,9 @@
           "source_line": "elif val is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1370:32:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1408:32:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(args) > 1",
-          "line": 1370,
+          "line": 1408,
           "col": 32,
           "kind": "cmp",
           "old": ">",
@@ -817,9 +817,9 @@
           "source_line": "value_type = args[1] if len(args) > 1 else Any"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1445:7:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1483:7:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|seen is None",
-          "line": 1445,
+          "line": 1483,
           "col": 7,
           "kind": "cmp",
           "old": "is",
@@ -829,9 +829,9 @@
           "source_line": "if seen is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1496:30:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1534:30:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|args[1] is Ellipsis",
-          "line": 1496,
+          "line": 1534,
           "col": 30,
           "kind": "cmp",
           "old": "is",
@@ -841,9 +841,9 @@
           "source_line": "if len(args) == 2 and args[1] is Ellipsis:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1509:13:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1547:13:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|annotation is Tuple",
-          "line": 1509,
+          "line": 1547,
           "col": 13,
           "kind": "cmp",
           "old": "is",
@@ -853,9 +853,9 @@
           "source_line": "elif annotation is Tuple:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1531:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:1569:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|origin is dict or annotation is dict",
-          "line": 1531,
+          "line": 1569,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -865,9 +865,9 @@
           "source_line": "if origin is dict or annotation is dict:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1533:32:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1571:32:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(args) > 1",
-          "line": 1533,
+          "line": 1571,
           "col": 32,
           "kind": "cmp",
           "old": ">",
@@ -877,9 +877,9 @@
           "source_line": "value_type = args[1] if len(args) > 1 else Any"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1551:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:1589:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|annotation is set or annotation is frozenset",
-          "line": 1551,
+          "line": 1589,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -889,9 +889,9 @@
           "source_line": "if annotation is set or annotation is frozenset:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1809:18:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1855:18:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(_regex_cache) > _REGEX_CACHE_MAXSIZE",
-          "line": 1809,
+          "line": 1855,
           "col": 18,
           "kind": "cmp",
           "old": ">",
@@ -901,9 +901,9 @@
           "source_line": "while len(_regex_cache) > _REGEX_CACHE_MAXSIZE:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1810:42:const:False>True",
+          "id": "paw_kit/schema/grammar.py:1856:42:const:False>True",
           "fingerprint": "paw_kit/schema/grammar.py|const|False>True|False",
-          "line": 1810,
+          "line": 1856,
           "col": 42,
           "kind": "const",
           "old": "False",
