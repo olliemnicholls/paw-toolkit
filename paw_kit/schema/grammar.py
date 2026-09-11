@@ -129,11 +129,32 @@ def _json_collection_regex(open_lit: str, close_lit: str, entry_regex: str) -> s
     )
 
 
-def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[str]:
-    """Extract pattern constraint from Pydantic v2 field metadata, if present."""
+def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, int]]:
+    """Extract a `Field(pattern=...)` constraint as `(source, re_flags)`, if present.
+
+    S-6: this used to return `str(meta.pattern)`. pydantic accepts a *precompiled*
+    `re.Pattern` here as readily as a string, and `str(re.compile('[a-z]+'))` is
+    `"re.compile('[a-z]+')"` -- so the grammar compiled the pattern's **repr**. Because
+    that repr happens to contain lowercase letters, pydantic's search semantics then
+    *accepted* the nonsense value, and it flowed through `paw.load` as a successful
+    result rather than as a visible error. Silent garbage, not a broken build.
+
+    The flags are returned alongside the source rather than discarded, for two reasons.
+    They are semantically load bearing -- `re.compile("abc", re.I)` and
+    `re.compile("abc")` are different constraints and pydantic honours the difference
+    (executed against pydantic 2.13.5: the first validates `"ABC"`, the second does
+    not). And they are part of the cache key: `_fingerprint_model_fields` stores
+    whatever this function returns, so before this change the two spellings were told
+    apart only accidentally, by the flags showing up in the repr. Returning the source
+    alone would have made them collide while compiling differently -- S-4's bug,
+    re-introduced through a different door. A plain string pattern carries flags 0.
+    """
     for meta in field_info.metadata:
         if hasattr(meta, "pattern") and meta.pattern is not None:
-            return str(meta.pattern)
+            pattern = meta.pattern
+            if isinstance(pattern, re.Pattern):
+                return pattern.pattern, pattern.flags
+            return str(pattern), 0
     return None
 
 
@@ -243,6 +264,55 @@ _POSIX_BRACKET_CLASS = re.compile(
     r"\[:\^?(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space"
     r"|upper|word|xdigit):\]"
 )
+
+# S-6: how a precompiled pattern's `re` flags are carried into the translation.
+#
+# EXPRESSIBLE -- rendered into the AST walk as an interegular flag, exactly as a leading
+# `(?i)` / `(?s)` inline group already is.
+_EXPRESSIBLE_RE_FLAGS: Tuple[Tuple[int, REFlags], ...] = (
+    (re.IGNORECASE, REFlags.CASE_INSENSITIVE),
+    (re.DOTALL, REFlags.SINGLE_LINE),
+)
+# IGNORABLE -- ignoring each of these either changes nothing or narrows the grammar,
+# which rule 1 permits:
+#   * UNICODE is set on every `re.compile` of a `str` pattern, so it carries no
+#     information at all (`re.compile("a").flags` is 32).
+#   * MULTILINE only changes what `^` and `$` mean, and by the time the AST is walked
+#     there are none left: `_strip_anchors` removes the leading/trailing ones and
+#     interegular refuses any other position outright. Under MULTILINE pydantic's
+#     *search* would additionally accept a value with the match on an inner line
+#     (`^a$` matching `"b\na"`); full-matching the stripped pattern rejects that, which
+#     is the narrowing direction.
+#   * ASCII narrows the shorthand classes to ASCII, and this translator already
+#     ASCII-restricts every shorthand-derived class it renders in negated position
+#     (rule 2), so honouring it could only ever remove characters the grammar has
+#     already removed.
+# Anything else -- VERBOSE above all, which changes how the pattern *source* is
+# tokenised, and LOCALE, which has no meaning for a `str` pattern -- is refused rather
+# than silently dropped, since dropping it would change what the pattern matches.
+_IGNORABLE_RE_FLAGS = re.UNICODE | re.MULTILINE | re.ASCII
+
+
+def _interegular_flags(pattern: str, flags: int) -> REFlags:
+    """Translate a precompiled pattern's `re` flags into interegular's flag set (S-6)."""
+    out = REFlags(0)
+    known = _IGNORABLE_RE_FLAGS
+    for re_flag, ie_flag in _EXPRESSIBLE_RE_FLAGS:
+        known |= re_flag
+        if flags & re_flag:
+            out |= ie_flag
+    leftover = flags & ~known
+    if leftover:
+        raise PAWSchemaError(
+            f"Invalid field pattern constraint {pattern!r}: it was supplied as a "
+            f"precompiled regex carrying the flag(s) {re.RegexFlag(leftover)!r}, which "
+            "this compiler cannot express in a decoding grammar. Only re.IGNORECASE "
+            "and re.DOTALL are supported (re.MULTILINE, re.ASCII and re.UNICODE are "
+            "accepted and have no effect on the compiled grammar). Rewrite the "
+            "constraint without the flag, or spell it as a leading inline group."
+        )
+    return out
+
 
 # `_ParsePattern.extension_group` is entered with the cursor just past the opening `(?`,
 # so a flag group at the very start of the pattern -- the only position at which the
@@ -491,8 +561,11 @@ def _render_node(node: Any, flags: REFlags, source: str) -> Tuple[str, bool]:
     )
 
 
-def _translate_field_pattern(pattern: str) -> str:
+def _translate_field_pattern(pattern: str, flags: int = 0) -> str:
     """Translate a `Field(pattern=...)` constraint into a JSON-string-safe regex.
+
+    `flags` are the `re` flags of a precompiled `re.Pattern` constraint (0 for a plain
+    string one); see `_interegular_flags` for which are honoured and which are refused.
 
     S-3, and the reason `_sanitize_field_pattern` no longer exists. The old approach
     spliced the user's regex *source* between JSON quote marks and defended the splice
@@ -561,6 +634,7 @@ def _translate_field_pattern(pattern: str) -> str:
             (`\\b`, lookaround, `\\p{L}`), one the two engines disagree about, or one
             whose JSON-safe intersection is empty.
     """
+    initial_flags = _interegular_flags(pattern, flags)
     if _SHORTHAND_MARKS & set(pattern):
         raise PAWSchemaError(
             f"Invalid field pattern constraint {pattern!r}: it contains a Unicode "
@@ -605,7 +679,7 @@ def _translate_field_pattern(pattern: str) -> str:
             "group like `(?i:...)`."
         )
 
-    rendered, _atomic = _render_node(node, REFlags(0), pattern)
+    rendered, _atomic = _render_node(node, initial_flags, pattern)
     return rendered
 
 
@@ -871,15 +945,27 @@ def _fingerprint_annotation(
         )
 
     # 2. Literal -- args are already hashable primitive values (str/int/float/bool/None).
+    #
+    # S-4: the value's TYPE NAME is part of the key, not just the value. Fingerprints
+    # are compared with `==`, and in Python `1 == True == 1.0` with equal hashes, so
+    # `("literal", (1,))` and `("literal", (True,))` were the same cache key -- while
+    # `_type_to_regex`'s branch 2 renders them as `1` and `true`, which are different
+    # regexes. Compiling `Literal[1]` and then `Literal[True]` handed the second model
+    # the first model's grammar: `B.model_dump_json()` is `{"x":true}`, which does not
+    # match B's own compiled grammar, while `{"x":1}` does. Silent and order-dependent
+    # -- whichever model was compiled first won for the rest of the process -- and the
+    # docstring's invariant ("equal fingerprint implies equal regex") was simply false.
     if origin is Literal:
-        return ("literal", args)
+        return ("literal", tuple((type(v).__name__, v) for v in args))
 
     # 3. Enum -- member *values* only, matching _type_to_regex's branch (which reads
     # only item.value, never the class itself), so two differently-named Enum classes
     # with the same ordered member values correctly share a fingerprint: they are
-    # guaranteed to compile to the same regex.
+    # guaranteed to compile to the same regex. Each value's type name is included for
+    # the same reason as branch 2 (S-4): an int-valued and a bool-valued enum member
+    # compare equal and compile differently.
     if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
-        return ("enum", tuple(item.value for item in annotation))
+        return ("enum", tuple((type(item.value).__name__, item.value) for item in annotation))
 
     # 4. List / list[T]
     if origin in (list, List):
@@ -972,6 +1058,15 @@ def _fingerprint_model_fields(
     `_extract_pattern_from_field(field_info)`, and `field_info.annotation` -- never
     `is_required()` or a field's default).
 
+    **The fingerprint input set must track the compiler input set.** Any change that
+    widens what `_pydantic_to_regex_impl` reads has to widen this in the same commit,
+    or two models that compile differently share a cache entry (S-4 is one instance of
+    that, not a one-off). Every widening so far is routed through the two helpers this
+    function already calls, precisely so the two cannot drift:
+    `_extract_pattern_from_field` returns the pattern's flags as well as its source
+    (S-6), and `_fingerprint_annotation` carries each Literal/Enum value's type name
+    (S-4).
+
     Built from *extracted values*, never from `FieldInfo` objects directly:
     `FieldInfo` inherits `object`'s identity `__hash__`/`__eq__`, so hashing
     `tuple(model.model_fields.items())` verbatim would still give two structurally
@@ -1018,8 +1113,10 @@ def _pydantic_to_regex_impl(
         pattern_override = _extract_pattern_from_field(field_info)
         if pattern_override is not None:
             # S-3 / PAW-SCHEMA-01: translated through interegular's AST and re-rendered
-            # against the JSON-safe character set, never spliced as source.
-            value_regex = f'"{_translate_field_pattern(pattern_override)}"'
+            # against the JSON-safe character set, never spliced as source. S-6: a
+            # precompiled constraint contributes its source and its flags, never its
+            # repr.
+            value_regex = f'"{_translate_field_pattern(*pattern_override)}"'
         else:
             value_regex = _type_to_regex(field_info.annotation, seen=_seen, depth=_depth)
         field_pattern = f"{field_key}{JSON_WHITESPACE}:{JSON_WHITESPACE}{value_regex}"

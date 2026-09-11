@@ -1534,3 +1534,180 @@ def test_leading_inline_ignorecase_is_honoured_not_refused_S_1() -> None:
     for value in ("abc", "aBc", "ABC"):
         assert compiled.match('{"x": "%s"}' % value) is not None, value
     assert compiled.match('{"x": "abd"}') is None
+
+
+# --- S-6: a precompiled Field(pattern=...) compiles its source, not its repr ---------
+
+
+def test_precompiled_pattern_compiles_its_source_not_its_repr_S_6() -> None:
+    """`Field(pattern=re.compile("[a-z]+"))` must compile `[a-z]+` (S-6).
+
+    `_extract_pattern_from_field` returned `str(meta.pattern)`, which for a precompiled
+    pattern is `"re.compile('[a-z]+')"` -- so the grammar's accepted language was built
+    out of the *repr*. Because that repr happens to contain lowercase letters,
+    pydantic's search semantics then accepted it, and the nonsense flowed through
+    `paw.load` as a successful result instead of a visible error.
+    """
+    import re as _re
+
+    model = create_model("Precompiled", x=(str, Field(pattern=_re.compile(r"[a-z]+"))))
+    pat = pydantic_to_regex(model, anchors=True)
+
+    assert "compile" not in pat, f"the repr is still in the grammar: {pat!r}"
+    assert _re.fullmatch(pat, '{"x": "abc"}') is not None, (
+        "the legal value the pattern actually describes must be accepted"
+    )
+    assert _re.fullmatch(pat, '{"x": "re.compile(\'[a-z]+\')"}') is None, (
+        "the grammar still accepts the pattern's own repr as a value"
+    )
+
+
+def test_precompiled_pattern_ignorecase_flag_is_honoured_S_6() -> None:
+    """A precompiled pattern's `re.I` is part of the constraint, and pydantic honours it.
+
+    Executed against pydantic 2.13.5: `Field(pattern=re.compile("abc", re.I))`
+    validates `"ABC"`. Taking `.pattern` and dropping `.flags` would compile a grammar
+    that rejects a value its own model accepts.
+    """
+    import re as _re
+
+    model = create_model("CiPre", x=(str, Field(pattern=_re.compile(r"abc", _re.I))))
+    model(x="ABC")  # precondition: pydantic itself accepts it
+    pat = pydantic_to_regex(model, anchors=True)
+    for value in ("abc", "ABC", "aBc"):
+        assert _re.fullmatch(pat, '{"x": "%s"}' % value) is not None, value
+    assert _re.fullmatch(pat, '{"x": "abd"}') is None
+
+
+def test_precompiled_pattern_dotall_flag_is_accepted_and_subsumed_S_6() -> None:
+    """`re.S` is expressed, but the JSON-safe intersection already subsumes it.
+
+    `re.DOTALL` widens `.` to include a newline. A JSON string cannot carry a raw
+    newline at all, so `_render_node`'s `.` branch intersects with `_JSON_UNSAFE_CHARS`
+    -- which already contains `\\n` -- and the rendered class is byte-identical with and
+    without the flag. The flag is therefore *honoured* (passed into the AST walk as
+    `REFlags.SINGLE_LINE`) rather than refused, and the identity below is the point:
+    the one direction the flag could have gone is widening, and it cannot.
+    """
+    import re as _re
+
+    dotall = create_model("DotAll", x=(str, Field(pattern=_re.compile(r"a.b", _re.S))))
+    plain = create_model("DotPlain", x=(str, Field(pattern=_re.compile(r"a.b"))))
+
+    pat = pydantic_to_regex(dotall, anchors=True)
+    assert pat == pydantic_to_regex(plain, anchors=True)
+    assert _re.fullmatch(pat, '{"x": "axb"}') is not None
+    assert _re.fullmatch(pat, '{"x": "a\nb"}') is None, (
+        "a raw newline inside a JSON string is not valid JSON, flag or no flag"
+    )
+
+
+def test_precompiled_pattern_with_an_inexpressible_flag_raises_S_6() -> None:
+    """re.VERBOSE changes how the source is tokenised, so it is refused, not dropped."""
+    import re as _re
+
+    model = create_model("Verbose", x=(str, Field(pattern=_re.compile(r"a b  # c", _re.X))))
+    with pytest.raises(PAWSchemaError, match="precompiled regex carrying the flag"):
+        pydantic_to_regex(model)
+
+
+def test_precompiled_pattern_flags_join_the_cache_fingerprint_S_6_S_4() -> None:
+    """Two models differing ONLY in a pattern flag must not share a cache entry.
+
+    The invariant this track works to: any fix that widens what the compiler reads must
+    widen the fingerprint in the same commit. Before S-6 the two spellings below were
+    told apart only *accidentally* -- the flags showed up in the repr that was being
+    (wrongly) compiled. Taking `.pattern` alone would have made them collide while
+    compiling differently, which is exactly S-4's bug by another door.
+
+    This is therefore one of the two tests on this branch that **passes at `main` by
+    design** (the other pins interegular's private AST surface): it guards the hazard
+    the S-6 fix introduces, not a defect that exists before it. `campaign.sh
+    red-at-main` on it reports "every named test PASSES" -- expected, not a gate
+    failure. Delete the flags from `_extract_pattern_from_field` and it goes red.
+    """
+    import re as _re
+
+    from paw_kit.schema.grammar import _fingerprint_model_fields
+
+    plain = create_model("FlagFp", x=(str, Field(pattern=_re.compile(r"abc"))))
+    folded = create_model("FlagFp", x=(str, Field(pattern=_re.compile(r"abc", _re.I))))
+
+    key_plain = _fingerprint_model_fields(plain, seen=frozenset(), depth=0)
+    key_folded = _fingerprint_model_fields(folded, seen=frozenset(), depth=0)
+    assert key_plain != key_folded, "the pattern flags are not in the fingerprint"
+
+    pydantic_to_regex.cache_clear()
+    assert pydantic_to_regex(plain) != pydantic_to_regex(folded), (
+        "equal fingerprints would have served one model the other's grammar"
+    )
+
+
+# --- S-4: the cache fingerprint must not collide values that compare equal -----------
+
+
+S_4_COLLISION_CASES = [
+    ("literal_int_vs_bool", Literal[1], Literal[True], '{"x":1}', '{"x":true}'),
+    ("literal_int_vs_float", Literal[1], Literal[1.0], '{"x":1}', '{"x":1.0}'),
+    ("literal_zero_vs_false", Literal[0], Literal[False], '{"x":0}', '{"x":false}'),
+]
+
+
+@pytest.mark.parametrize(
+    "name,ann_a,ann_b,dump_a,dump_b", S_4_COLLISION_CASES,
+    ids=[c[0] for c in S_4_COLLISION_CASES],
+)
+def test_literal_values_that_compare_equal_do_not_share_a_cache_entry_S_4(
+    name: str, ann_a: Any, ann_b: Any, dump_a: str, dump_b: str
+) -> None:
+    """`1 == True == 1.0` with equal hashes, so `("literal", (1,))` keyed all three.
+
+    The failure is silent and order-dependent: compile `Literal[1]` first and
+    `Literal[True]` gets its regex, so `B.model_dump_json()` -- `{"x":true}` -- does
+    not match B's own grammar while `{"x":1}` does. The existing property test cannot
+    see this, because it compares two *structurally identical* models.
+    """
+    import re as _re
+
+    from paw_kit.schema.grammar import _fingerprint_model_fields
+
+    model_a = create_model("S4Case", x=(ann_a, ...))
+    model_b = create_model("S4Case", x=(ann_b, ...))
+
+    key_a = _fingerprint_model_fields(model_a, seen=frozenset(), depth=0)
+    key_b = _fingerprint_model_fields(model_b, seen=frozenset(), depth=0)
+    assert key_a != key_b, f"{name}: the two models share a cache fingerprint"
+
+    pydantic_to_regex.cache_clear()
+    regex_a = pydantic_to_regex(model_a, anchors=True)  # compiled FIRST, so it wins a collision
+    regex_b = pydantic_to_regex(model_b, anchors=True)
+    assert regex_a != regex_b, f"{name}: the second model was served the first's regex"
+    assert _re.fullmatch(regex_a, dump_a) is not None
+    assert _re.fullmatch(regex_b, dump_b) is not None
+
+
+def test_enum_member_values_that_compare_equal_do_not_share_a_cache_entry_S_4() -> None:
+    """The same collision through an Enum's member values rather than a Literal's args."""
+    import re as _re
+
+    from paw_kit.schema.grammar import _fingerprint_model_fields
+
+    class IntCode(enum.Enum):
+        A = 1
+
+    class BoolCode(enum.Enum):
+        A = True
+
+    model_a = create_model("S4Enum", x=(IntCode, ...))
+    model_b = create_model("S4Enum", x=(BoolCode, ...))
+
+    key_a = _fingerprint_model_fields(model_a, seen=frozenset(), depth=0)
+    key_b = _fingerprint_model_fields(model_b, seen=frozenset(), depth=0)
+    assert key_a != key_b, "an int-valued and a bool-valued enum share a fingerprint"
+
+    pydantic_to_regex.cache_clear()
+    regex_a = pydantic_to_regex(model_a, anchors=True)
+    regex_b = pydantic_to_regex(model_b, anchors=True)
+    assert regex_a != regex_b
+    assert _re.fullmatch(regex_a, '{"x":1}') is not None
+    assert _re.fullmatch(regex_b, '{"x":true}') is not None
