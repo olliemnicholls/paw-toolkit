@@ -1,0 +1,11 @@
+$ paw-test check suite.yaml --json report.json
+exit code: 0
+--- stdout ---
+Running paw.test check on: golden_date_normalizer (good.paw) (backend: MockPAWBackend)
+  [PASS] Input: 'today' -> '2026-09-11'
+  [PASS] Input: 'new year' -> '2026-01-01'
+  [PASS] Input: 'February 30th' -> 'INVALID'
+Correct against expected: 2/2 (100.0%)
+
+Pass rate: 100.0% (3/3) (backend: MockPAWBackend)
+Wrote JSON report to report.json

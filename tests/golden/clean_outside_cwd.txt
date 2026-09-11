@@ -1,0 +1,4 @@
+$ paw-kit clean --cache-dir /etc
+exit code: 1
+--- stdout ---
+Error: --cache-dir '/etc' resolves to /etc, which is not contained within the expected root <WORKDIR.......................................................>. Refusing to touch it.

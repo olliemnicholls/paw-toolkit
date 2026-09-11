@@ -1,0 +1,4 @@
+$ paw-test judge check.json
+exit code: 1
+--- stdout ---
+Error: --spec or --suite is required to judge a report.

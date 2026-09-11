@@ -1,0 +1,4 @@
+$ paw-kit history adapter.paw
+exit code: 0
+--- stdout ---
+No lineage entries recorded in 'adapter.paw.history.jsonl'.

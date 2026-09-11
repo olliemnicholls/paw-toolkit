@@ -1,0 +1,39 @@
+{
+  "judge_id": "anthropic/claude-haiku-4-5/temperature=0.0",
+  "spec": "Convert a natural-language date to ISO-8601, or INVALID.",
+  "temperature_note": "temperature=0.0 -- default-temperature judging measured a 4.5% (6/134) verdict-flip rate on byte-identical input/output (measurements/README.md, 'Finetune compiler').",
+  "total_cases": 3,
+  "pass_count": 1,
+  "pass_rate": 33.33333333333333,
+  "unparseable_count": 0,
+  "error_count": 0,
+  "verdicts": [
+    {
+      "case_id": "d78fcdd08e06818a556cbe727d8cdc275c78bab4e6787ce62a27bf964c1ccc35",
+      "input": "today",
+      "output": "tomorrow",
+      "verdict": false,
+      "reason": "not an ISO-8601 date",
+      "rule_passed": false,
+      "judge_error": null
+    },
+    {
+      "case_id": "855abc9a4f28d6ddbc498ba0be032f1af13c5f671dfa64d81ebec3ccea355528",
+      "input": "new year",
+      "output": "2026-01-01",
+      "verdict": true,
+      "reason": "matches the ISO-8601 shape the spec asks for",
+      "rule_passed": true,
+      "judge_error": null
+    },
+    {
+      "case_id": "24ace1fa8338f08f016c356168cb8b3e37a2b238ef733f0456bf877d18d1120b",
+      "input": "February 30th",
+      "output": "INVALID",
+      "verdict": false,
+      "reason": "not an ISO-8601 date",
+      "rule_passed": true,
+      "judge_error": null
+    }
+  ]
+}

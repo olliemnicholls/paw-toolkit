@@ -1,0 +1,9 @@
+$ paw-kit export docker adapter.paw
+exit code: 0
+--- stdout ---
+Docker deployment assets successfully generated in:
+<WORKDIR.......................................................>/docker
+  - Dockerfile
+  - .dockerignore
+  - docker-compose.yml
+  - README.md

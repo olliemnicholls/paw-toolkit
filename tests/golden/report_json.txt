@@ -1,0 +1,4 @@
+$ paw-kit report --json
+exit code: 0
+--- stdout ---
+(stdout is the JSON artifact; see report_json.json)

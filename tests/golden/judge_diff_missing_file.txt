@@ -1,0 +1,4 @@
+$ paw-test judge --diff old.json gone.json
+exit code: 1
+--- stdout ---
+Error: Verdicts file 'gone.json' does not exist.

@@ -1,0 +1,4 @@
+$ paw-test compare alpha.paw gone.paw suite.yaml
+exit code: 1
+--- stdout ---
+Error: Adapter gone 'gone.paw' does not exist.

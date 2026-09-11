@@ -1,0 +1,4 @@
+$ paw-kit lint-spec --file spec.txt
+exit code: 0
+--- stdout ---
+No issues found.

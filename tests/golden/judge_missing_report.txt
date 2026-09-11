@@ -1,0 +1,4 @@
+$ paw-test judge gone.json --spec s
+exit code: 1
+--- stdout ---
+Error: Report file 'gone.json' does not exist.

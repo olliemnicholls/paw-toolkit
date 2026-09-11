@@ -1,0 +1,4 @@
+$ paw-test judge weird.json --spec s
+exit code: 1
+--- stdout ---
+Error: Unrecognized report shape; expected a `paw-test compare --json` or `paw-test check --json` report.

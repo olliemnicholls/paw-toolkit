@@ -1,0 +1,5 @@
+$ paw-test compare alpha.paw opaque.paw suite.yaml
+exit code: 1
+--- stdout ---
+Error: Could not read a manifest from adapter opaque 'opaque.paw' -- not JSON, or not the expected shape. Refusing to
+compare.

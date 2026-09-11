@@ -1,0 +1,21 @@
+$ paw-test compare alpha.paw beta.paw suite.yaml
+exit code: 0
+--- stdout ---
+Differences (3/3):
+
+  Input: today
+    alpha -> 2026-09-11
+    beta -> "2026-09-11"
+    pass differs: alpha=True beta=False
+  Input: new year
+    alpha -> 2026-01-01
+    beta -> "2026-01-01"
+    pass differs: alpha=True beta=False
+  Input: February 30th
+    alpha -> INVALID
+    beta -> "INVALID"
+    pass differs: alpha=True beta=False
+
+Summary: 3 cases, 0 identical output (byte-for-byte), 0 equivalent output (byte-for-byte + JSON/whitespace-normalized),
+3 equivalent output once unwrapped (also counting a JSON-string-quoted/bare pair), alpha pass 3/3, beta pass 0/3,
+only-alpha-pass 3, only-beta-pass 0, errored 0/3

@@ -1,0 +1,25 @@
+$ paw-kit inspect adapter.paw
+exit code: 0
+--- stdout ---
+                                          PAW Adapter: adapter.paw
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Property                  ┃ Value                                                                        ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ File Path                 │ <WORKDIR.......................................................>/adapter.paw │
+│ File Size                 │ 558 bytes (0.54 KB)                                                          │
+│ Format                    │ JSON Simulation                                                              │
+│ Manifest Version          │ 2                                                                            │
+│ Backend                   │ mock                                                                         │
+│ Program Id                │ prog_golden_0001                                                             │
+│ Compiler                  │ golden-fixture                                                               │
+│ Spec Sha256               │ 0000000000000000000000000000000000000000000000000000000000000000             │
+│ Examples Count            │ 0                                                                            │
+│ Examples Folded Into Spec │ 2                                                                            │
+│ Folded Example Ids        │ ['ex-0', 'ex-1']                                                             │
+│ Public                    │ True                                                                         │
+│ Rules                     │ {'today': '2026-09-11'}                                                      │
+│ Default Response          │ None                                                                         │
+│ Examples                  │ []                                                                           │
+│ Unknown Third Party Field │ kept, sorted after the known ones                                            │
+│ Specification             │ Convert a natural-language date to ISO-8601, or INVALID.                     │
+└───────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘

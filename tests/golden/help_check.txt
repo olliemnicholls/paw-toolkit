@@ -1,0 +1,24 @@
+$ paw-test check --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-test check [OPTIONS] {suite_path}
+
+ Run test suite assertions and active-learning self-healing loop on a .paw adapter.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    suite_path      <path>  Path to declarative suite.yaml specification [required]                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --backend         -b                         <str>   Backend engine: mock | real [default: mock]                     │
+│ --auto-recompile      --no-auto-recompile            Enable active learning (overrides suite.yaml if set)            │
+│ --json                                       <path>  Write the run's TestRunReport as JSON to this path (input for   │
+│                                                      `paw-test judge`)                                               │
+│ --adapter                                    <path>  Run this suite against a different compiled .paw adapter,       │
+│                                                      overriding the suite.yaml's own adapter_path -- so one suite    │
+│                                                      file can be checked against several adapters without writing a  │
+│                                                      near-identical suite.yaml per adapter. Must resolve under the   │
+│                                                      current working directory, exactly like the suite's own         │
+│                                                      adapter_path (PAW-TEST-02).                                     │
+│ --help                                               Show this message and exit.                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

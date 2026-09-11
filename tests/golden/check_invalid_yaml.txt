@@ -1,0 +1,4 @@
+$ paw-test check bad.yaml
+exit code: 1
+--- stdout ---
+Error parsing suite: Invalid suite specification: root must be a YAML mapping.

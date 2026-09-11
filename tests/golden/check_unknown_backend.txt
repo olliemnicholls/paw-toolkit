@@ -1,0 +1,10 @@
+$ paw-test check suite.yaml --backend gpt
+exit code: 2
+--- stdout ---
+
+--- stderr ---
+Usage: paw-test check [OPTIONS] {suite_path}
+Try 'paw-test check --help' for help.
+╭─ Error ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Invalid value for --backend: Unknown backend 'gpt'. Expected 'mock' or 'real'.                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,25 @@
+$ paw-kit --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit [OPTIONS] COMMAND [ARGS]...
+
+ paw-kit: reliability and migration harness for Program-as-Weights (PAW) neural functions
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --install-completion          Install completion for the current shell.                                              │
+│ --show-completion             Show completion for the current shell, to copy it or customize the installation.       │
+│ --help                        Show this message and exit.                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ demo       Run an interactive zero-hardware demo showcasing JIT compilation or schema enforcement.                   │
+│ check      Run test suite assertions and active-learning self-healing loop on a .paw adapter.                        │
+│ inspect    Inspect metadata, task spec, and file properties of a .paw adapter artifact.                              │
+│ history    Print the append-only compile lineage log for an adapter.                                                 │
+│ lint-spec  Lint a spec for failure modes measured against real compiled PAW adapters.                                │
+│ clean      Purge local trace database and compiled adapter cache.                                                    │
+│ doctor     Diagnose the local environment for running --backend real (ProgramAsWeightsBackend).                      │
+│ serve      Serve an adapter over HTTP with OpenAI- and Anthropic-compatible endpoints.                               │
+│ report     Report @compile_on_hit task state, shadow-mode agreement and recent disagreements.                        │
+│ export     Export PAW adapters and traces to external formats                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,12 @@
+$ paw-test check suite.yaml --adapter bad.paw
+exit code: 1
+--- stdout ---
+Running paw.test check on: golden_date_normalizer (bad.paw) (backend: MockPAWBackend)
+  [FAIL] Input: 'today' -> 'tomorrow'
+         regex_match: Output 'tomorrow' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
+         expected: got tomorrow want 2026-09-11
+  [PASS] Input: 'new year' -> '2026-01-01'
+  [PASS] Input: 'February 30th' -> 'INVALID'
+Correct against expected: 1/2 (50.0%)
+
+Pass rate: 66.7% (2/3) (backend: MockPAWBackend)

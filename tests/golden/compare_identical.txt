@@ -1,0 +1,7 @@
+$ paw-test compare alpha.paw beta.paw suite.yaml
+exit code: 0
+--- stdout ---
+No differences -- identical output and pass status on every case.
+
+Summary: 3 cases, 3 identical output (byte-for-byte), 3 equivalent output (byte-for-byte + JSON/whitespace-normalized),
+alpha pass 3/3, beta pass 3/3, only-alpha-pass 0, only-beta-pass 0, errored 0/3

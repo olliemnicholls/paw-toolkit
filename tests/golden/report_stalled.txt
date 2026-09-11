@@ -1,0 +1,35 @@
+$ paw-kit report
+exit code: 0
+--- stdout ---
+                                         paw-kit task report
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┓
+┃ Task            ┃ State            ┃ Calls ┃ Agreement           ┃ Fail-open ┃ Promoted ┃ Demoted ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━┩
+│ bbbbbbbbbbbb... │ shadow (stalled) │     1 │ 0.00 (0/2) shadow/2 │         0 │ -        │ -       │
+└─────────────────┴──────────────────┴───────┴─────────────────────┴───────────┴──────────┴─────────┘
+╭──────────────────────────────────────── Last disagreements: bbbbbbbbbbbb... ─────────────────────────────────────────╮
+│ disagree shadow 0000-00-00 00:00:00                                                                                  │
+│   in:      in10                                                                                                      │
+│   teacher: teacher:10                                                                                                │
+│   adapter: wrong                                                                                                     │
+│                                                                                                                      │
+│ disagree shadow 0000-00-00 00:00:00                                                                                  │
+│   in:      in9                                                                                                       │
+│   teacher: teacher:9                                                                                                 │
+│   adapter: wrong                                                                                                     │
+│                                                                                                                      │
+│ disagree shadow 0000-00-00 00:00:00                                                                                  │
+│   in:      in8                                                                                                       │
+│   teacher: teacher:8                                                                                                 │
+│   adapter: wrong                                                                                                     │
+│                                                                                                                      │
+│ disagree shadow 0000-00-00 00:00:00                                                                                  │
+│   in:      in7                                                                                                       │
+│   teacher: teacher:7                                                                                                 │
+│   adapter: wrong                                                                                                     │
+│                                                                                                                      │
+│ disagree shadow 0000-00-00 00:00:00                                                                                  │
+│   in:      in6                                                                                                       │
+│   teacher: teacher:6                                                                                                 │
+│   adapter: wrong                                                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

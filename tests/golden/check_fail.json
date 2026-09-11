@@ -1,0 +1,48 @@
+{
+  "task_name": "golden_date_normalizer",
+  "adapter_path": "bad.paw",
+  "total_cases": 3,
+  "passed_cases": 2,
+  "failed_cases": 1,
+  "expected_total": 2,
+  "expected_matched": 1,
+  "expected_matched_unquoted": 1,
+  "results": [
+    {
+      "input": "today",
+      "output": "tomorrow",
+      "passed": false,
+      "failed_rules": [
+        "regex_match: Output 'tomorrow' does not match pattern '^(\\d{4}-\\d{2}-\\d{2}|INVALID)$'",
+        "expected: got tomorrow want 2026-09-11"
+      ],
+      "failed_rule_names": [
+        "regex_match",
+        "expected"
+      ],
+      "expected_match": false,
+      "latency_ms": "<DURATION>",
+      "execution_error": null
+    },
+    {
+      "input": "new year",
+      "output": "2026-01-01",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "expected_match": true,
+      "latency_ms": "<DURATION>",
+      "execution_error": null
+    },
+    {
+      "input": "February 30th",
+      "output": "INVALID",
+      "passed": true,
+      "failed_rules": [],
+      "failed_rule_names": [],
+      "expected_match": null,
+      "latency_ms": "<DURATION>",
+      "execution_error": null
+    }
+  ]
+}

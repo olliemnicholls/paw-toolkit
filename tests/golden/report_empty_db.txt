@@ -1,0 +1,4 @@
+$ paw-kit report
+exit code: 0
+--- stdout ---
+No tasks recorded in .paw/traces.db.

@@ -1,0 +1,4 @@
+$ paw-test judge --spec s
+exit code: 1
+--- stdout ---
+Error: REPORT is required unless --diff is given.

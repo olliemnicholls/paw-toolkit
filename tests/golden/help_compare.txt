@@ -1,0 +1,32 @@
+$ paw-test compare --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-test compare [OPTIONS] {adapter_a} {adapter_b} {suite_path}
+
+ Run every suite case through two compiled adapters and diff the results, per case.
+
+ Read-only against both adapters: `--backend real` never compiles. A per-case diff is
+ the point -- this is the technique that actually decided whether `paw-ft-bs48` was a
+ different compile from `paw-4b-qwen3-0.6b` (132/134 byte-identical outputs, see
+ `measurements/README.md`'s "Finetune compiler" section), where the aggregate pass-rate
+ delta alone sat inside the LLM judge's own measured run-to-run noise.
+
+ Both adapters are held in memory for the whole run (two ~600MB llama.cpp models
+ under `--backend real`, never released) -- the first row's latencies include that
+ cold load, not steady-state inference time.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    adapter_a       <path>  First compiled .paw adapter [required]                                                  │
+│ *    adapter_b       <path>  Second compiled .paw adapter [required]                                                 │
+│ *    suite_path      <path>  Path to declarative suite.yaml specification [required]                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --backend  -b               <str>   Backend engine: mock | real [default: mock]                                      │
+│ --fuzz         --no-fuzz            Also run the suite's fuzz cases through both adapters, not just standard_cases   │
+│                                     -- on by default, so a default `compare` run covers the same cases `paw-test     │
+│                                     check` does. Pass --no-fuzz for standard_cases only.                             │
+│                                     [default: fuzz]                                                                  │
+│ --json                      <path>  Write the full CompareReport as JSON to this path                                │
+│ --help                              Show this message and exit.                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

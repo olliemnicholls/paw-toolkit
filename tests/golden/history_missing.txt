@@ -1,0 +1,4 @@
+$ paw-kit history adapter.paw
+exit code: 1
+--- stdout ---
+Error: no history log at 'adapter.paw.history.jsonl'.

@@ -1,0 +1,9 @@
+$ paw-test check suite.yaml
+exit code: 1
+--- stdout ---
+Error parsing suite: 1 validation error for TestSuiteConfig
+assertions.0
+  Value error, Unknown assertion rule 'contains'; evaluate_assertion only implements ['exact_match', 'max_length',
+'min_length', 'not_contains', 'regex_match']. A typo here would otherwise load successfully and silently fail every case
+at eval time. [type=value_error, input_value={'rule': 'contains', 'value': 'x'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/value_error

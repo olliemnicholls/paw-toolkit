@@ -1,0 +1,4 @@
+$ paw-kit export docker gone.paw
+exit code: 1
+--- stdout ---
+Error: Adapter file 'gone.paw' does not exist.

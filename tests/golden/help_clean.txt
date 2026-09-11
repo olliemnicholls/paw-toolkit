@@ -1,0 +1,14 @@
+$ paw-kit clean --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit clean [OPTIONS]
+
+ Purge local trace database and compiled adapter cache.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --cache-dir  -c      <path>  Directory containing traces and adapters [default: .paw]                                │
+│ --dry-run                    Preview files to delete without removing                                                │
+│ --yes        -y              Skip the confirmation prompt (for scripted/CI use)                                      │
+│ --help                       Show this message and exit.                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

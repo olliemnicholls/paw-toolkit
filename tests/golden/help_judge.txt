@@ -1,0 +1,31 @@
+$ paw-test judge --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-test judge [OPTIONS] [report]
+
+ Score a `compare`/`check` report's outputs with an LLM judge, or diff two prior verdict runs to check reproducibility.
+
+ Temperature is pinned to 0 (see `paw_kit.test.judge.anthropic_judge`): a
+ default-temperature judge call flipped its YES/NO verdict on byte-identical
+ input/output 4.5% of the time (6/134), measured in `measurements/README.md`'s
+ "Finetune compiler" section. `--diff` is how to check whether that is still true for a
+ given judge and prompt.
+
+ Every case's spec, input, and output leaves this machine: each is sent to the
+ configured judge provider (Anthropic by default) as part of the judge prompt.
+ Judging a `compare` report costs 2x cases in judge calls, since both adapters'
+ outputs are judged separately.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   report      <path>  A `compare --json` or `check --json` report to judge (omit when using --diff)                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --spec         <str>           Task spec to show the judge                                                           │
+│ --suite        <path>          suite.yaml to read the spec from, instead of --spec                                   │
+│ --judge        <str>           provider:model for the judge, e.g. anthropic:claude-haiku-4-5                         │
+│                                [default: anthropic:claude-haiku-4-5]                                                 │
+│ --out          <path>          Write verdicts JSON to this path                                                      │
+│ --diff         <path path>...  Diff two verdicts JSON files (OLD NEW) instead of judging a report                    │
+│ --help                         Show this message and exit.                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

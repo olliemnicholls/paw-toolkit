@@ -1,0 +1,11 @@
+$ paw-test judge --diff old.json new.json
+exit code: 0
+--- stdout ---
+Flipped verdicts (1/2):
+
+  Input: today
+    Output: 2026-09-11
+    anthropic/claude-haiku-4-5/temperature=0.0: True (correct)  ->  anthropic/claude-haiku-4-5/temperature=0.0: False
+(flipped)
+
+Flip rate: 50.0% (1/2)

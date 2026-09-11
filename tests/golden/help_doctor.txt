@@ -1,0 +1,18 @@
+$ paw-kit doctor --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit doctor [OPTIONS]
+
+ Diagnose the local environment for running --backend real (ProgramAsWeightsBackend).
+
+ Checks the SDK and llama_cpp installs, GPU visibility, PAW_API_KEY, upstream service
+ health, the local base-model cache, and cached compiled programs -- each PASS / WARN
+ / FAIL with a one-line remedy. Exits 0 if nothing FAILed, 1 otherwise.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --adapter        <path>  A .paw manifest to also check offline-readiness for                                         │
+│ --offline                Skip every check that touches the network                                                   │
+│ --json                   Print results as a JSON list instead of a table                                             │
+│ --help                   Show this message and exit.                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

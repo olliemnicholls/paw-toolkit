@@ -1,0 +1,15 @@
+$ paw-kit inspect --help
+exit code: 0
+--- stdout ---
+
+ Usage: paw-kit inspect [OPTIONS] {adapter_path}
+
+ Inspect metadata, task spec, and file properties of a .paw adapter artifact.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    adapter_path      <path>  Path to compiled .paw adapter artifact [required]                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print the raw manifest JSON instead of a formatted table                                             │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

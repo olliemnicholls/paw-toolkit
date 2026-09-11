@@ -1,0 +1,4 @@
+$ paw-kit lint-spec text --file spec.txt
+exit code: 1
+--- stdout ---
+Error: pass spec text or --file, not both.
