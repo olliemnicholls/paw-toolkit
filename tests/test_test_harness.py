@@ -2055,3 +2055,75 @@ def test_dataset_fingerprint_ignores_key_order() -> None:
     assert _dataset_fingerprint(a) == _dataset_fingerprint(b)
     # ... and still notices a real change.
     assert _dataset_fingerprint(a) != _dataset_fingerprint([{"input": "x", "output": "z"}])
+
+
+def test_new_report_counters_default_to_zero() -> None:
+    """Every counter this track added defaults to 0 on a hand-built report.
+
+    Not busywork: these fields are part of the `--json` contract, and the defaults are
+    what a consumer constructing a report (or a future caller that forgets to pass one)
+    gets. `tools/mutate.py` flipped each default from 0 to 1 and no test noticed --
+    which is how a report would come to claim one errored case in a run that had none.
+    """
+    from paw_kit.test.active import ActiveLearningReport
+    from paw_kit.test.compare import CompareReport
+
+    run = TestRunReport(task_name="t", adapter_path="a")
+    assert run.errored_cases == 0
+    assert run.abstained_cases == 0
+    assert run.standard_cases_count == 0
+    assert run.fuzz_cases_dropped == 0
+    assert run.expected_abstained == 0
+    assert run.expected_errored == 0
+    assert run.expected_scored == 0
+    assert run.expected_keyless_standard_cases == 0
+
+    cmp_ = CompareReport(task_name="t", adapter_a="a", adapter_b="b")
+    assert cmp_.expected_total == 0
+    assert cmp_.a_expected_matched == 0
+    assert cmp_.b_expected_matched == 0
+    assert cmp_.a_expected_abstained == 0
+    assert cmp_.b_expected_abstained == 0
+    assert cmp_.a_expected_errored == 0
+    assert cmp_.b_expected_errored == 0
+
+    al = ActiveLearningReport(task_name="t", adapter_path="a")
+    assert al.skipped_unfalsifiable_inputs == 0
+
+
+def test_skipped_unfalsifiable_counts_distinct_inputs_not_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H-8(b)'s skipped counter is keyed on the case INPUT.
+
+    `tools/mutate.py` found `row[0]` could become `row[1]` (the output) unnoticed,
+    because every fixture had one skipped case, or inputs and outputs in 1:1
+    correspondence. Here two distinct probes produce the same output, so keying on the
+    output would report one skipped case where there are two.
+    """
+    monkeypatch.chdir(tmp_path)
+    adapter_path = str(tmp_path / "constant.paw")
+    MockPAWBackend().compile(spec="s", examples=[], output_path=adapter_path)
+
+    class _ConstantBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str) -> str:  # type: ignore[override]
+            return "SAME-OUTPUT-FOR-EVERYTHING"
+
+    config = TestSuiteConfig(
+        task_name="skipcount",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[],
+        assertions=[AssertionRule(rule="regex_match", pattern=r"^\d{4}$")],
+        fuzzing=FuzzingConfig(adversarial_probes=["probe-one", "probe-two"]),
+        active_learning=ActiveLearningConfig(auto_recompile=True, max_iterations=2),
+    )
+
+    report = run_active_learning_loop(
+        config=config,
+        backend=_ConstantBackend(),
+        teacher_provider=lambda prompt: "2026",
+    )
+
+    assert report.skipped_unfalsifiable_inputs == 2
+    assert report.stuck_reason == "no_falsifiable_failures"

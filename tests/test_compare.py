@@ -1075,3 +1075,30 @@ def test_expected_disagreement_promotes_a_byte_identical_row(
     assert row.b_expected_match is False  # answered, and wrong
     assert row in report.differing_rows
     assert row in report.expected_disagreeing_rows
+
+
+def test_h5_both_sides_abstain_counters_are_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A and B keep separate abstain/error tallies, and each counts by one.
+
+    `tools/mutate.py` found `a_expected_abstained += 1` could become `+= 2`
+    unnoticed: every existing fixture had adapter *B* abstaining, so the A-side
+    increment was never executed by any assertion.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": "IDK" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE + 'abstain_value: "IDK"\n', encoding="utf-8")
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    report = compare_adapters("a.paw", "b.paw", suite, MockPAWBackend(), include_fuzz=False)
+
+    assert report.expected_total == 3
+    assert report.a_expected_abstained == 3
+    assert report.a_expected_matched == 0
+    assert report.a_expected_errored == 0
+    assert report.b_expected_abstained == 0
+    assert report.b_expected_matched == 3
+    assert report.a_expected_denominator.scored == 0
+    assert report.b_expected_denominator.scored == 3
