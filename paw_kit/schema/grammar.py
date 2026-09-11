@@ -271,6 +271,46 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
 # rating, a small enum-like code, a byte.
 _MAX_ENUMERATED_INT_RANGE = 256
 
+# ... and the same question for a LENGTH bound, where the answer is much sharper. A DFA
+# has no loop for `X{m,n}`: it unrolls, costing roughly n * |DFA(X)| states. That is
+# invisible in the rendered regex -- `{0,19}` and `*` are the same three characters --
+# and it lands on `logits_processor`'s budget, which caps a whole compiled grammar at
+# _MAX_FSM_STATES = 10,000 states and 3 s. Measured on this compiler's own output:
+#
+#   str, max_length=64               653 states   0.12 s
+#   str, max_length=256            2,573 states   1.45 s
+#   str, max_length=512            5,133 states   5.71 s   <- past the compile timeout
+#   List[int], max_items=8           852 states   0.11 s
+#   List[str], max_items=8           132 states   0.02 s
+#   List[nested model], max_items=8  2,116 states 1.51 s
+#   List[nested model], max_items=20 7,496 states 19.07 s  <- past both budgets
+#
+# (A string costs about ten states per character rather than one, because each position
+# carries the S-2 escape alternation.)
+#
+# So a bound that is trivial to WRITE can make a schema that used to compile fail to
+# compile -- turning a working call into a raise, which the parent track's fail-open
+# invariant forbids. Above these limits the bound is therefore warned about, with the
+# budget named, exactly like a constraint that is inexpressible for semantic reasons.
+# The limits are deliberately well inside the decoder's budget, because the budget is
+# for the WHOLE grammar and a model has more than one field. Measured on five `str`
+# fields in one model: at max_length=64 they cost 3,262 states and 3.12 s, which is
+# already past the compile timeout; at max_length=32, 1,662 states and 0.85 s. Hence 32.
+# What makes a bounded string expensive is the S-2 escape alternation -- every permitted
+# character position carries `\\(["\\/bfnrt]|uXXXX)` -- so dropping escapes from inside a
+# length-bounded string would buy an order of magnitude. That narrows the grammar
+# further (no quote, backslash or newline inside a bounded string at all) and no finding
+# asked for it, so it is recorded as an option rather than taken.
+_MAX_UNROLLED_STRING_LENGTH = 32
+_MAX_UNROLLED_COLLECTION_ITEMS = 8
+# The item count is the dominant lever -- at eight items every collection this compiler
+# can render measured between 122 and 2,122 states and under a second, including a list
+# of nested models. This second limit is the backstop for an element whose rendering is
+# enormous in its own right (a deeply nested model), where eight copies would be
+# ruinous however few they are. The collection's unbounded rendering embeds its entry
+# regex twice, so it is roughly "an entry of 500 characters or less".
+_MAX_UNROLLED_COLLECTION_CHARS = 1000
+
 _FieldConstraints = namedtuple(
     "_FieldConstraints", ["min_len", "max_len", "ge", "gt", "le", "lt", "other"]
 )
@@ -399,8 +439,52 @@ def _bounded_integer_regex(low: int, high: int) -> str:
     return "(?:" + "|".join(re.escape(str(v)) for v in range(low, high + 1)) + ")"
 
 
+def _resolve_length_bounds(
+    annotation: Any, constraints: _FieldConstraints, unbounded_regex: str
+) -> Tuple[Optional[Tuple[int, Optional[int]]], Optional[str]]:
+    """Decide whether a `MinLen`/`MaxLen` can be rendered, and say why not (S-9).
+
+    Returns `(bounds, None)` when the bound will be applied, or `(None, reason)` when it
+    will not -- either because this annotation's rendering cannot carry one, or because
+    unrolling it would blow the decoder's state budget (see the measurements above).
+    """
+    kind = _length_constraint_kind(annotation)
+    if kind is None:
+        return None, f"min_length/max_length on {annotation!r}"
+    low = constraints.min_len or 0
+    high = constraints.max_len
+    # An open-ended `{m,}` still unrolls its m mandatory repetitions, so the cost
+    # question is about whichever end is actually pinned.
+    repetitions = high if high is not None else low
+    if kind == "string" and repetitions > _MAX_UNROLLED_STRING_LENGTH:
+        return None, (
+            f"min_length/max_length on {annotation!r} (a bound of {repetitions} "
+            f"characters exceeds this compiler's unrolling budget of "
+            f"{_MAX_UNROLLED_STRING_LENGTH}: a regex has no loop for `{{m,n}}`, so the "
+            "decoder's DFA would grow by roughly ten states per permitted character "
+            "and could no longer be compiled within its state and time limits)"
+        )
+    if kind == "collection" and (
+        repetitions > _MAX_UNROLLED_COLLECTION_ITEMS
+        or len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS
+    ):
+        return None, (
+            f"min_length/max_length on {annotation!r} (a bound of {repetitions} items "
+            f"on an element rendering {len(unbounded_regex)} characters long exceeds "
+            f"this compiler's unrolling budget of {_MAX_UNROLLED_COLLECTION_ITEMS} "
+            f"items and {_MAX_UNROLLED_COLLECTION_CHARS} characters: a regex has no "
+            "loop for `{m,n}`, so the decoder's DFA would grow by one whole copy of "
+            "the element per permitted item and could no longer be compiled within its "
+            "state and time limits)"
+        )
+    return (low, high), None
+
+
 def _describe_dropped_constraints(
-    annotation: Any, constraints: _FieldConstraints, has_pattern: bool
+    annotation: Any,
+    constraints: _FieldConstraints,
+    has_pattern: bool,
+    length_reason: Optional[str],
 ) -> List[str]:
     """List, in words, the constraints the compiled grammar will NOT enforce (S-9)."""
     dropped: List[str] = []
@@ -412,8 +496,8 @@ def _describe_dropped_constraints(
                 "already determines the accepted language; intersecting the two is not "
                 "expressible here)"
             )
-        elif _length_constraint_kind(annotation) is None:
-            dropped.append(f"min_length/max_length on {annotation!r}")
+        elif length_reason is not None:
+            dropped.append(length_reason)
     numeric = [
         name
         for name, value in (
@@ -1574,6 +1658,7 @@ def _pydantic_to_regex_impl(
         field_key = (
             rendered_keys[0] if len(rendered_keys) == 1 else "(?:" + "|".join(rendered_keys) + ")"
         )
+        length_reason: Optional[str] = None
         # Check for Field(pattern=...) constraint
         pattern_override = _extract_pattern_from_field(field_info)
         if pattern_override is not None:
@@ -1586,22 +1671,28 @@ def _pydantic_to_regex_impl(
             # S-9: honour the length and range constraints a regex can express, and
             # warn about the ones it cannot instead of dropping them in silence.
             annotation = field_info.annotation
-            bounds: Optional[Tuple[int, Optional[int]]] = None
+            # The unbounded rendering is needed either way: it is the answer when no
+            # bound applies, and its SIZE is what decides whether unrolling a
+            # collection bound is affordable (see `_resolve_length_bounds`).
+            value_regex = _type_to_regex(annotation, seen=_seen, depth=_depth)
             if constraints.min_len is not None or constraints.max_len is not None:
-                if _length_constraint_kind(annotation) is not None:
-                    bounds = (constraints.min_len or 0, constraints.max_len)
-            int_range = _integer_range(constraints) if annotation is int else None
-            if int_range is not None:
-                value_regex = _bounded_integer_regex(*int_range)
-            else:
-                value_regex = _type_to_regex(
-                    annotation, seen=_seen, depth=_depth, length_bounds=bounds
+                bounds, length_reason = _resolve_length_bounds(
+                    annotation, constraints, value_regex
                 )
+                if bounds is not None:
+                    value_regex = _type_to_regex(
+                        annotation, seen=_seen, depth=_depth, length_bounds=bounds
+                    )
+            if annotation is int:
+                int_range = _integer_range(constraints)
+                if int_range is not None:
+                    value_regex = _bounded_integer_regex(*int_range)
         _warn_dropped_constraints(
             model,
             field_name,
             _describe_dropped_constraints(
-                field_info.annotation, constraints, pattern_override is not None
+                field_info.annotation, constraints, pattern_override is not None,
+                length_reason,
             ),
         )
         field_pattern = f"{field_key}{JSON_WHITESPACE}:{JSON_WHITESPACE}{value_regex}"

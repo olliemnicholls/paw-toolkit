@@ -2653,3 +2653,91 @@ def test_an_alias_equal_to_its_own_field_name_is_not_a_collision_S_5() -> None:
     assert _re.fullmatch(pat, '{"full_name":"v"}') is not None
     # ... and the alternation is not doubled up.
     assert pat.count('"full_name"') == 1, pat
+
+
+# --- S-9, continued: the unrolling budget --------------------------------------------
+
+
+def test_a_length_bound_past_the_unrolling_budget_warns_rather_than_compiling_S_9() -> None:
+    """A `{m,n}` has no loop in a DFA: it unrolls, and that lands on the decoder's caps.
+
+    Measured on this compiler's own output: five `str` fields at `max_length=64` cost
+    3,262 FSM states and 3.12 s, already past `_FSM_TIMEOUT_SECONDS`; a
+    `List[nested model]` at `max_items=20` costs 7,496 states and 19 s. Both would turn
+    a schema that compiles today into a `PAWSchemaError` from `_compile_fsm_safe` --
+    a new raise on a path the caller depends on, which the parent track's fail-open
+    invariant forbids. Past the budget the bound is warned about instead, and the
+    warning names the budget so the reader can tell this apart from a constraint that
+    is inexpressible for semantic reasons.
+    """
+    import re as _re
+
+    from paw_kit.schema.grammar import (
+        _MAX_UNROLLED_COLLECTION_ITEMS,
+        _MAX_UNROLLED_STRING_LENGTH,
+    )
+
+    pydantic_to_regex.cache_clear()
+    at_budget = create_model(
+        "S9Budget", x=(str, Field(max_length=_MAX_UNROLLED_STRING_LENGTH))
+    )
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        pat = pydantic_to_regex(at_budget, anchors=True)
+    assert "{0,%d}" % _MAX_UNROLLED_STRING_LENGTH in pat
+
+    over = create_model(
+        "S9OverBudget", x=(str, Field(max_length=_MAX_UNROLLED_STRING_LENGTH + 1))
+    )
+    with pytest.warns(UserWarning, match="unrolling budget") as caught:
+        over_pat = pydantic_to_regex(over, anchors=True)
+    assert "exceeds this compiler's unrolling budget" in str(caught[0].message)
+    # ... and the grammar falls back to the unbounded rendering, not to nothing.
+    assert _re.fullmatch(over_pat, '{"x":"%s"}' % ("a" * 200)) is not None
+
+    over_list = create_model(
+        "S9OverList",
+        x=(List[int], Field(max_length=_MAX_UNROLLED_COLLECTION_ITEMS + 1)),
+    )
+    with pytest.warns(UserWarning, match="unrolling budget"):
+        pydantic_to_regex(over_list, anchors=True)
+
+
+def test_the_unrolling_budget_keeps_a_realistic_schema_compilable_S_9() -> None:
+    """The budget's whole point: a normal schema must still fit the decoder's limits.
+
+    Without it, this invoice model compiled to 8,402 FSM states in 23.8 s -- past
+    `_FSM_TIMEOUT_SECONDS` and nearly past `_MAX_FSM_STATES`, i.e. a schema that worked
+    before this track would have stopped compiling. This is the regression test for
+    that, asserted against the decoder's own budget rather than against a wall clock,
+    so it cannot flake on a loaded machine.
+    """
+    import warnings as _warnings
+
+    import interegular
+
+    from paw_kit.schema.logits_processor import _MAX_FSM_STATES
+
+    class BudgetLineItem(BaseModel):
+        sku: str = Field(pattern=r"[A-Z]{3}-[0-9]{4}")
+        qty: int = Field(ge=1, le=100)
+        unit_price: Decimal
+
+    class BudgetInvoice(BaseModel):
+        invoice_id: uuid.UUID
+        issued: dt.date
+        due: dt.datetime
+        customer: str = Field(min_length=1, max_length=64)
+        items: List[BudgetLineItem] = Field(min_length=1, max_length=20)
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")
+        pattern = pydantic_to_regex(BudgetInvoice)
+
+    fsm = interegular.parse_pattern(pattern).to_fsm()
+    assert len(fsm.states) < _MAX_FSM_STATES // 2, (
+        f"a realistic schema now costs {len(fsm.states)} states, over half the "
+        f"decoder's whole budget of {_MAX_FSM_STATES}"
+    )
