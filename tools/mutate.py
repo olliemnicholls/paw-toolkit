@@ -360,8 +360,34 @@ class Runner:
                 cmd, cwd=wd, capture_output=True, text=True, env=env,
                 timeout=self.full_timeout if full else self.timeout,
             )
-        except subprocess.TimeoutExpired:
-            return Outcome("TIMEOUT", "timed out", "", "")
+        except subprocess.TimeoutExpired as e:
+            # A hung *process* is not the same thing as an *undecided* test result.
+            # Some mutations (e.g. a `daemon=True` flag flipped to `False` on a
+            # worker thread) make pytest report a definitive result -- including a
+            # kill -- and only then hang forever at interpreter shutdown, joining a
+            # thread nothing will ever finish, long after the outcome was already
+            # decided. `subprocess.run`'s `TimeoutExpired` carries whatever
+            # stdout/stderr had already been captured before the process was
+            # killed (verified by execution: a pytest run that fails in 0.5s and
+            # then hangs still has "1 failed" sitting in `e.stdout` at the 10s
+            # mark) -- as *bytes*, even though this call passes `text=True`; that
+            # decoding happens on the success path inside `subprocess.run` itself,
+            # not on this exception, so it must be done here too.
+            #
+            # A definitive "N failed" line is real evidence of a kill, not a guess
+            # -- unlike a genuine timeout with no result recorded at all, which
+            # still returns SURVIVED_TIMEOUT exactly as before.
+            def _decode(b: object) -> str:
+                if isinstance(b, bytes):
+                    return b.decode("utf-8", errors="replace")
+                return b or ""
+
+            stdout, stderr = _decode(e.stdout), _decode(e.stderr)
+            combined = stdout + stderr
+            if re.search(r"^\d+ failed", combined, re.M):
+                tail = combined.strip().splitlines()[-1] if combined.strip() else ""
+                return Outcome(1, tail, stdout, stderr)
+            return Outcome("TIMEOUT", "timed out", stdout, stderr)
         combined = (r.stdout or "") + (r.stderr or "")
         tail = combined.strip().splitlines()[-1] if combined.strip() else ""
         return Outcome(r.returncode, tail, r.stdout or "", r.stderr or "")

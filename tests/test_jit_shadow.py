@@ -470,6 +470,32 @@ def test_failed_state_is_terminal_and_never_enters_shadow(tmp_path: Path) -> Non
 # --- Safety and concurrency ---------------------------------------------------
 
 
+def test_shadow_worker_thread_is_a_daemon(tmp_path: Path) -> None:
+    """The per-task worker thread must be `daemon=True`, checked directly.
+
+    Not testing this any other way (letting the test process exit and checking
+    it doesn't hang) is not just slower -- it does not terminate. If this thread
+    were ever created non-daemon, nothing pulls it off `queue.Queue.get()`'s
+    blocking wait once the test suite is otherwise done, and the interpreter
+    waits forever to join it at exit: a mutation of this one flag is not merely
+    slow to detect from the outside, it is undetectable within any bounded
+    timeout that way. Asserting the attribute directly kills it in milliseconds.
+    """
+    backend = ScriptedBackend()
+    svc, _ = _make(tmp_path, "daemoncheck", backend, shadow_window=1)
+    svc("a")
+    svc("b")
+    svc("c")  # past `threshold=2`: an adapter exists now, so this call is shadowed
+    _drain(svc)
+
+    key = (str(svc.db.db_path), svc.task_id)
+    thread = _GLOBAL_SHADOW_RUNNER._threads[key]
+    assert thread.daemon is True, (
+        "shadow worker thread must be a daemon thread, or a decorated caller's "
+        "process can never exit while shadow mode is active"
+    )
+
+
 def test_shadow_worker_exception_does_not_propagate_and_counts_as_disagreement(
     tmp_path: Path,
 ) -> None:
