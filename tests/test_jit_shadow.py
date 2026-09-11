@@ -81,17 +81,46 @@ def _make(
         calls["n"] += 1
         return f"teacher:{text}"
 
+    # `shadow_queue_size` deliberately overrides the production default of 8 for every
+    # test that does not ask for something else. At the default, a test that submits more
+    # than 8 comparisons faster than the worker drains them has the surplus *silently
+    # dropped* -- and a dropped comparison never enters the window denominator, so the
+    # agreement rate a test asserts on becomes a function of machine speed. That is what
+    # made `test_demotion_boundary_from_both_sides` fail ~1 in 12 with rate 0.75 (6/8)
+    # instead of 0.6 (6/10). Several tests here already passed an explicit 16 or 32 for
+    # exactly this reason; this makes the defence uniform instead of per-site.
+    #
+    # Queue capacity itself is covered deliberately, and still is:
+    # `test_shadow_queue_drops_when_full_and_never_blocks` sets `shadow_queue_size=1`.
     params: Dict[str, Any] = dict(
-        spec=spec, threshold=2, cache_dir=cache_dir, backend=backend, sync_compile=True
+        spec=spec, threshold=2, cache_dir=cache_dir, backend=backend, sync_compile=True,
+        shadow_queue_size=256,
     )
     params.update(kwargs)
     return compile_on_hit(**params)(teacher), calls
 
 
-def _drain(wrapper: Any, timeout: float = 10.0) -> None:
+def _drain(wrapper: Any, timeout: float = 10.0, allow_drops: bool = False) -> None:
+    """Wait for the task's shadow worker to finish, then assert nothing was dropped.
+
+    The drop assertion is the point: a dropped comparison is not an error and is not
+    logged above DEBUG after the first one, but it silently removes a sample from the
+    window every later assertion is computed over. Without this check that shows up as
+    an intermittent wrong *number*, not as a failure pointing at its cause. Tests that
+    exercise queue saturation on purpose pass `allow_drops=True`.
+    """
     assert _GLOBAL_SHADOW_RUNNER.drain(
         wrapper.task_id, timeout, db_path=str(wrapper.db.db_path)
     ), "shadow worker did not drain in time"
+    if not allow_drops:
+        dropped = _GLOBAL_SHADOW_RUNNER.stats(
+            wrapper.task_id, str(wrapper.db.db_path)
+        )["dropped"]
+        assert dropped == 0, (
+            f"{dropped} shadow comparison(s) were dropped on a full queue; every "
+            "assertion about an agreement rate below this point is computed over a "
+            "window that is missing samples. Raise shadow_queue_size for this test."
+        )
 
 
 def _query(db: TraceDB, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
@@ -494,7 +523,7 @@ def test_shadow_queue_drops_when_full_and_never_blocks(tmp_path: Path) -> None:
     assert stats["dropped"] > 0
 
     gate.set()
-    _drain(svc)
+    _drain(svc, allow_drops=True)  # dropping is this test's subject
     agreement = svc.get_agreement()
     assert agreement["samples"] + stats["dropped"] <= 50
     assert agreement["samples"] < 50, "dropped jobs must not appear in the denominator"
