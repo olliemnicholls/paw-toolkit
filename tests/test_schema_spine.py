@@ -624,9 +624,12 @@ PATTERNS_PYDANTIC_ACCEPTS = [
     r"[^\D]",
     r"\p{L}+",          # rust-regex only; Python `re` cannot compile it
     r"\b\w+\b",         # interegular Unsupported
-    r"\Qa.b\E",         # interegular InvalidSyntax
+    # NOT listed: `(?=a)b`, `(?<=a)b` and `\Qa.b\E`. The report and the track spec
+    # cite those as patterns pydantic accepts; executed against pydantic 2.13.5 it
+    # REJECTS all three at class-build time with SchemaError, so they cannot reach the
+    # compiler through `Field(pattern=...)` at all. They are covered where they are
+    # genuinely reachable instead -- `RegexLogitsProcessor`, which takes any string.
     r"[[:alpha:]]+",    # POSIX: pydantic and Python `re` read this differently
-    r"(?=a)b",          # lookahead
     r"a(?i)b",          # rust-regex only
 ]
 

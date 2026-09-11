@@ -1111,3 +1111,25 @@ def test_currency_pattern_keeps_its_dollar_sign_S_7() -> None:
     pat = pydantic_to_regex(CurrencyModel, anchors=True)
     assert _re.match(pat, '{"x":"a$"}') is not None, "grammar rejects the legal value"
     assert _re.match(pat, '{"x":"a"}') is None, "grammar still accepts the value pydantic rejects"
+
+
+# --- S-15: interegular's own exception types are wrapped in PAWSchemaError -----------
+
+
+@pytest.mark.parametrize("pattern_src", [r"\bfoo\b", r"\p{L}+", r"\Qa.b\E", r"(?<=a)b"])
+def test_compile_fsm_safe_wraps_interegular_exceptions_S_15(pattern_src: str) -> None:
+    """`Unsupported` and `InvalidSyntax` must surface as PAWSchemaError (S-15)."""
+    import paw_kit.schema.logits_processor as lp
+
+    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
+        lp._compile_fsm_safe(pattern_src)
+
+
+def test_regex_logits_processor_wraps_interegular_exceptions_S_15() -> None:
+    """The public constructor is the real beneficiary: it has no other wrapper (S-15).
+
+    `loader.py` already converts anything that is not a PAWSchemaError, but
+    `RegexLogitsProcessor` is a public export constructed directly.
+    """
+    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
+        RegexLogitsProcessor(regex_pattern=r"\bword\b", vocabulary={0: "a"}, eos_token_id=1)

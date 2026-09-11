@@ -6,6 +6,7 @@ import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 import interegular
 from interegular.fsm import FSM
+from interegular.patterns import InvalidSyntax, Unsupported
 
 from paw_kit.schema.exceptions import PAWSchemaError
 
@@ -58,7 +59,23 @@ def _compile_fsm_safe(pattern: str) -> FSM:
         )
 
     def _compile() -> FSM:
-        fsm = interegular.parse_pattern(pattern).to_fsm()
+        # S-15: interegular raises its own exception types for a construct it cannot
+        # express -- `Unsupported` for `\b`, `\p{L}`, lookaround and backreferences,
+        # `InvalidSyntax` for e.g. `\Qa.b\E`. Both are raised lazily -- a lookback
+        # parses fine and only fails inside `to_fsm()` -- so both calls are wrapped. Letting them escape hands the caller a
+        # third-party exception type instead of the documented `PAWSchemaError` that
+        # `paw_kit` keys on. `loader.py:74-79` happens to wrap anything that is not a
+        # `PAWSchemaError`, so the real beneficiary is `RegexLogitsProcessor.__init__`,
+        # which has no such wrapper and is a public export.
+        try:
+            fsm = interegular.parse_pattern(pattern).to_fsm()
+        except (Unsupported, InvalidSyntax) as exc:
+            raise PAWSchemaError(
+                f"Cannot compile the pattern into a DFA: {type(exc).__name__}: {exc}. "
+                "Grammar-constrained decoding needs a pattern expressible as a finite "
+                "automaton; zero-width assertions (\\b, \\B), lookaround, "
+                "backreferences and Unicode property classes (\\p{...}) are not."
+            ) from exc
         if len(fsm.states) > _MAX_FSM_STATES:
             raise PAWSchemaError(
                 f"Compiled FSM exceeds the maximum of {_MAX_FSM_STATES} states "
