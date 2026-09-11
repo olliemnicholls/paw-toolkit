@@ -758,11 +758,10 @@ def test_lookup_reports_exact_and_exact_excluding_the_spec_leak(lookup_run: dict
     """A named recomputation over the untouched `cases[]` of the committed lookup run.
 
     `measure_finetune_lookup.score_arm(rows, folding_countries, ["r168"])` on arm A:
-    99/300 = 33.0% overall, 98/299 = 32.78% with the spec-answered case removed. Every arm
-    answered `r168` correctly, so every arm's exact count drops by exactly one.
-
-    NOTE for Phase A3: 98/299 is 32.7759%, which is **32.8%** to one decimal place. The
-    track file's Edit 1 says "33.0% -> 32.7%"; 32.7 is the truncation, not the rounding.
+    99/300 = 33.0% overall, 98/299 = 32.7759% = **32.8%** to one decimal place with the
+    spec-answered case removed (32.7 is the truncation, not the rounding -- corrected in
+    the track file and the bug-hunt report during this track). Every arm answered `r168`
+    correctly, so every arm's exact count drops by exactly one.
     """
     mfl = _load("measure_finetune_lookup")
     arms = {a["arm"]: a for a in lookup_run["arms"]}

@@ -327,7 +327,11 @@ def main() -> int:
         )
 
     # Warm against warm, and the helper raises rather than quietly producing a number if
-    # either side is not warm. (B-4.)
+    # either side is not warm. (B-4.) `mean_ms_warm_kind` is always WARM by construction
+    # (it drops the first call within its own arm, unconditionally), so this specific call
+    # can never raise -- the real protection against B-4's original bug is the discarded
+    # warm-up generation above. The guard's value is for any *other* caller: one that
+    # compares `mean_ms`/`mean_ms_kind` instead, which does vary with `warmup_discarded`.
     comparison = compare_arm_means(
         "unconstrained", arms["unconstrained"]["mean_ms_warm"],
         arms["unconstrained"]["mean_ms_warm_kind"],

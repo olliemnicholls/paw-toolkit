@@ -188,7 +188,8 @@ def call_teacher(client: "anthropic.Anthropic", ticket_body: str) -> Triage:
 
 def build_summary(label: str, adapter_path: str, manifest: dict, rows: list,
                   folded_inputs: set) -> dict:
-    """Assemble the artifact. Pure: every field is derived from its arguments.
+    """Assemble the artifact. Every field is derived from its arguments, except
+    `n_folding_pool` (reports the constant pool size, not this run's fold) -- see below.
 
     Extracted from `main()` so the summary-completeness properties B-1 asks for -- a
     held-out denominator, a held-out rate, and a leak flag counting scored rows that were
@@ -217,7 +218,16 @@ def build_summary(label: str, adapter_path: str, manifest: dict, rows: list,
         "urgency_within_1_rate_heldout": slices["heldout"]["urgency_within_1_rate"],
         "slices": slices,
         "leak_flags": {
-            "folding_pool_disjoint_from_eval": not (set(FOLDING_TICKETS) & set(TICKETS)),
+            # Checked against `folded_inputs`/`rows` (this call's arguments), not the module
+            # constants `FOLDING_TICKETS`/`TICKETS` -- a flag built from the constants would
+            # report on what the script *would* fold by default, not on what this run
+            # actually folded, and would stay True even if a future caller passed a
+            # leaking `folded_inputs` by mistake. `scored_rows_folded_into_spec` below is
+            # the direct evidence either way; this flag is the same check from the other
+            # direction.
+            "folding_pool_disjoint_from_eval": not (
+                folded_inputs & {r["ticket"] for r in rows}
+            ),
             "scored_rows_folded_into_spec": len(leaked_rows),
             "leaked_tickets": leaked_rows,
             "note": (
@@ -283,8 +293,6 @@ def main() -> int:
 
     folded_inputs = {ex["input"] for ex in examples}
     rows = []
-    exact_agree = 0
-    urgency_close = 0
     for i, ticket in enumerate(TICKETS):
         adapter_raw = backend.infer(adapter_path, ticket)
         try:
@@ -301,8 +309,6 @@ def main() -> int:
             agree_urgency = abs(adapter_out.urgency_score - teacher_out.urgency_score) <= 1
 
         exact = bool(adapter_out) and agree_priority and agree_department and agree_urgency
-        exact_agree += int(exact)
-        urgency_close += int(agree_urgency)
 
         row = {
             "ticket": ticket,
