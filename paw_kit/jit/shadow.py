@@ -73,18 +73,34 @@ _RunnerKey = Tuple[str, str]
 
 
 def _coerce(value: Any, response_model: Optional[Type[BaseModel]]) -> Any:
-    """Re-validate a persisted answer back into the shape the comparison runs on.
+    """Validate a **raw** (undecoded) teacher/adapter value into the shape the
+    comparison runs on (J-4/J-10).
 
-    With a `response_model` both sides are validated into model instances, so the
-    comparison is field-wise over real objects and the stored row is a faithful record
-    of exactly what was compared. A validation failure here is an *adapter error*, not
-    a crash: the caller has already been served by the teacher.
+    `value` is the real object the teacher or adapter call returned -- never a
+    round trip through the persisted `shadow_pairs` string (see this track's
+    Dependency check on J-4 for why: `agreement_fn` must never see a serialized
+    string on either side when a raw value is available).
+
+    Without a `response_model`, this is a pure passthrough: the raw value
+    (`str`, `dict`, `list`, whatever the teacher/adapter actually returned) goes
+    to `agreement_fn` unchanged. With one, both sides are validated into model
+    instances, so the comparison is field-wise over real objects: a `dict` is
+    validated with `model_validate`, a `str` with `model_validate_json`, an
+    already-`response_model` instance passes through, and anything else (a
+    list, a bare scalar) falls back through its canonical string form. A
+    validation failure here is a *coercion* failure, not a crash -- the caller
+    has already been served by the teacher; the caller of `_coerce` is
+    responsible for attributing it to the right side (teacher vs adapter, J-10).
     """
     if response_model is None:
         return value
     if isinstance(value, BaseModel):
         return value
-    return response_model.model_validate_json(value if isinstance(value, str) else str(value))
+    if isinstance(value, dict):
+        return response_model.model_validate(value)
+    if isinstance(value, str):
+        return response_model.model_validate_json(value)
+    return response_model.model_validate_json(stringify_answer(value))
 
 
 @dataclass(frozen=True)
@@ -114,6 +130,19 @@ class ShadowJob:
     teacher_latency_ms: Optional[float] = None
     adapter_output: Optional[str] = None
     adapter_latency_ms: Optional[float] = None
+    # J-4: the RAW (undecoded) values, carried alongside the serialized
+    # `teacher_output`/`adapter_output` above -- those stay exactly what they
+    # already were (the persisted, possibly-redacted `shadow_pairs` form);
+    # these are what `agreement_fn` actually compares. Each is populated by
+    # whichever side already knows it at enqueue (decorator.py: `raw_teacher`
+    # for a `shadow` job, `raw_adapter` for an `audit` job) and filled in on
+    # this worker for the other side, from the real call it makes -- never by
+    # round-tripping through the string above. Same mutation caveat as
+    # `run_teacher`'s `partial` below: `raw_adapter` on an audit job holds a
+    # live reference to the caller's own returned object for the queue's
+    # lifetime.
+    raw_teacher: Any = None
+    raw_adapter: Any = None
     run_adapter: Optional[Callable[[str], Any]] = None
     run_teacher: Optional[Callable[[], Any]] = None
     response_model: Optional[Type[BaseModel]] = None
@@ -404,7 +433,12 @@ class ShadowRunner:
         teacher_latency = job.teacher_latency_ms
         adapter_output = job.adapter_output
         adapter_latency = job.adapter_latency_ms
-        adapter_value: Any = None
+        # J-4: the raw (undecoded) values agreement_fn will actually compare.
+        # Seeded from whichever side decorator.py already knew at enqueue; the
+        # other side is filled in below, from the real call this worker makes --
+        # never by round-tripping through the serialized string above.
+        raw_teacher: Any = job.raw_teacher
+        raw_adapter: Any = job.raw_adapter
         verdict: Optional[str] = None
         error_type: Optional[str] = None
 
@@ -414,11 +448,11 @@ class ShadowRunner:
                 # J-2: the same deadline mechanism as the served path, on the
                 # separate shadow-path pool -- a wedged adapter must not stall
                 # this task's queue forever.
-                adapter_value = _SHADOW_DEADLINE_POOL.call(
+                raw_adapter = _SHADOW_DEADLINE_POOL.call(
                     job.run_adapter, job.input_payload, job.adapter_timeout_s
                 )
                 adapter_latency = (time.perf_counter() - started) * 1000
-                adapter_output = stringify_answer(adapter_value)
+                adapter_output = stringify_answer(raw_adapter)
             except PoolExhausted as exc:
                 # Infrastructure, not this adapter's drift (see the pool's own
                 # module-level comment above): a different task's wedged
@@ -428,6 +462,7 @@ class ShadowRunner:
                 verdict = "pool_exhausted"
                 error_type = type(exc).__name__
                 adapter_output = None
+                raw_adapter = None
                 self._log_shadow_error(job.task_id, error_type, exc)
             except BaseException as exc:  # noqa: BLE001
                 # Includes DeadlineExceeded: unlike PoolExhausted, this call got
@@ -437,45 +472,52 @@ class ShadowRunner:
                 verdict = "error"
                 error_type = type(exc).__name__
                 adapter_output = None
+                raw_adapter = None
                 self._log_shadow_error(job.task_id, error_type, exc)
         else:
             started = time.perf_counter()
             try:
-                teacher_value_raw = job.run_teacher()  # type: ignore[misc]
+                raw_teacher = job.run_teacher()  # type: ignore[misc]
                 teacher_latency = (time.perf_counter() - started) * 1000
-                teacher_output = stringify_answer(teacher_value_raw)
+                teacher_output = stringify_answer(raw_teacher)
             except BaseException as exc:  # noqa: BLE001
                 # Not the adapter's fault: excluded from numerator *and* denominator.
                 verdict = "teacher_error"
                 error_type = type(exc).__name__
                 teacher_output = None
+                raw_teacher = None
                 self._log_shadow_error(job.task_id, error_type, exc)
 
+        # J-10: the two sides are coerced -- and any failure attributed --
+        # SEPARATELY. A teacher-side coercion failure (the teacher's raw value
+        # does not validate against response_model) is not the adapter's fault,
+        # exactly like a teacher *exception* above: `teacher_error`, excluded
+        # from both the promotion numerator and denominator. Only an
+        # adapter-side coercion failure stays `error`.
         if verdict is None:
             try:
-                teacher_compare = _coerce(teacher_output, job.response_model)
-                if job.phase == "shadow":
-                    adapter_compare = (
-                        adapter_value
-                        if isinstance(adapter_value, BaseModel) or job.response_model is None
-                        else _coerce(adapter_output, job.response_model)
-                    )
-                else:
-                    adapter_compare = _coerce(adapter_output, job.response_model)
+                teacher_compare = _coerce(raw_teacher, job.response_model)
             except Exception as exc:
-                verdict = "error"
+                verdict = "teacher_error"
                 error_type = type(exc).__name__
                 self._log_shadow_error(job.task_id, error_type, exc)
             else:
-                agreement_fn = job.agreement_fn
-                agreed, agreement_error = safe_agreement(
-                    agreement_fn, teacher_compare, adapter_compare  # type: ignore[arg-type]
-                )
-                if agreement_error is not None:
+                try:
+                    adapter_compare = _coerce(raw_adapter, job.response_model)
+                except Exception as exc:
                     verdict = "error"
-                    error_type = agreement_error
+                    error_type = type(exc).__name__
+                    self._log_shadow_error(job.task_id, error_type, exc)
                 else:
-                    verdict = "agree" if agreed else "disagree"
+                    agreement_fn = job.agreement_fn
+                    agreed, agreement_error = safe_agreement(
+                        agreement_fn, teacher_compare, adapter_compare  # type: ignore[arg-type]
+                    )
+                    if agreement_error is not None:
+                        verdict = "error"
+                        error_type = agreement_error
+                    else:
+                        verdict = "agree" if agreed else "disagree"
 
         redact = job.redact_fn
         stored_input = redact(job.input_payload) if redact else job.input_payload

@@ -649,6 +649,14 @@ def compile_on_hit(
                             phase="audit",
                             input_payload=input_payload,
                             adapter_output=stringify_answer(result),
+                            # J-4: the raw, undecoded served value -- not just its
+                            # stringified persistence form -- so agreement_fn (e.g.
+                            # field_tolerance_agreement) sees the same dict/model
+                            # the caller actually got, on the audit path too. Same
+                            # mutation caveat as run_teacher's partial just below:
+                            # this holds a live reference to `result` for the
+                            # queue's lifetime.
+                            raw_adapter=result,
                             adapter_latency_ms=served_latency_ms,
                             # Deliberately holds the caller's own args/kwargs by
                             # reference and calls func on a worker thread: the wrapped
@@ -708,6 +716,9 @@ def compile_on_hit(
                     phase="shadow",
                     input_payload=input_payload,
                     teacher_output=teacher_output_str,
+                    # J-4: the raw, undecoded teacher value -- see the audit call
+                    # site above for the same fix on that side.
+                    raw_teacher=teacher_result,
                     teacher_latency_ms=latency_ms,
                     run_adapter=_make_adapter_runner(
                         task_id, adapter_path, response_model, active_backend
