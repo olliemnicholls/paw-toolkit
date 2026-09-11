@@ -257,6 +257,25 @@ def build_spec(table: Dict[str, str]) -> str:
 
 SPEC = build_spec(TABLE)
 
+# ------------------------------------------------------- B-8a: spec/eval overlap
+#
+# The spec's worked example one renders byte-identical to evaluation case `r168`
+# ("Ship this order to Porto, Portugal."), answer stated, so that one case is in every
+# arm's prompt. `build_fixture`'s existing overlap assertion checks folding-vs-eval only.
+#
+# This is deliberately NOT folded into that RuntimeError. The overlap exists *now*, so
+# raising on it would raise on every invocation, and the only ways to clear it are changing
+# `SPEC` -- which changes the upstream compile-cache key and invalidates the committed
+# 33.0/29.0/97.7/100% lookup table, requiring three paid recompiles -- or changing the
+# evaluation template. So the overlap is computed, recorded, and asserted to be exactly the
+# known one: it may not grow.
+KNOWN_SPEC_EVAL_OVERLAP = ["r168"]
+
+
+def spec_eval_overlap(spec: str, evaluation: List[Dict[str, Any]]) -> List[str]:
+    """Ids of evaluation cases whose input appears verbatim inside `spec`. Pure."""
+    return sorted(c["id"] for c in evaluation if c["input"] in spec)
+
 
 # ------------------------------------------------------------------- fixture
 
@@ -321,6 +340,17 @@ def build_fixture(out_path: Path) -> Dict[str, Any]:
     if overlap:  # pragma: no cover -- structurally impossible, asserted anyway
         raise RuntimeError(f"folding pool overlaps the evaluation set: {overlap}")
 
+    # B-8a: a *reported* overlap, not an absence assertion. Raise only if it grows.
+    spec_overlap = spec_eval_overlap(SPEC, evaluation)
+    if spec_overlap != KNOWN_SPEC_EVAL_OVERLAP:
+        raise RuntimeError(
+            f"spec/eval overlap changed: {spec_overlap} != {KNOWN_SPEC_EVAL_OVERLAP}. "
+            "The spec's worked examples render eval case(s) verbatim with the answer "
+            "stated, so every arm has them in its prompt. If this grew, either the "
+            "templates or the worked examples changed; fix that rather than widening the "
+            "known set. Report B-8a."
+        )
+
     fixture = {
         "task": "region_code_lookup",
         "spec": SPEC,
@@ -343,6 +373,16 @@ def build_fixture(out_path: Path) -> Dict[str, Any]:
         "n_evaluation": len(evaluation),
         "n_folding": len(folding),
         "n_misleading": sum(1 for c in evaluation if c["misleading_city"]),
+        # B-8a: which evaluation cases the spec itself answers, recorded rather than
+        # assumed absent.
+        "spec_eval_overlap_ids": spec_overlap,
+        "known_spec_eval_overlap": list(KNOWN_SPEC_EVAL_OVERLAP),
+        "spec_eval_overlap_note": (
+            "The spec's worked example one renders these evaluation case(s) byte-identically "
+            "with the answer stated, so they are in every arm's prompt. Scores are reported "
+            "both over all 300 cases and excluding them (see "
+            "scores.excluding_spec_leak, denominator 299)."
+        ),
         "folding_countries": fold_countries,
         "folding_codes": sorted({f["expected"] for f in folding}),
         "folding_examples": folding,
@@ -510,8 +550,15 @@ def _rates(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def score_arm(rows: List[Dict[str, Any]], folding_countries: List[str]) -> Dict[str, Any]:
+def score_arm(rows: List[Dict[str, Any]], folding_countries: List[str],
+              spec_eval_overlap_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    overlap_ids = set(spec_eval_overlap_ids or ())
     out: Dict[str, Any] = {"overall": _rates(rows)}
+    # B-8a: the same metrics with the spec-answered case(s) removed from the denominator.
+    # Reported alongside `overall` rather than replacing it, so both numbers are available
+    # and the difference is visible.
+    out["excluding_spec_leak"] = _rates([r for r in rows if r["id"] not in overlap_ids])
+    out["spec_eval_overlap_ids"] = sorted(overlap_ids)
     out["by_template"] = {
         t["id"]: _rates([r for r in rows if r["template"] == t["id"]]) for t in TEMPLATES}
     out["by_country"] = {
@@ -631,6 +678,18 @@ def main() -> int:
     examples = fold_examples(fixture)
     folding_countries = fixture["folding_countries"]
 
+    # B-8a. Recomputed here rather than trusted from the fixture, so a fixture written
+    # before this field existed -- the committed `finetune-lookup-regions.json` is one --
+    # still gets a correct `excluding_spec_leak` denominator, and so that the assertion
+    # holds for a reused fixture and not only for a freshly built one.
+    spec_overlap_ids = spec_eval_overlap(SPEC, evaluation)
+    if spec_overlap_ids != KNOWN_SPEC_EVAL_OVERLAP:
+        raise RuntimeError(
+            f"spec/eval overlap changed: {spec_overlap_ids} != {KNOWN_SPEC_EVAL_OVERLAP}. "
+            "See report B-8a and build_fixture's note."
+        )
+    print(f"[spec-leak] evaluation cases the spec itself answers: {spec_overlap_ids}")
+
     wanted = [a.strip().upper() for a in args.arms.split(",") if a.strip()]
     arms = [a for a in arm_specs(out_dir) if a["arm"] in wanted]
 
@@ -678,7 +737,8 @@ def main() -> int:
             "manifest_version": md.get("manifest_version"),
             "errors": sum(1 for r in rows if r["error"]),
             "latency_ms": _latency(rows),
-            "scores": score_arm(rows, folding_countries),
+            "scores": score_arm(rows, folding_countries,
+                                spec_overlap_ids),
             "cases": rows,
         })
 
@@ -702,6 +762,8 @@ def main() -> int:
         "n_evaluation": len(evaluation),
         "n_folding": fixture["n_folding"],
         "folding_countries": folding_countries,
+        "spec_eval_overlap_ids": spec_overlap_ids,
+        "known_spec_eval_overlap": list(KNOWN_SPEC_EVAL_OVERLAP),
         "compiles_made_this_run": compiles_made,
         "arms": summary_arms,
     }
@@ -712,6 +774,10 @@ def main() -> int:
         print(f"\n[{a['arm']}] {a['description']}")
         print(f"   exact {r['exact']:.1f}%  strict shape {r['strict_shape']:.1f}%  "
               f"in vocabulary {r['in_vocabulary']:.1f}%")
+        xsl = s["excluding_spec_leak"]
+        print(f"   exact excluding the spec's own worked example(s) "
+              f"({xsl['counts']['exact']}/{xsl['n']}): "
+              f"{xsl['rates_pct']['exact']:.1f}%")
         print(f"   distinct outputs {s['distinct_outputs']}  "
               f"top share {s['top_output_share_pct']:.1f}%  "
               f"top-2 share {s['top_two_output_share_pct']:.1f}%")

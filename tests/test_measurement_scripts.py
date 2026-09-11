@@ -694,3 +694,114 @@ def test_shadow_binomial_p_is_parameterised_and_exact(shadow_run: dict) -> None:
     assert "--binomial-p" in src
     assert '"binomial_p_source"' in src
     assert "full_agreement_rate_heldout" in src
+
+
+# ===============================================================================  B-8a
+#
+# The lookup spec's worked example one renders byte-identical to evaluation case `r168`
+# ("Ship this order to Porto, Portugal.") with its answer stated, so that case is in every
+# arm's prompt. `build_fixture`'s overlap assertion checked folding-vs-eval only.
+
+LOOKUP_ARTIFACT = _MEASUREMENTS / "finetune-lookup-3080-20260910-192159.json"
+LOOKUP_FIXTURE = _MEASUREMENTS / "finetune-lookup-regions.json"
+
+
+@pytest.fixture(scope="module")
+def lookup_run() -> dict:
+    return json.loads(LOOKUP_ARTIFACT.read_text())
+
+
+def test_lookup_spec_eval_overlap_is_exactly_r168() -> None:
+    """The reported-overlap assertion: `spec_eval_overlap_ids == ["r168"]`.
+
+    Deliberately a *reported* overlap and not an absence assertion. The overlap exists
+    now, and the only ways to clear it are changing `SPEC` -- which changes the upstream
+    compile-cache key and invalidates the committed 33.0/29.0/97.7/100% table, costing
+    three paid recompiles -- or changing the evaluation template. So it is computed,
+    recorded, and pinned against growth.
+    """
+    mfl = _load("measure_finetune_lookup")
+    committed = json.loads(LOOKUP_FIXTURE.read_text())
+    assert mfl.KNOWN_SPEC_EVAL_OVERLAP == ["r168"]
+    assert mfl.spec_eval_overlap(mfl.SPEC, committed["evaluation"]) == ["r168"]
+
+    leaked = [c for c in committed["evaluation"] if c["id"] == "r168"][0]
+    assert leaked["input"] == "Ship this order to Porto, Portugal."
+    assert leaked["input"] in mfl.SPEC
+    assert leaked["expected"] in mfl.SPEC
+
+    # Every other evaluation case is absent from the spec, so the known overlap is the
+    # whole of it rather than the first one someone happened to notice.
+    assert sum(1 for c in committed["evaluation"] if c["input"] in mfl.SPEC) == 1
+
+
+def test_lookup_spec_eval_overlap_growth_is_rejected() -> None:
+    """The assertion must be falsifiable: a second spec-answered case must stop the run."""
+    mfl = _load("measure_finetune_lookup")
+    committed = json.loads(LOOKUP_FIXTURE.read_text())
+    evaluation = list(committed["evaluation"])
+    # Worked example two's sentence, as an extra evaluation case.
+    smuggled = "Our Osaka office handled the call, but the customer is in Kenya."
+    assert smuggled in mfl.SPEC
+    evaluation.append({"id": "r999", "input": smuggled, "expected": "RG-K7"})
+    assert mfl.spec_eval_overlap(mfl.SPEC, evaluation) == ["r168", "r999"]
+    assert mfl.spec_eval_overlap(mfl.SPEC, evaluation) != mfl.KNOWN_SPEC_EVAL_OVERLAP
+
+    src = (_SCRIPTS / "measure_finetune_lookup.py").read_text()
+    assert "spec/eval overlap changed" in src
+    # And the existing folding-vs-eval RuntimeError is deliberately left alone -- extending
+    # it would raise on every invocation, since the overlap exists now.
+    assert "folding pool overlaps the evaluation set" in src
+
+
+def test_lookup_reports_exact_and_exact_excluding_the_spec_leak(lookup_run: dict) -> None:
+    """A named recomputation over the untouched `cases[]` of the committed lookup run.
+
+    `measure_finetune_lookup.score_arm(rows, folding_countries, ["r168"])` on arm A:
+    99/300 = 33.0% overall, 98/299 = 32.78% with the spec-answered case removed. Every arm
+    answered `r168` correctly, so every arm's exact count drops by exactly one.
+
+    NOTE for Phase A3: 98/299 is 32.7759%, which is **32.8%** to one decimal place. The
+    track file's Edit 1 says "33.0% -> 32.7%"; 32.7 is the truncation, not the rounding.
+    """
+    mfl = _load("measure_finetune_lookup")
+    arms = {a["arm"]: a for a in lookup_run["arms"]}
+    expected_overall = {"A": 99, "B": 87, "C": 293, "D": 300}
+
+    for arm, exact in expected_overall.items():
+        scores = mfl.score_arm(arms[arm]["cases"], lookup_run["folding_countries"], ["r168"])
+        assert scores["overall"]["n"] == 300, arm
+        assert scores["overall"]["counts"]["exact"] == exact, arm
+        assert scores["excluding_spec_leak"]["n"] == 299, arm
+        assert scores["excluding_spec_leak"]["counts"]["exact"] == exact - 1, arm
+        assert scores["spec_eval_overlap_ids"] == ["r168"], arm
+        leaked_row = [r for r in arms[arm]["cases"] if r["id"] == "r168"][0]
+        assert leaked_row["exact"] is True, arm
+
+    a = mfl.score_arm(arms["A"]["cases"], lookup_run["folding_countries"], ["r168"])
+    assert round(a["overall"]["rates_pct"]["exact"], 1) == 33.0
+    assert round(a["excluding_spec_leak"]["rates_pct"]["exact"], 4) == 32.7759
+    assert round(a["excluding_spec_leak"]["rates_pct"]["exact"], 1) == 32.8
+
+    # With no overlap passed, the two cuts coincide -- so the field cannot quietly become a
+    # different denominator for a task that has no spec leak.
+    none = mfl.score_arm(arms["A"]["cases"], lookup_run["folding_countries"])
+    assert none["excluding_spec_leak"]["n"] == 300
+    assert none["spec_eval_overlap_ids"] == []
+
+
+def test_lookup_summary_and_fixture_record_the_overlap() -> None:
+    """Recorded in both places, and recomputed in `main` rather than trusted.
+
+    The committed fixture predates the field, so a `--skip-compile` re-run against it must
+    still get a 299 denominator.
+    """
+    src = (_SCRIPTS / "measure_finetune_lookup.py").read_text()
+    fixture_block = src[src.index('    fixture = {'):src.index("    out_path.write_text(json.dumps(fixture")]
+    assert '"spec_eval_overlap_ids": spec_overlap' in fixture_block
+    assert '"known_spec_eval_overlap"' in fixture_block
+    summary_block = src[src.index('    summary = {\n        "label": args.label,'):]
+    assert '"spec_eval_overlap_ids": spec_overlap_ids,' in summary_block
+    assert "spec_overlap_ids = spec_eval_overlap(SPEC, evaluation)" in src
+    committed = json.loads(LOOKUP_FIXTURE.read_text())
+    assert "spec_eval_overlap_ids" not in committed
