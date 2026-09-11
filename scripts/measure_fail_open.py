@@ -312,14 +312,33 @@ def main() -> int:
                 "teacher_output_this_call": teacher2.last,
                 "returned_this_calls_teacher_output": returned_this,
                 "teacher_called_exactly_once": called_once,
-                "post_threshold": i >= threshold,
+                # decorator.py:517 triggers the compile attempt when
+                # `call_count >= threshold`, and `call_count` is 1-indexed (the i-th 0-indexed
+                # call makes it i+1) -- so the call that actually crosses the threshold and
+                # experiences the (failing) compile attempt is `i == threshold - 1`, not
+                # `i == threshold`. The off-by-one previously excluded exactly that call from
+                # "post_threshold", which is the one call this label most needs to include.
+                "post_threshold": i >= threshold - 1,
                 "fail_open_count": decorated2.get_fail_open_count(),
             })
         log.record("every call returned THIS call's teacher result despite compile failing",
                    all_ok, calls=len(phase4["calls"]))
         post = [c for c in phase4["calls"] if c["post_threshold"]]
-        log.record("post-threshold calls were counted as fail-opens",
-                   bool(post) and post[-1]["fail_open_count"] > 0,
+        # NOT a fallback in decorator.py's sense, and `fail_open_count` must stay 0 here.
+        # `get_fail_open_count()` is incremented in exactly one place (decorator.py:448):
+        # inside the `status == "ready"` branch, when a *compiled adapter's local inference*
+        # raises. In this phase the compile itself never succeeds (the SDK is patched to
+        # reject every attempt), so the task never reaches "ready" -- every call takes the
+        # "adapter not serving: invoke wrapped function" branch (decorator.py:466), which is
+        # not instrumented as a fail-open at all. A prior version of this check asserted
+        # `fail_open_count > 0` here, which is false by construction and would fail every
+        # real run: exactly the kind of claim this campaign exists to catch, caught by Phase F
+        # before this script was ever executed. What phase 4 actually demonstrates is that a
+        # broken compile degrades to "always call the teacher" with no exception and no
+        # (mis-attributed) counter increment -- recorded as its own, correctly-named check.
+        log.record("fail_open_count stays 0 (a compile failure is not a local-inference "
+                   "fail-open; decorator.py counts the latter, not the former)",
+                   bool(post) and post[-1]["fail_open_count"] == 0,
                    fail_open_count=post[-1]["fail_open_count"] if post else None)
         final_status = decorated2.db.get_status(decorated2.task_id)
         phase4["final_status"] = final_status
