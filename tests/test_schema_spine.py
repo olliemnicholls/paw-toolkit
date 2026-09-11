@@ -381,6 +381,18 @@ class AliasChoicesModel(BaseModel):
     full_name: str = Field(validation_alias=AliasChoices("a", "bb"))
 
 
+class BoundedString(BaseModel):
+    x: str = Field(min_length=2, max_length=5)
+
+
+class BoundedList(BaseModel):
+    x: List[int] = Field(min_length=1, max_length=3)
+
+
+class BoundedInt(BaseModel):
+    x: int = Field(ge=-3, le=10)
+
+
 SPINE_CASES = [
     ("plain_scalars", PlainScalars, [PlainScalars(text="a b", count=-7, ratio=1.5, flag=True),
                                      PlainScalars(text='q"\\\n\t', count=0, ratio=0.0, flag=False),
@@ -423,6 +435,15 @@ SPINE_CASES = [
     ("pat_and_plain_field", PatAndPlainField, [PatAndPlainField(zip_code="90210", name="n")]),
     ("alias_populate_by_name", AliasPopulateByName,
      [AliasPopulateByName(fullName="v", count=1), AliasPopulateByName(full_name="w", count=2)]),
+    # S-9. Only the EXPRESSIBLE constraints belong in this corpus: a constraint the
+    # compiler can merely warn about (an open-ended range, `multiple_of`, a length
+    # bound on `Optional[str]`) leaves the grammar wider than pydantic by design, so
+    # the spine property genuinely does not hold for it and putting one here would
+    # assert the opposite of the decision the track took. Those live in
+    # `tests/test_schema.py::test_inexpressible_constraints_warn_rather_than_vanish_S_9`.
+    ("len_str", BoundedString, [BoundedString(x="ab"), BoundedString(x="caf\u00e9!")]),
+    ("len_list", BoundedList, [BoundedList(x=[1]), BoundedList(x=[1, 2, 3])]),
+    ("int_range", BoundedInt, [BoundedInt(x=-3), BoundedInt(x=0), BoundedInt(x=10)]),
 ]
 
 SPINE_IDS = [c[0] for c in SPINE_CASES]

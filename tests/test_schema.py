@@ -1991,3 +1991,215 @@ def test_unanchored_pattern_is_still_full_matched_S_8() -> None:
     assert _re.fullmatch(pat, '{"x": "90210"}') is not None
     with pytest.raises(ValidationError):
         model(x="9021")  # too short for either reading
+
+
+# --- S-9: length and range constraints are honoured, or warned about ----------------
+
+
+S_9_EXPRESSIBLE = [
+    # (id, annotation, Field kwargs, accepted values, rejected values) -- each value is
+    # the whole JSON object, and pydantic's own verdict is asserted alongside.
+    ("str_both", str, dict(min_length=2, max_length=5),
+     ['{"x":"ab"}', '{"x":"abcde"}', '{"x":"a\\u00e9"}'],
+     ['{"x":"a"}', '{"x":"abcdef"}', '{"x":""}']),
+    ("str_min_only", str, dict(min_length=2),
+     ['{"x":"ab"}', '{"x":"abcdefghij"}'], ['{"x":"a"}', '{"x":""}']),
+    ("str_max_zero", str, dict(max_length=0), ['{"x":""}'], ['{"x":"a"}']),
+    ("list_both", List[int], dict(min_length=1, max_length=3),
+     ['{"x":[1]}', '{"x":[1,2,3]}'], ['{"x":[]}', '{"x":[1,2,3,4]}']),
+    ("list_max_zero", List[int], dict(max_length=0), ['{"x":[]}'], ['{"x":[1]}']),
+    ("list_max_only", List[int], dict(max_length=2),
+     ['{"x":[]}', '{"x":[1,2]}'], ['{"x":[1,2,3]}']),
+    ("set_min", Set[int], dict(min_length=2), ['{"x":[1,2]}'], ['{"x":[1]}']),
+    ("dict_both", Dict[str, int], dict(min_length=1, max_length=2),
+     ['{"x":{"a":1}}'], ['{"x":{}}', '{"x":{"a":1,"b":2,"c":3}}']),
+    ("tuple_variadic", Tuple[int, ...], dict(min_length=1, max_length=2),
+     ['{"x":[1]}', '{"x":[1,2]}'], ['{"x":[]}', '{"x":[1,2,3]}']),
+    ("int_ge_le", int, dict(ge=0, le=10),
+     ['{"x":0}', '{"x":10}'], ['{"x":11}', '{"x":-1}']),
+    ("int_gt_lt", int, dict(gt=0, lt=5), ['{"x":1}', '{"x":4}'], ['{"x":0}', '{"x":5}']),
+    ("int_negative", int, dict(ge=-3, le=2),
+     ['{"x":-3}', '{"x":2}'], ['{"x":-4}', '{"x":3}']),
+]
+
+
+@pytest.mark.parametrize(
+    "name,annotation,kwargs,accepted,rejected", S_9_EXPRESSIBLE,
+    ids=[c[0] for c in S_9_EXPRESSIBLE],
+)
+def test_expressible_constraints_are_enforced_by_the_grammar_S_9(
+    name: str, annotation: Any, kwargs: dict, accepted: List[str], rejected: List[str]
+) -> None:
+    """`Field(ge=0, le=10)` accepted `{"x": 99}`; min/max length were dropped entirely.
+
+    Several of these are straightforwardly expressible as a regex, so the silence was a
+    gap and not a limit. The grammar and pydantic must now agree on every value below,
+    in both directions -- pydantic's verdict is asserted first, so a wrong row in this
+    table fails as a wrong row rather than as a compiler bug.
+    """
+    import re as _re
+    import warnings as _warnings
+
+    from pydantic import ValidationError
+
+    model = create_model("S9_" + name, x=(annotation, Field(**kwargs)))
+    pydantic_to_regex.cache_clear()
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")  # an expressible constraint must NOT warn
+        pat = pydantic_to_regex(model, anchors=True)
+
+    for value, expected in [(v, True) for v in accepted] + [(v, False) for v in rejected]:
+        try:
+            model.model_validate_json(value)
+            pydantic_accepts = True
+        except ValidationError:
+            pydantic_accepts = False
+        assert pydantic_accepts is expected, f"{name}: the table's verdict for {value!r} is wrong"
+        assert (_re.fullmatch(pat, value) is not None) is expected, (
+            f"{name}: the grammar disagrees with pydantic about {value!r}: {pat!r}"
+        )
+
+
+def test_string_length_counts_decoded_characters_not_escape_sequences_S_9() -> None:
+    """The `{m,n}` goes on the character alternation, which is what pydantic measures.
+
+    `"a\\u00e9"` is nine characters of JSON and two characters of string. pydantic
+    measures the decoded value, and so must the quantifier -- which it does, because
+    each repetition of the alternation matches exactly one decoded character however it
+    is spelled.
+    """
+    import re as _re
+
+    model = create_model("S9Escapes", x=(str, Field(min_length=2, max_length=2)))
+    pat = pydantic_to_regex(model, anchors=True)
+    for value in ('{"x":"a\\u00e9"}', '{"x":"a\\n"}', '{"x":"\\\\\\""}', '{"x":"ab"}'):
+        model.model_validate_json(value)  # precondition: exactly two decoded characters
+        assert _re.fullmatch(pat, value) is not None, value
+    assert _re.fullmatch(pat, '{"x":"a\\u00e9b"}') is None
+
+
+S_9_WARNED = [
+    ("optional_str_length", Optional[str], dict(min_length=2), "min_length/max_length"),
+    ("float_range", float, dict(ge=0.0, le=1.0), "ge/le"),
+    ("open_ended_int", int, dict(ge=0), "ge"),
+    ("too_wide_int", int, dict(ge=0, le=100_000), "ge/le"),
+    ("multiple_of", int, dict(multiple_of=3), "MultipleOf"),
+    ("decimal_digits", Decimal, dict(max_digits=5, decimal_places=2), "max_digits"),
+    ("pattern_plus_length", str, dict(pattern=r"[a-z]+", min_length=2),
+     "alongside a pattern="),
+]
+
+
+@pytest.mark.parametrize(
+    "name,annotation,kwargs,expected_text", S_9_WARNED, ids=[c[0] for c in S_9_WARNED],
+)
+def test_inexpressible_constraints_warn_rather_than_vanish_S_9(
+    name: str, annotation: Any, kwargs: dict, expected_text: str
+) -> None:
+    """A constraint the grammar cannot enforce is said out loud, once, naming the field.
+
+    Not a raise: these schemas compile and work today, and the parent track's
+    fail-open invariant forbids a new raise on a path the caller depends on. What was
+    wrong was the silence -- a caller who writes `Field(multiple_of=3)` and reads
+    "syntax compliance guaranteed mathematically" has no way to learn that this
+    particular guarantee does not cover their constraint.
+    """
+    model = create_model("S9Warn_" + name, x=(annotation, Field(**kwargs)))
+    pydantic_to_regex.cache_clear()
+    with pytest.warns(UserWarning) as caught:
+        pydantic_to_regex(model, anchors=True)
+
+    messages = [str(w.message) for w in caught if "does not enforce" in str(w.message)]
+    assert len(messages) == 1, f"expected exactly one warning per field, got {messages}"
+    assert f"S9Warn_{name}.x" in messages[0], "the warning must name the field"
+    assert expected_text in messages[0], f"{expected_text!r} missing from {messages[0]!r}"
+
+
+def test_a_field_with_several_inexpressible_constraints_warns_once_S_9() -> None:
+    """"Warn once per field" means one line listing them, not one line each."""
+    model = create_model(
+        "S9Multi", x=(int, Field(ge=0, multiple_of=3)), y=(int, Field(le=5, multiple_of=7))
+    )
+    pydantic_to_regex.cache_clear()
+    with pytest.warns(UserWarning) as caught:
+        pydantic_to_regex(model, anchors=True)
+
+    messages = [str(w.message) for w in caught if "does not enforce" in str(w.message)]
+    assert len(messages) == 2, f"one warning per FIELD, not per constraint: {messages}"
+    assert "ge" in messages[0] and "MultipleOf" in messages[0]
+
+
+def test_every_length_bounded_annotation_actually_changes_the_regex_S_9() -> None:
+    """Pin the coupling between `_length_constraint_kind` and `_type_to_regex`.
+
+    `_length_constraint_kind` mirrors a subset of `_type_to_regex`'s dispatch, which is
+    a drift risk of exactly the shape `_fingerprint_annotation`'s docstring warns
+    about: if the two disagree, a bound this compiler *claims* to honour is threaded
+    into a branch that ignores it and is dropped silently -- the very failure S-9 is
+    about. So for every annotation the predicate claims, adding a bound must visibly
+    change the compiled grammar, and for every annotation it disclaims, it must not.
+    """
+    from paw_kit.schema.grammar import _length_constraint_kind
+
+    claimed = [
+        str, List[int], Set[int], FrozenSet[int], Dict[str, int], Tuple[int, ...],
+        list, set, frozenset, dict,
+    ]
+    disclaimed = [int, float, bool, Optional[str], Tuple[int, str], Decimal, uuid.UUID]
+
+    for annotation in claimed:
+        assert _length_constraint_kind(annotation) is not None, annotation
+        pydantic_to_regex.cache_clear()
+        plain = pydantic_to_regex(create_model("Plain", x=(annotation, ...)))
+        bounded = pydantic_to_regex(
+            create_model("Bounded", x=(annotation, Field(min_length=1, max_length=2)))
+        )
+        assert plain != bounded, (
+            f"_length_constraint_kind claims {annotation!r} but the bound changed nothing"
+        )
+
+    for annotation in disclaimed:
+        assert _length_constraint_kind(annotation) is None, annotation
+
+
+def test_constraints_join_the_cache_fingerprint_S_9() -> None:
+    """Two models differing only in a constraint must not share a cache entry.
+
+    Including a constraint the compiler can only *warn* about: `multiple_of=3` and
+    `multiple_of=7` compile to the same regex today, but they must not be told apart by
+    luck if one of them ever becomes expressible.
+    """
+    from paw_kit.schema.grammar import _fingerprint_model_fields
+
+    variants = [
+        create_model("S9Fp", x=(int, ...)),
+        create_model("S9Fp", x=(int, Field(ge=0, le=10))),
+        create_model("S9Fp", x=(int, Field(ge=0, le=11))),
+        create_model("S9Fp", x=(int, Field(multiple_of=3))),
+        create_model("S9Fp", x=(int, Field(multiple_of=7))),
+    ]
+    keys = [_fingerprint_model_fields(m, seen=frozenset(), depth=0) for m in variants]
+    assert len(set(keys)) == len(variants), "two of these models share a cache fingerprint"
+
+    pydantic_to_regex.cache_clear()
+    with pytest.warns(UserWarning):
+        regexes = [pydantic_to_regex(m) for m in variants]
+    assert regexes[1] != regexes[2], "ge=0,le=10 and ge=0,le=11 compiled identically"
+
+
+def test_int_range_enumeration_is_capped_S_9() -> None:
+    """A range wider than the cap is warned about rather than enumerated into the regex."""
+    from paw_kit.schema.grammar import _MAX_ENUMERATED_INT_RANGE
+
+    pydantic_to_regex.cache_clear()
+    at_cap = create_model("S9AtCap", x=(int, Field(ge=1, le=_MAX_ENUMERATED_INT_RANGE)))
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        pat = pydantic_to_regex(at_cap, anchors=True)
+    assert f"|{_MAX_ENUMERATED_INT_RANGE})" in pat
+
+    over_cap = create_model("S9OverCap", x=(int, Field(ge=1, le=_MAX_ENUMERATED_INT_RANGE + 1)))
+    with pytest.warns(UserWarning, match="does not enforce"):
+        pydantic_to_regex(over_cap, anchors=True)

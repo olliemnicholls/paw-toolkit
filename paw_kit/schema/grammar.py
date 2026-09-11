@@ -7,6 +7,7 @@ import json
 import re
 import threading
 import types
+import warnings
 from typing import (
     Any,
     Dict,
@@ -23,6 +24,7 @@ from typing import (
 )
 import uuid
 from decimal import Decimal
+import annotated_types
 from pydantic import AliasChoices, AliasPath, BaseModel
 from pydantic.fields import FieldInfo
 
@@ -119,13 +121,50 @@ _MAX_RECURSION_DEPTH = 10
 _MAX_COLLECTION_DEPTH = 10
 
 
-def _json_collection_regex(open_lit: str, close_lit: str, entry_regex: str) -> str:
-    """Build a regex matching a bracketed, comma-separated, optionally-empty JSON collection body."""
+def _json_collection_regex(
+    open_lit: str,
+    close_lit: str,
+    entry_regex: str,
+    bounds: Optional[Tuple[int, Optional[int]]] = None,
+) -> str:
+    """Build a regex matching a bracketed, comma-separated JSON collection body.
+
+    `bounds` is S-9's `(min_items, max_items)`; `None` keeps the previous
+    "zero or more" shape byte for byte. Element counts are one more than separator
+    counts, which is why the quantifier below is written against `low - 1` / `high - 1`.
+    """
     comma_sep = rf"{JSON_WHITESPACE},{JSON_WHITESPACE}{entry_regex}"
+    if bounds is None:
+        body = rf"(?:{entry_regex}(?:{comma_sep})*)?"
+    else:
+        low, high = bounds
+        if high == 0:
+            # The only legal value is the empty collection; a single whitespace run.
+            return rf"{open_lit}{JSON_WHITESPACE}{close_lit}"
+        tail_high = None if high is None else high - 1
+        if low <= 0:
+            body = rf"(?:{entry_regex}(?:{comma_sep}){_render_quantifier(0, tail_high)})?"
+        else:
+            body = rf"{entry_regex}(?:{comma_sep}){_render_quantifier(low - 1, tail_high)}"
+    return rf"{open_lit}{JSON_WHITESPACE}{body}{JSON_WHITESPACE}{close_lit}"
+
+
+def _json_string_regex(bounds: Optional[Tuple[int, Optional[int]]] = None) -> str:
+    """`JSON_STRING`, optionally length-bounded (S-9).
+
+    The quantifier goes on the character alternation rather than on the whole string,
+    and that is exactly right for pydantic's notion of length: each repetition matches
+    one *decoded* character, whether it arrives raw or as a `\\uXXXX` escape, and
+    pydantic measures the decoded value.
+    """
+    if bounds is None:
+        return JSON_STRING
     return (
-        rf"{open_lit}{JSON_WHITESPACE}(?:"
-        rf"{entry_regex}(?:{comma_sep})*"
-        rf")?{JSON_WHITESPACE}{close_lit}"
+        r'"(?:[^"\\\x00-\x1f\x7f-\x9f]|'
+        + _JSON_ESCAPE
+        + ")"
+        + _render_quantifier(max(bounds[0], 0), bounds[1])
+        + '"'
     )
 
 
@@ -156,6 +195,208 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
                 return pattern.pattern, pattern.flags
             return str(pattern), 0
     return None
+
+
+# --- S-9: numeric and length constraints -------------------------------------------
+#
+# `Field(ge=..., le=...)` and `min_length`/`max_length` were read by nothing at all, so
+# `Field(ge=0, le=10)` compiled to a grammar that happily emits `{"x": 99}` and
+# `min_length`/`max_length` on a string or a list were dropped on the floor. Several of
+# them are straightforwardly expressible as a regex, so that was a gap rather than a
+# limit -- and the ones that are not expressible were dropped *silently*, which is the
+# report's Pattern 1: a constraint the caller believes is being enforced, and is not.
+#
+# An integer range is rendered by enumerating it. That is only reasonable for a small
+# range; beyond this many values the alternation is longer than it is useful (and
+# `logits_processor._MAX_PATTERN_LENGTH` caps the whole grammar anyway), so a wider
+# range is warned about instead. 256 covers the realistic cases -- a percentage, a
+# rating, a small enum-like code, a byte.
+_MAX_ENUMERATED_INT_RANGE = 256
+
+_FieldConstraints = namedtuple(
+    "_FieldConstraints", ["min_len", "max_len", "ge", "gt", "le", "lt", "other"]
+)
+_NO_CONSTRAINTS = _FieldConstraints(None, None, None, None, None, None, ())
+
+
+def _field_constraints(field_info: FieldInfo) -> _FieldConstraints:
+    """Collect the `annotated_types` constraint metadata pydantic records for a field.
+
+    Hashable by construction, because `_fingerprint_model_fields` stores it: a
+    constraint the compiler reads has to be a constraint the cache key separates on
+    (the track's fingerprint invariant), or `Field(le=10)` and `Field(le=99)` would
+    share a grammar.
+
+    `other` holds the reprs of the constraints this compiler cannot express at all
+    (`multiple_of`, Decimal's `max_digits`/`decimal_places`, `Predicate`, ...). They are
+    kept rather than discarded so they can be named in the warning -- and so that two
+    models differing only in one of them still get different cache keys.
+    """
+    min_len = max_len = ge = gt = le = lt = None
+    other: List[str] = []
+    for meta in field_info.metadata:
+        if isinstance(meta, annotated_types.MinLen):
+            # Three separate types, NOT a hierarchy: `MinLen` and `MaxLen` derive from
+            # `BaseMetadata` while `Len` is a `GroupedMetadata` protocol carrying both
+            # ends. pydantic normally expands `Len` into the other two before this sees
+            # it, but all three are handled so a directly-annotated `Len` cannot fall
+            # through into `other` and be reported as inexpressible.
+            min_len = meta.min_length
+        elif isinstance(meta, annotated_types.MaxLen):
+            max_len = meta.max_length
+        elif isinstance(meta, annotated_types.Len):
+            min_len = meta.min_length
+            if meta.max_length is not None:
+                max_len = meta.max_length
+        elif isinstance(meta, annotated_types.Ge):
+            ge = meta.ge
+        elif isinstance(meta, annotated_types.Gt):
+            gt = meta.gt
+        elif isinstance(meta, annotated_types.Le):
+            le = meta.le
+        elif isinstance(meta, annotated_types.Lt):
+            lt = meta.lt
+        elif hasattr(meta, "pattern") and meta.pattern is not None:
+            pass  # handled by `_extract_pattern_from_field` / S-3's translation
+        else:
+            other.append(repr(meta))
+    return _FieldConstraints(min_len, max_len, ge, gt, le, lt, tuple(other))
+
+
+def _length_constraint_kind(annotation: Any) -> Optional[str]:
+    """Which rendering, if any, a `MinLen`/`MaxLen` on this annotation can bound.
+
+    `"string"` -> the quantifier goes on `JSON_STRING`'s character alternation;
+    `"collection"` -> it goes on the element count of a `_json_collection_regex` body;
+    `None` -> this compiler cannot express it, so it is warned about rather than
+    dropped.
+
+    Deliberately conservative. `Optional[str]` is `None` even though the intent is
+    obvious: the rendered regex is an alternation over the union's branches and the
+    bound belongs to only one of them, so applying it to the whole is wrong and
+    applying it to one branch means rewriting the union. Fixed-length and empty tuple
+    spellings are `None` too -- their element count is already exact, so a length bound
+    is either redundant or contradictory, and neither renders through
+    `_json_collection_regex`.
+
+    This mirrors a subset of `_type_to_regex`'s dispatch, which is a drift risk of the
+    same shape `_fingerprint_annotation`'s docstring describes. It is pinned by
+    `test_every_length_bounded_annotation_actually_changes_the_regex_S_9`, which
+    asserts that for every annotation this function claims, the compiled regex really
+    does change when a bound is added.
+    """
+    if annotation is str:
+        return "string"
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin in (list, List, set, Set, frozenset, FrozenSet):
+        return "collection"
+    if origin is dict or annotation is dict:
+        return "collection"
+    if origin in (tuple, Tuple) and len(args) == 2 and args[1] is Ellipsis:
+        return "collection"
+    if annotation in (list, set, frozenset):
+        return "collection"
+    return None
+
+
+def _integer_range(constraints: _FieldConstraints) -> Optional[Tuple[int, int]]:
+    """Resolve `ge`/`gt`/`le`/`lt` into a closed integer interval, if that is possible.
+
+    Returns `None` -- meaning "warn, do not render" -- when either end is open, when a
+    bound is not an integer (a float bound on an int field does not pick out an integer
+    interval the way an enumeration needs), or when the span is wider than
+    `_MAX_ENUMERATED_INT_RANGE`.
+    """
+
+    lows: List[int] = []
+    highs: List[int] = []
+    for value, offset, into in (
+        (constraints.ge, 0, lows), (constraints.gt, 1, lows),
+        (constraints.le, 0, highs), (constraints.lt, -1, highs),
+    ):
+        if value is None:
+            continue
+        # `bool` is an `int` subclass; `Field(ge=True)` is not an integer bound.
+        if not isinstance(value, int) or isinstance(value, bool):
+            return None
+        into.append(value + offset)
+    if not lows or not highs:
+        return None
+    low, high = max(lows), min(highs)
+    if low > high or high - low + 1 > _MAX_ENUMERATED_INT_RANGE:
+        return None
+    return low, high
+
+
+def _bounded_integer_regex(low: int, high: int) -> str:
+    """Render a closed integer interval as an alternation of its literal spellings.
+
+    Enumeration and not a hand-built digit-range regex: the digit-range construction for
+    an arbitrary interval (`-12..307`) is where off-by-one errors live, and the whole
+    point of the exercise is that the grammar and the validator agree exactly. The
+    interval is capped at `_MAX_ENUMERATED_INT_RANGE` precisely so enumeration stays
+    affordable.
+    """
+    return "(?:" + "|".join(re.escape(str(v)) for v in range(low, high + 1)) + ")"
+
+
+def _describe_dropped_constraints(
+    annotation: Any, constraints: _FieldConstraints, has_pattern: bool
+) -> List[str]:
+    """List, in words, the constraints the compiled grammar will NOT enforce (S-9)."""
+    dropped: List[str] = []
+    has_length = constraints.min_len is not None or constraints.max_len is not None
+    if has_length:
+        if has_pattern:
+            dropped.append(
+                "min_length/max_length alongside a pattern= constraint (the pattern "
+                "already determines the accepted language; intersecting the two is not "
+                "expressible here)"
+            )
+        elif _length_constraint_kind(annotation) is None:
+            dropped.append(f"min_length/max_length on {annotation!r}")
+    numeric = [
+        name
+        for name, value in (
+            ("ge", constraints.ge), ("gt", constraints.gt),
+            ("le", constraints.le), ("lt", constraints.lt),
+        )
+        if value is not None
+    ]
+    if numeric and (annotation is not int or _integer_range(constraints) is None):
+        dropped.append(f"{'/'.join(numeric)} on {annotation!r}")
+    dropped.extend(constraints.other)
+    return dropped
+
+
+def _warn_dropped_constraints(
+    model: Type[BaseModel], field_name: str, dropped: List[str]
+) -> None:
+    """Warn ONCE per field about constraints the grammar cannot enforce (S-9).
+
+    One warning per field, not one per constraint: a field with four inexpressible
+    constraints is one problem, and four lines would train the reader to filter them.
+    The compile itself is cached by fingerprint, so a model compiled twice does not
+    warn twice either.
+
+    A warning and not a raise. Raising would refuse schemas that compile and work today
+    -- `Field(multiple_of=3)` has never been enforced by the grammar -- and the parent
+    track's fail-open invariant forbids a new raise on a path the caller depends on.
+    What was wrong was the silence, not the narrowing.
+    """
+    if not dropped:
+        return
+    warnings.warn(
+        f"paw_kit: {model.__name__}.{field_name}: the compiled grammar does not "
+        f"enforce {', '.join(dropped)}. Grammar-constrained decoding therefore cannot "
+        "guarantee this constraint -- a decoder can emit a value the grammar accepts "
+        "and your model rejects, which shows up as a validation failure (and, through "
+        "`paw.load`, as a fallback) rather than as constrained output. Express the "
+        "constraint as a Field(pattern=...) if you need it enforced during decoding.",
+        UserWarning,
+        stacklevel=4,
+    )
 
 
 def _field_validation_keys(
@@ -840,6 +1081,7 @@ def _type_to_regex(
     seen: Optional[frozenset] = None,
     depth: int = 0,
     collection_depth: int = 0,
+    length_bounds: Optional[Tuple[int, Optional[int]]] = None,
 ) -> str:
     """Recursively convert a Python type annotation into a JSON-matching regex string.
 
@@ -851,6 +1093,13 @@ def _type_to_regex(
             depth. Tracked separately from `depth` (PAW-SCHEMA-02) so the two budgets
             don't interfere with each other; it resets to 0 whenever recursion enters
             a nested BaseModel's own fields, since those form a fresh nesting context.
+        length_bounds: S-9's `(min, max)` from a `Field(min_length=..., max_length=...)`
+            on the field this annotation belongs to. Applied at the TOP level only --
+            no recursive call passes it on, because the constraint belongs to the field
+            and not to its element type. `_length_constraint_kind` decides in advance
+            whether this annotation is one of the shapes below that can honour it; a
+            bound reaching any other branch would be silently dropped, which is what
+            that function and its test exist to prevent.
 
     Returns:
         A regex string matching valid JSON representations of the type.
@@ -911,7 +1160,7 @@ def _type_to_regex(
         _check_collection_depth(collection_depth)
         item_type = args[0] if args else Any
         item_regex = _type_to_regex(item_type, seen=seen, depth=depth, collection_depth=collection_depth + 1)
-        return _json_collection_regex(r"\[", r"\]", item_regex)
+        return _json_collection_regex(r"\[", r"\]", item_regex, length_bounds)
 
     # 5. Handle Tuple / tuple[A, B] / tuple[T, ...]
     if origin in (tuple, Tuple):
@@ -919,7 +1168,7 @@ def _type_to_regex(
         if len(args) == 2 and args[1] is Ellipsis:
             # Variadic: tuple[str, ...] -> same as list[str]
             item_regex = _type_to_regex(args[0], seen=seen, depth=depth, collection_depth=collection_depth + 1)
-            return _json_collection_regex(r"\[", r"\]", item_regex)
+            return _json_collection_regex(r"\[", r"\]", item_regex, length_bounds)
         elif args:
             # Fixed-length: tuple[str, int, bool] -> [str, int, bool] exact positions
             elem_regexes = [
@@ -952,7 +1201,7 @@ def _type_to_regex(
         _check_collection_depth(collection_depth)
         item_type = args[0] if args else Any
         item_regex = _type_to_regex(item_type, seen=seen, depth=depth, collection_depth=collection_depth + 1)
-        return _json_collection_regex(r"\[", r"\]", item_regex)
+        return _json_collection_regex(r"\[", r"\]", item_regex, length_bounds)
 
     # 7. Handle Nested Pydantic BaseModel (with cycle detection)
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
@@ -973,13 +1222,13 @@ def _type_to_regex(
         value_type = args[1] if len(args) > 1 else Any
         value_regex = _type_to_regex(value_type, seen=seen, depth=depth, collection_depth=collection_depth + 1)
         entry = rf"{JSON_STRING}{JSON_WHITESPACE}:{JSON_WHITESPACE}{value_regex}"
-        return _json_collection_regex(r"\{", r"\}", entry)
+        return _json_collection_regex(r"\{", r"\}", entry, length_bounds)
 
     # 9. Bare collection identity checks (no generic args -> get_origin returns None)
     if annotation is list:
         _check_collection_depth(collection_depth)
         any_regex = _type_to_regex(Any, seen=seen, depth=depth, collection_depth=collection_depth + 1)
-        return _json_collection_regex(r"\[", r"\]", any_regex)
+        return _json_collection_regex(r"\[", r"\]", any_regex, length_bounds)
     if annotation is tuple:
         _check_collection_depth(collection_depth)
         any_regex = _type_to_regex(Any, seen=seen, depth=depth, collection_depth=collection_depth + 1)
@@ -987,7 +1236,7 @@ def _type_to_regex(
     if annotation is set or annotation is frozenset:
         _check_collection_depth(collection_depth)
         any_regex = _type_to_regex(Any, seen=seen, depth=depth, collection_depth=collection_depth + 1)
-        return _json_collection_regex(r"\[", r"\]", any_regex)
+        return _json_collection_regex(r"\[", r"\]", any_regex, length_bounds)
 
     # 10. Specialized types
     if annotation is uuid.UUID:
@@ -1001,7 +1250,7 @@ def _type_to_regex(
 
     # 11. Primitive types
     if annotation is str:
-        return JSON_STRING
+        return _json_string_regex(length_bounds)
     if annotation is int:
         return JSON_INTEGER
     if annotation is float:
@@ -1185,7 +1434,11 @@ def _fingerprint_model_fields(
     and `_field_validation_keys` -- the same call `_pydantic_to_regex_impl` makes to
     decide which object key to emit -- contributes the resolved alias set (S-5). The
     alias set is NOT derivable from the field name: two models identical except for
-    `Field(alias=...)`, or for `populate_by_name`, compile to different grammars.
+    `Field(alias=...)`, or for `populate_by_name`, compile to different grammars. And
+    `_field_constraints` -- again the same call the compiler makes -- contributes the
+    length and range metadata (S-9), including the constraints the compiler can only
+    warn about, since two models differing only in a `multiple_of` should not be told
+    apart by luck.
 
     Built from *extracted values*, never from `FieldInfo` objects directly:
     `FieldInfo` inherits `object`'s identity `__hash__`/`__eq__`, so hashing
@@ -1199,6 +1452,7 @@ def _fingerprint_model_fields(
             _fingerprint_annotation(field_info.annotation, seen=seen, depth=depth),
             _extract_pattern_from_field(field_info),
             _field_validation_keys(model, field_name, field_info),
+            _field_constraints(field_info),
         )
         for field_name, field_info in model.model_fields.items()
     )
@@ -1234,6 +1488,7 @@ def _pydantic_to_regex_impl(
         # `f'"{re.escape(name)}"'`: an alias is an arbitrary string (pydantic accepts
         # `alias='fu"ll'`), so it needs the same PAW-SCHEMA-01 treatment as a Literal
         # value. For an ordinary identifier the two spellings are byte-identical.
+        constraints = _field_constraints(field_info)
         keys = _field_validation_keys(model, field_name, field_info)
         rendered_keys = [_json_string_literal_regex(k) for k in keys]
         field_key = (
@@ -1248,7 +1503,27 @@ def _pydantic_to_regex_impl(
             # repr.
             value_regex = f'"{_translate_field_pattern(*pattern_override)}"'
         else:
-            value_regex = _type_to_regex(field_info.annotation, seen=_seen, depth=_depth)
+            # S-9: honour the length and range constraints a regex can express, and
+            # warn about the ones it cannot instead of dropping them in silence.
+            annotation = field_info.annotation
+            bounds: Optional[Tuple[int, Optional[int]]] = None
+            if constraints.min_len is not None or constraints.max_len is not None:
+                if _length_constraint_kind(annotation) is not None:
+                    bounds = (constraints.min_len or 0, constraints.max_len)
+            int_range = _integer_range(constraints) if annotation is int else None
+            if int_range is not None:
+                value_regex = _bounded_integer_regex(*int_range)
+            else:
+                value_regex = _type_to_regex(
+                    annotation, seen=_seen, depth=_depth, length_bounds=bounds
+                )
+        _warn_dropped_constraints(
+            model,
+            field_name,
+            _describe_dropped_constraints(
+                field_info.annotation, constraints, pattern_override is not None
+            ),
+        )
         field_pattern = f"{field_key}{JSON_WHITESPACE}:{JSON_WHITESPACE}{value_regex}"
         field_patterns.append(field_pattern)
 
@@ -1310,6 +1585,17 @@ def pydantic_to_regex(model: Type[BaseModel], anchors: bool = False) -> str:
     is NOT what `model_dump_json()` emits, because that defaults to `by_alias=False`;
     pydantic will not read its own output back either, and the grammar follows the
     validator.
+
+    **Length and range constraints are honoured where a regex can express them, and
+    warned about where it cannot** (S-9). `min_length`/`max_length` become a `{m,n}`
+    quantifier on a `str` field's characters or on a list/set/dict field's element
+    count; a closed integer interval no wider than 256 values (`Field(ge=0, le=10)`)
+    becomes an alternation over its members. Everything else -- an open-ended range, a
+    float range, `multiple_of`, Decimal's `max_digits`, a length bound on
+    `Optional[str]` or alongside a `pattern=` -- raises a `UserWarning` naming the
+    field and the constraint, once per field. It is a warning and not an error because
+    those schemas compile and work today; what was wrong was that the grammar quietly
+    did not enforce them.
 
     Args:
         model: A Pydantic BaseModel subclass.
