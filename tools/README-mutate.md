@@ -37,6 +37,26 @@ tests. That gap is the reason this tool is checked in.
 superset: the six extra are mutants that that run scored as killed by a test
 failure the mutant did not cause. See *Attributable kills* below.)
 
+
+## Timeouts
+
+A mutant run that exceeds `--timeout` is counted as **SURVIVED**, not killed. "The run did not
+finish" is not evidence that the suite detected the mutant, and a timeout never goes through
+`confirm_kill`, so scoring it as a kill produced an unattributed kill. That is not theoretical:
+with `--timeout 1` the tool erased `matching.py`'s single genuine survivor, reported
+"kill rate 100%" and "improved", exited 0, and wrote a corrupted baseline.
+
+Consequences to know:
+
+* a run with any timeout **refuses `--write-baseline`** — a guess must not become the ratchet;
+* the run still exits 0 if the gate passes, printing a WARNING naming each timed-out mutant,
+  because counting it as a survivor already makes the gate conservative and failing outright
+  would block merges on a loaded machine;
+* phase-1 timeouts flow into phase 2, one full-suite run each, so a too-low `--timeout` on a
+  large module is slow rather than wrong.
+
+If you see the warning, raise `--timeout` and re-run for a decisive answer.
+
 ## What the control gate protects against
 
 This is the most important part of the tool, and it exists because the throwaway version

@@ -8,7 +8,18 @@ bump an int), runs the tests, and records whether anything failed.
 
     SURVIVED  -- the suite passed with the mutated code. The behaviour on that line is
                  unasserted. This is a finding.
-    KILLED    -- some test failed. That line's behaviour is pinned by the suite.
+    KILLED    -- some test failed, AND that failure was attributed to the mutant (see
+                 `confirm_kill`). That line's behaviour is pinned by the suite.
+
+    Two further statuses both count as survivors, via `is_survivor()`, because neither is
+    evidence that the mutant was detected:
+
+    SURVIVED_TIMEOUT -- the run did not finish. Not a kill: "did not finish" says nothing
+                 about detection. Reported on its own line, and a hard refusal to write a
+                 baseline, since a timed-out mutant's true status is unknown.
+    SURVIVED (unattributed) -- the suite failed but the failing test could not be parsed out
+                 of pytest's summary, so `confirm_kill`'s two runs could not be performed.
+                 Carries a note saying the kill was not verified.
 
 See tools/README-mutate.md for what to do with survivors and how to regenerate the
 recorded baseline.
@@ -60,6 +71,13 @@ Exit codes
        (or, with --strict-identity, a survivor the baseline does not know about)
     2  CONTROL GATE FAILED or provenance failed -- results are meaningless, nothing ran
     3  harness errors (unexpected pytest exit codes) -- results are untrustworthy
+
+    A run containing a TIMEOUT does NOT set a non-zero exit on its own: the timeout is
+    already counted as a survivor, which makes the gate conservative, and failing the run
+    outright would block merges on a slow or loaded machine. It prints a WARNING naming each
+    timed-out mutant, and it refuses --write-baseline. If you lowered --timeout, raise it and
+    re-run for a decisive answer. Note that phase-1 timeouts now flow into phase 2, one
+    full-suite run each, so a too-low --timeout on a large module costs real time.
 """
 
 from __future__ import annotations
@@ -794,11 +812,12 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"      {r['id']}\n        {r['note']}")
 
         if timed_out:
-            print(f"\n  WARNING: {len(timed_out)} mutant run(s) timed out and were counted as "
+            n_timed_out = len({r["id"] for r in timed_out})
+            print(f"\n  WARNING: {n_timed_out} mutant(s) timed out and were counted as "
                   f"SURVIVED; a timeout is not evidence of detection. Raise --timeout for a "
                   f"decisive answer. A baseline cannot be written from this run:")
-            for r in timed_out:
-                print(f"    {r['id']}")
+            for mid in sorted({r["id"] for r in timed_out}):
+                print(f"    {mid}")
 
         results = [final[j["id"]] for j in jobs]
 
