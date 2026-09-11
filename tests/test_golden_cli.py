@@ -840,6 +840,22 @@ def _cases() -> List[Case]:
         (wd / "old.json").write_text(json.dumps(old, indent=2), encoding="utf-8")
         (wd / "new.json").write_text(json.dumps(new, indent=2), encoding="utf-8")
 
+    # bug-hunt-remediation Track B, Phase B4 (H-7).
+    def setup_diff_disjoint(wd: Path) -> None:
+        """Two runs that share no `case_id`. A `case_id` hashes input AND output, so
+        this is what an ordinary adapter change produces -- and it used to read as a
+        perfect reproducibility result."""
+        old = _verdicts(
+            "anthropic/claude-haiku-4-5/temperature=0.0",
+            [("today", "2026-09-11", True, "correct"), ("new year", "2026-01-01", True, "correct")],
+        )
+        new = _verdicts(
+            "anthropic/claude-haiku-4-5/temperature=0.0",
+            [("today", "11/09/2026", True, "correct"), ("new year", "01/01/2026", True, "correct")],
+        )
+        (wd / "old.json").write_text(json.dumps(old, indent=2), encoding="utf-8")
+        (wd / "new.json").write_text(json.dumps(new, indent=2), encoding="utf-8")
+
     cases += [
         Case(
             "judge_check_report", "paw-test",
@@ -870,6 +886,17 @@ def _cases() -> List[Case]:
             "judge_diff_flips", "paw-test", ["judge", "--diff", "old.json", "new.json"],
             setup=lambda wd: setup_diff_files(wd, flipped=True),
             note="The reproducibility check the judge docstring points at.",
+        ),
+        Case(
+            "judge_diff_disjoint", "paw-test", ["judge", "--diff", "old.json", "new.json"],
+            setup=setup_diff_disjoint,
+            note=(
+                "H-7: two runs sharing no comparable case. This printed 'No flips -- "
+                "every comparable verdict matched. Flip rate: 0.0% (0/0)' and exited 0 "
+                "-- and since a `case_id` hashes the input *and* the output, any change "
+                "to the adapter produces exactly this, while docs/results.md offers the "
+                "command as the check that temperature-0 pinning held."
+            ),
         ),
         Case(
             "judge_diff_missing_file", "paw-test", ["judge", "--diff", "old.json", "gone.json"],

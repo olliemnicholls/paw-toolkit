@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
+
+from paw_kit.test.reporting import ScoredRate, scored_denominator
 
 # Content kept from scripts/measure_semantic_correctness.py's JUDGE_PROMPT (it works) --
 # only the delimiting of untrusted input/output changed, to the same
@@ -162,7 +164,36 @@ class JudgeReport(BaseModel):
     # Verdicts where the `judge` callable itself raised, not just answered off-format --
     # see `JudgeVerdict.judge_error`.
     error_count: int = 0
+    # H-6: the pass rate over the cases the judge was **actually consulted on**
+    # (`total_cases - error_count`). 60 cases with 30 judge calls raising and the other
+    # 30 all YES reported `pass_rate 50.0% (30/60), errored 30` with *no warning* (the
+    # threshold was strictly `> 0.5`) at exit 0 -- the true judged pass rate was 100%.
+    #
+    # A **new** field, not a redefinition of `pass_rate`. `pass_rate` is a plain stored
+    # field populated once in `judge_outputs`, not a property, so changing its meaning
+    # would silently rewrite the number every existing `--json` consumer already reads,
+    # with no schema change to notice. Both are reported; the denominator of each is
+    # named on the headline line.
+    judged_pass_rate: float = 0.0
     verdicts: List[JudgeVerdict] = Field(default_factory=list)
+
+    @property
+    def judged_denominator(self) -> ScoredRate:
+        """`judged_pass_rate`'s denominator, with the note naming what it excluded.
+
+        `unparseable_count` is deliberately **not** an exclusion here: an unparseable
+        response means the judge answered and did not follow the format, which
+        `parse_verdict` scores as a fail on purpose. It is folded into `pass_count`
+        (its own docstring says so) and is therefore not disjoint from it -- listing it
+        as excluded would print a sentence that does not add up.
+        """
+        return scored_denominator(
+            total=self.total_cases,
+            scored=self.total_cases - self.error_count,
+            excluded={"errored": self.error_count},
+            label="judged pass",
+            partition=True,
+        )
 
 
 def judge_outputs(
@@ -226,6 +257,7 @@ def judge_outputs(
         )
 
     total = len(rows)
+    judged = total - error_count
     return JudgeReport(
         judge_id=judge_id,
         spec=spec,
@@ -233,6 +265,8 @@ def judge_outputs(
         total_cases=total,
         pass_count=pass_count,
         pass_rate=(pass_count / total * 100.0) if total else 0.0,
+        # H-6: the same numerator over the cases the judge was actually consulted on.
+        judged_pass_rate=(pass_count / judged * 100.0) if judged > 0 else 0.0,
         unparseable_count=unparseable_count,
         error_count=error_count,
         verdicts=verdicts,
@@ -299,8 +333,18 @@ def judge_disagreements(report: JudgeReport) -> List[JudgeVerdict]:
     judge says NO, or the reverse) and the one a plain pass-rate number hides.
     `rule_passed is None` (no source report pass/fail was carried through) is excluded,
     not treated as a disagreement.
+
+    **H-11:** a case whose judge call *raised* is also excluded. `judge_outputs` records
+    `verdict=False` for such a case so the count stays honest, but the judge was never
+    consulted on it -- there is no verdict to disagree with. Counting it here padded the
+    list this module's own docstring calls "the case that matters most" with cases where
+    the only thing that happened was a rate limit.
     """
-    return [v for v in report.verdicts if v.rule_passed is not None and v.rule_passed != v.verdict]
+    return [
+        v
+        for v in report.verdicts
+        if v.judge_error is None and v.rule_passed is not None and v.rule_passed != v.verdict
+    ]
 
 
 class VerdictFlip(BaseModel):
@@ -326,27 +370,97 @@ class VerdictDiffReport(BaseModel):
     flipped_count: int = 0
     flip_rate: float = 0.0
     flips: List[VerdictFlip] = Field(default_factory=list)
+    # H-7: the two runs' own sizes and the cases present in only one of them. Without
+    # these, two 60-case verdict files with *disjoint* `case_id` sets printed
+    # `No flips -- every comparable verdict matched. Flip rate: 0.0% (0/0)` at exit 0 --
+    # and `case_id` hashes input **and** output, so any adapter change re-hashes every
+    # id and produces exactly that. docs/results.md offers this as the check that
+    # temperature-0 pinning held.
+    old_total: int = 0
+    new_total: int = 0
+    old_only_count: int = 0
+    new_only_count: int = 0
+    # Bounded samples for display; the counts above are complete.
+    old_only_ids: List[str] = Field(default_factory=list)
+    new_only_ids: List[str] = Field(default_factory=list)
+
+    @property
+    def coverage(self) -> float:
+        """Share of the larger run's cases that were actually comparable, 0.0-1.0.
+
+        Over `max(old_total, new_total)`, not over either one alone: a 60-case run
+        diffed against a 3-case subset has 3 comparable cases, and calling that 100%
+        coverage because every case of the smaller run matched is the same
+        denominator-hiding shape this whole cluster of findings is about.
+        """
+        largest = max(self.old_total, self.new_total)
+        return (self.compared_cases / largest) if largest else 0.0
+
+    @property
+    def comparison_denominator(self) -> ScoredRate:
+        """`flip_rate`'s denominator, naming the cases that could not be compared."""
+        largest = max(self.old_total, self.new_total)
+        return scored_denominator(
+            total=largest,
+            scored=self.compared_cases,
+            excluded={
+                "in the old run only": self.old_only_count,
+                "in the new run only": self.new_only_count,
+            },
+            label="flip",
+        )
+
+
+#: H-7: coverage below this makes `judge --diff` a failure rather than a result. Two
+#: verdict files that share almost nothing are not a reproducibility measurement, and
+#: the shape of the defect is that they read as a perfect one.
+MIN_DIFF_COVERAGE = 0.9
+
+#: Number of `old_only`/`new_only` case ids kept on the report for display.
+_DIFF_ONLY_SAMPLE = 10
+
+
+def _verdicts_by_key(report: JudgeReport) -> Dict[Tuple[str, int], JudgeVerdict]:
+    """Index a report's verdicts by `(case_id, occurrence index)`.
+
+    H-7: a plain `{v.case_id: v}` dict silently collapses duplicate ids within one
+    report -- the same (input, output) pair judged twice keeps only the last, and a
+    genuine flip between the two is lost before the diff even starts. The occurrence
+    index makes each one addressable while leaving the single-occurrence case (every
+    ordinary report) keyed exactly as before, at index 0.
+    """
+    seen: Dict[str, int] = {}
+    indexed: Dict[Tuple[str, int], JudgeVerdict] = {}
+    for verdict in report.verdicts:
+        index = seen.get(verdict.case_id, 0)
+        seen[verdict.case_id] = index + 1
+        indexed[(verdict.case_id, index)] = verdict
+    return indexed
 
 
 def diff_verdicts(old: JudgeReport, new: JudgeReport) -> VerdictDiffReport:
-    """Diff two verdict runs by `case_id`, reporting every flip and the overall flip rate.
+    """Diff two verdict runs by `(case_id, occurrence index)`, reporting every flip, the
+    overall flip rate, and (H-7) what could not be compared at all.
 
     This is the reproducibility tool the "Semantic judge is non-deterministic" deferred
     topic asked for: run the same suite through the judge twice (same or different
     `judge_id`) and see exactly which cases flipped, rather than inferring noise from an
     aggregate percentage moving by a point or two.
+
+    The caller is responsible for treating low `coverage` as a failure -- see
+    `MIN_DIFF_COVERAGE` and `paw-test judge --diff`.
     """
-    old_by_id = {v.case_id: v for v in old.verdicts}
-    new_by_id = {v.case_id: v for v in new.verdicts}
-    common_ids = [cid for cid in old_by_id if cid in new_by_id]
+    old_by_key = _verdicts_by_key(old)
+    new_by_key = _verdicts_by_key(new)
+    common_keys = [key for key in old_by_key if key in new_by_key]
 
     flips: List[VerdictFlip] = []
-    for cid in common_ids:
-        o, n = old_by_id[cid], new_by_id[cid]
+    for key in common_keys:
+        o, n = old_by_key[key], new_by_key[key]
         if o.verdict != n.verdict:
             flips.append(
                 VerdictFlip(
-                    case_id=cid,
+                    case_id=key[0],
                     input=o.input,
                     output=o.output,
                     old_verdict=o.verdict,
@@ -356,7 +470,10 @@ def diff_verdicts(old: JudgeReport, new: JudgeReport) -> VerdictDiffReport:
                 )
             )
 
-    compared = len(common_ids)
+    old_only = [key for key in old_by_key if key not in new_by_key]
+    new_only = [key for key in new_by_key if key not in old_by_key]
+
+    compared = len(common_keys)
     return VerdictDiffReport(
         old_judge_id=old.judge_id,
         new_judge_id=new.judge_id,
@@ -364,4 +481,10 @@ def diff_verdicts(old: JudgeReport, new: JudgeReport) -> VerdictDiffReport:
         flipped_count=len(flips),
         flip_rate=(len(flips) / compared * 100.0) if compared else 0.0,
         flips=flips,
+        old_total=len(old.verdicts),
+        new_total=len(new.verdicts),
+        old_only_count=len(old_only),
+        new_only_count=len(new_only),
+        old_only_ids=[key[0] for key in old_only[:_DIFF_ONLY_SAMPLE]],
+        new_only_ids=[key[0] for key in new_only[:_DIFF_ONLY_SAMPLE]],
     )

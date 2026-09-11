@@ -3,4 +3,4 @@ exit code: 0
 --- stdout ---
 No flips -- every comparable verdict matched.
 
-Flip rate: 0.0% (0/2)
+Flip rate: 0/2 (0.0%) -- all 2 scored

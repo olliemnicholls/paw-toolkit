@@ -24,8 +24,10 @@ from paw_kit.speclint import Finding, lint_spec
 from paw_kit.test.active import run_active_learning_loop
 from paw_kit.test.compare import CompareReport, adapter_label_pair, compare_adapters, read_adapter_manifest
 from paw_kit.test.judge import (
+    MIN_DIFF_COVERAGE,
     JudgeInputRow,
     JudgeReport,
+    JudgeVerdict,
     anthropic_judge,
     diff_verdicts,
     judge_disagreements,
@@ -884,6 +886,42 @@ def _load_judge_verdicts_file(path: Path) -> Dict[str, JudgeReport]:
 _UNPARSEABLE_WARN_THRESHOLD = 0.2
 
 
+def _print_judge_disagreement(verdict: JudgeVerdict) -> None:
+    """One line-group of `judge disagrees with assertions` (G-2).
+
+    That block -- which `judge.py`'s own docstring calls the case that matters most --
+    identified its cases by a 64-character `case_id` hash while every other listing in
+    the same command prints the input and the output. The id stays available in the
+    `--out` artifact; what a human reads is the text.
+    """
+    console.print(f"  [bold]Input:[/bold] {_e(verdict.input[:80])}")
+    console.print(f"    Output: {_e(verdict.output[:80])}")
+    console.print(
+        f"    rule_passed={_e(verdict.rule_passed)} judge={_e(verdict.verdict)} "
+        f"({_e(verdict.reason)})"
+    )
+
+
+def _print_judged_pass_rate(report: JudgeReport, side: Optional[str] = None) -> None:
+    """Print H-6's `judged_pass_rate` -- the pass rate over the cases the judge was
+    actually consulted on -- whenever it differs from the headline `pass_rate`.
+
+    Only printed when some case errored, because otherwise the two are the same number
+    and a second identical line is noise. 60 cases with 30 judge calls raising and the
+    other 30 all YES reported `pass_rate 50.0% (30/60)` with no warning at exit 0; the
+    true judged pass rate was 100%.
+    """
+    if not report.error_count:
+        return
+    label = f" ({side})" if side else ""
+    console.print(
+        f"[bold]Judged pass rate{_e(label)}:[/bold] "
+        f"{_e(report.judged_denominator.render(report.pass_count))} -- the judge was "
+        "never consulted on the errored cases, so they are not evidence about the "
+        "adapter either way. The headline pass rate above counts them as failures."
+    )
+
+
 def _warn_on_unparseable(report: JudgeReport, side: Optional[str] = None) -> None:
     """Print a stderr warning when more than `_UNPARSEABLE_WARN_THRESHOLD` of a judge
     run's verdicts came from an unparseable response (see `JudgeReport.unparseable_count`
@@ -998,6 +1036,11 @@ def judge_cmd(
             )
             raise typer.Exit(code=1)
 
+        # H-7: a `--diff` that could not actually compare the two runs must not read as
+        # a clean reproducibility result. Set by the loop below, checked after it, so
+        # every side is still printed before the command exits.
+        diff_unusable = False
+
         # "" alone for a bare JudgeReport; "A" then "B" for a compare-report wrapper --
         # diffs A against A and B against B, and prints both (finding 4).
         for i, side in enumerate(sorted(old_reports)):
@@ -1019,12 +1062,51 @@ def judge_cmd(
                         f"    {_e(old_report.judge_id)}: {_e(flip.old_verdict)} ({_e(flip.old_reason)})  ->  "
                         f"{_e(new_report.judge_id)}: {_e(flip.new_verdict)} ({_e(flip.new_reason)})"
                     )
-            else:
+            elif diff_report.compared_cases:
                 console.print(f"[bold green]No flips{_e(suffix)}[/bold green] -- every comparable verdict matched.")
             console.print(
-                f"\n[bold]Flip rate{_e(suffix)}:[/bold] {_e(round(diff_report.flip_rate, 1))}% "
-                f"({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)})"
+                f"\n[bold]Flip rate{_e(suffix)}:[/bold] "
+                f"{_e(diff_report.comparison_denominator.render(diff_report.flipped_count))}"
             )
+            # H-7: two 60-case verdict files with disjoint `case_id` sets printed
+            # `No flips -- every comparable verdict matched. Flip rate: 0.0% (0/0)` at
+            # exit 0. And `case_id` hashes input AND output, so any adapter change
+            # re-hashes every id and produces exactly that -- while docs/results.md
+            # offers this command as the check that temperature-0 pinning held.
+            if diff_report.old_only_count or diff_report.new_only_count:
+                console.print(
+                    f"  [yellow]Not comparable{_e(suffix)}:[/yellow] "
+                    f"{_e(diff_report.old_only_count)} case(s) only in "
+                    f"{_e(old_report.judge_id)} ({_e(diff_report.old_total)} total), "
+                    f"{_e(diff_report.new_only_count)} only in "
+                    f"{_e(new_report.judge_id)} ({_e(diff_report.new_total)} total). "
+                    "A `case_id` hashes the input *and* the output, so any change to "
+                    "the adapter re-hashes every id."
+                )
+                for sample_label, sample in (
+                    (old_report.judge_id, diff_report.old_only_ids),
+                    (new_report.judge_id, diff_report.new_only_ids),
+                ):
+                    for cid in sample:
+                        console.print(f"    [dim]only in {_e(sample_label)}: {_e(cid)}[/dim]")
+            if diff_report.compared_cases == 0:
+                diff_unusable = True
+                console.print(
+                    f"[bold red]Error{_e(suffix)}:[/bold red] the two runs share no "
+                    "comparable case. This is not a 0% flip rate; it is no measurement "
+                    "at all."
+                )
+            elif diff_report.coverage < MIN_DIFF_COVERAGE:
+                diff_unusable = True
+                console.print(
+                    f"[bold red]Error{_e(suffix)}:[/bold red] only "
+                    f"{_e(round(diff_report.coverage * 100, 1))}% of the larger run's "
+                    f"cases were comparable, below the {_e(round(MIN_DIFF_COVERAGE * 100))}% "
+                    "minimum. The flip rate above is drawn from too small a slice to "
+                    "say anything about reproducibility."
+                )
+        if diff_unusable:
+            raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
     if report is None:
@@ -1123,10 +1205,7 @@ def judge_cmd(
                     f"({_e(len(disagreements))}/{_e(side_report.total_cases)}):[/bold yellow]"
                 )
                 for v in disagreements:
-                    console.print(
-                        f"  {_e(v.case_id)}: rule_passed={_e(v.rule_passed)} "
-                        f"judge={_e(v.verdict)} ({_e(v.reason)})"
-                    )
+                    _print_judge_disagreement(v)
         console.print(
             f"\n[bold]Summary:[/bold] A pass rate {_e(round(report_a.pass_rate, 1))}% "
             f"({_e(report_a.pass_count)}/{_e(report_a.total_cases)}), "
@@ -1135,6 +1214,8 @@ def judge_cmd(
             f"({_e(report_b.pass_count)}/{_e(report_b.total_cases)}), "
             f"unparseable B {_e(report_b.unparseable_count)}, errored B {_e(report_b.error_count)}"
         )
+        _print_judged_pass_rate(report_a, side="A")
+        _print_judged_pass_rate(report_b, side="B")
         _warn_on_unparseable(report_a, side="A")
         _warn_on_unparseable(report_b, side="B")
         all_errored_a = _warn_on_judge_errors(report_a, side="A")
@@ -1145,10 +1226,14 @@ def judge_cmd(
                 encoding="utf-8",
             )
             console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
-        # Every case on a side erroring means the judge was never actually consulted on
-        # that side -- a 0.0% pass rate next to exit 0 used to read as "the adapter
-        # failed every case" when the true story was "the judge itself never ran".
-        if all_errored_a or all_errored_b:
+        # H-6: ANY errored case exits non-zero, not only every case erroring. 30 of 60
+        # judge calls raising reported `pass_rate 50.0% (30/60), errored 30`, no
+        # warning (the threshold was strictly `> 0.5`), exit 0 -- while the true judged
+        # pass rate was 100%. `all_errored_a`/`all_errored_b` are still computed,
+        # because `_warn_on_judge_errors` prints the majority-errored warning as a side
+        # effect and that message is worth keeping distinct.
+        del all_errored_a, all_errored_b
+        if report_a.error_count or report_b.error_count:
             raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
@@ -1179,22 +1264,22 @@ def judge_cmd(
                 f"({_e(len(disagreements))}/{_e(jreport.total_cases)}):[/bold yellow]"
             )
             for v in disagreements:
-                console.print(
-                    f"  {_e(v.case_id)}: rule_passed={_e(v.rule_passed)} judge={_e(v.verdict)} ({_e(v.reason)})"
-                )
+                _print_judge_disagreement(v)
         console.print(
             f"\n[bold]Pass rate:[/bold] {_e(round(jreport.pass_rate, 1))}% "
             f"({_e(jreport.pass_count)}/{_e(jreport.total_cases)}), "
             f"unparseable {_e(jreport.unparseable_count)}, errored {_e(jreport.error_count)}"
         )
+        _print_judged_pass_rate(jreport)
         _warn_on_unparseable(jreport)
         all_errored = _warn_on_judge_errors(jreport)
         if out is not None:
             out.write_text(jreport.model_dump_json(indent=2), encoding="utf-8")
             console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
-        # See the compare-report branch above: every case erroring means the judge was
-        # never actually consulted, and that must not exit 0.
-        if all_errored:
+        # H-6: see the compare-report branch above -- any errored case, not only all of
+        # them, means part of this run measured nothing and must not exit 0.
+        del all_errored
+        if jreport.error_count:
             raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 

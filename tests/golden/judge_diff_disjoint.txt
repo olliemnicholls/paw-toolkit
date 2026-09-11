@@ -1,0 +1,13 @@
+$ paw-test judge --diff old.json new.json
+exit code: 1
+--- stdout ---
+
+Flip rate: 0/0 (0.0%) -- none of 2 scored -- 2 in the old run only, 2 in the new run only
+  Not comparable: 2 case(s) only in anthropic/claude-haiku-4-5/temperature=0.0 (2 total), 2 only in
+anthropic/claude-haiku-4-5/temperature=0.0 (2 total). A `case_id` hashes the input *and* the output, so any change to
+the adapter re-hashes every id.
+    only in anthropic/claude-haiku-4-5/temperature=0.0: 20a182bcb775869533eea6d1a542faba6a245cab60176725eb150c0a52fa8125
+    only in anthropic/claude-haiku-4-5/temperature=0.0: 855abc9a4f28d6ddbc498ba0be032f1af13c5f671dfa64d81ebec3ccea355528
+    only in anthropic/claude-haiku-4-5/temperature=0.0: 0822ca96bd7fcf3aed7affdb39730124d932369ad50c464c9e6748fd8abd4ed4
+    only in anthropic/claude-haiku-4-5/temperature=0.0: eb6485884a749f217e492189e96bf0b77b90202aec985b5d0eefdbfe34aea1cf
+Error: the two runs share no comparable case. This is not a 0% flip rate; it is no measurement at all.

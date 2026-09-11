@@ -7,6 +7,7 @@
   "pass_rate": 33.33333333333333,
   "unparseable_count": 0,
   "error_count": 0,
+  "judged_pass_rate": 33.33333333333333,
   "verdicts": [
     {
       "case_id": "d78fcdd08e06818a556cbe727d8cdc275c78bab4e6787ce62a27bf964c1ccc35",

@@ -535,7 +535,12 @@ def test_judge_cli_diff_reports_flip_rate(tmp_path: Path) -> None:
 
     result = runner.invoke(test_app, ["judge", "--diff", str(old_path), str(new_path)])
     assert result.exit_code == 0
-    assert "Flip rate: 100.0%" in result.output
+    # REWRITTEN by H-7 (bug-hunt-remediation Track B; see "Justified assertion
+    # changes"). The rate is unchanged at 100%; what changed is that it now states its
+    # denominator, because `Flip rate: 0.0% (0/0)` on two runs sharing no case was the
+    # finding. Same behaviour asserted, new rendering.
+    assert "Flip rate: 1/1 (100.0%)" in result.output
+    assert "all 1 scored" in result.output
     assert "Flipped verdicts (1/1)" in result.output
 
 
@@ -723,7 +728,13 @@ def test_judge_cli_writes_out_despite_partial_judge_errors(
     monkeypatch.setattr(cli_module, "anthropic_judge", fake_anthropic_judge)
 
     result = runner.invoke(test_app, ["judge", str(report_path), "--spec", "x", "--out", str(out_path)])
-    assert result.exit_code == 0
+    # REWRITTEN by H-6 (bug-hunt-remediation Track B; see "Justified assertion
+    # changes"). `exit_code == 0` was the assertion; H-6 is that a run where the judge
+    # errored on any case has not measured what it reports, and only 60/60 errored
+    # exited non-zero. The subject of this test -- that `--out` is written *anyway*, so
+    # the verdicts already obtained are not discarded -- is unchanged and is what the
+    # rest of the body still checks.
+    assert result.exit_code == 1
     assert out_path.exists()
 
     data = json.loads(out_path.read_text(encoding="utf-8"))
@@ -928,12 +939,24 @@ def test_judge_cli_exits_nonzero_when_every_case_errored_on_check_report(
     assert "unexpected keyword argument 'temperature'" in result.output
 
 
-def test_judge_cli_warns_but_exits_zero_when_majority_but_not_all_errored(
+def test_judge_cli_warns_and_exits_nonzero_when_majority_but_not_all_errored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """More than half (but not all) of a judge run's cases erroring should print a
-    clear "the judge itself is failing" line with the first error text, but must not by
-    itself force a non-zero exit -- some verdicts were still genuinely obtained."""
+    """More than half (but not all) of a judge run's cases erroring prints a clear
+    "the judge itself is failing" line with the first error text, **and** exits
+    non-zero.
+
+    REWRITTEN by H-6 (bug-hunt-remediation Track B; see "Justified assertion changes").
+    The old assertion and the old docstring both said the opposite -- "must not by
+    itself force a non-zero exit -- some verdicts were still genuinely obtained" -- and
+    that reasoning is exactly H-6's finding. 30 of 60 judge calls raising reported
+    `pass_rate 50.0% (30/60), errored 30` with no warning at all (the warn threshold
+    was strictly `> 0.5`) and exit 0, while the true judged pass rate was 100%. The
+    verdicts that *were* obtained are not discarded -- they are still printed, still
+    written to `--out`, and now reported separately as `Judged pass rate` over the
+    cases the judge was actually consulted on. What the exit code says is that the run
+    as asked for did not complete.
+    """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
     report_path = tmp_path / "check_report.json"
     report_path.write_text(
@@ -967,10 +990,15 @@ def test_judge_cli_warns_but_exits_zero_when_majority_but_not_all_errored(
     monkeypatch.setattr(cli_module, "anthropic_judge", fake_anthropic_judge)
 
     result = runner.invoke(test_app, ["judge", str(report_path), "--spec", "x"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "errored 2" in result.output
     assert "the judge itself is failing" in result.output.lower()
     assert "503 rate limited" in result.output
+    # H-6: the rate over the cases the judge was actually consulted on is reported
+    # separately, and it is 100% -- one case judged, one YES.
+    collapsed = " ".join(result.output.split())
+    assert "Judged pass rate: 1/1 (100.0%)" in collapsed
+    assert "2 errored" in collapsed
 
 
 def test_judge_cli_exits_nonzero_when_one_side_of_compare_report_fully_errored(
@@ -1030,3 +1058,306 @@ def test_judge_cli_exits_nonzero_when_one_side_of_compare_report_fully_errored(
     assert result.exit_code != 0
     assert "the judge itself is failing" in result.output.lower()
     assert "(A)" in result.output
+
+
+# =====================================================================================
+# Report section 6, H-6 / H-7 / H-11 / G-2 (bug-hunt-remediation, Track B, Phase B4)
+# =====================================================================================
+
+
+def _half_erroring_judge(fail_first: int):
+    """A judge that raises on the first `fail_first` calls and answers YES after."""
+    state = {"n": 0}
+
+    def _judge(prompt: str) -> str:
+        state["n"] += 1
+        if state["n"] <= fail_first:
+            raise RuntimeError("rate limited")
+        return "YES: fine"
+
+    return _judge
+
+
+def test_h6_judge_pass_rate_is_not_diluted_by_its_own_failures() -> None:
+    """H-6: errored verdicts were given `verdict=False` and kept in `total_cases`.
+    60 cases, 30 judge calls raising, the other 30 all YES reported
+    `pass_rate 50.0% (30/60), errored 30`, **no warning** (the threshold was strictly
+    `> 0.5`), exit 0. The true judged pass rate is 100%."""
+    rows = [JudgeInputRow(input=f"i{i}", output=f"o{i}") for i in range(60)]
+    report = judge_outputs(
+        rows,
+        _half_erroring_judge(30),
+        spec="s",
+        temperature_note="t",
+        judge_id="j",
+    )
+
+    assert report.total_cases == 60
+    assert report.error_count == 30
+    assert report.pass_count == 30
+    # The existing field keeps its existing meaning -- every `--json` consumer already
+    # reads it, and it is a stored field, not a property.
+    assert report.pass_rate == 50.0
+    # The new one answers the question the old one was being read as answering.
+    assert report.judged_pass_rate == 100.0
+    assert report.judged_denominator.scored == 30
+    assert "30 errored" in report.judged_denominator.note
+
+
+def test_h6_judged_pass_rate_equals_pass_rate_when_nothing_errored() -> None:
+    rows = [JudgeInputRow(input=f"i{i}", output=f"o{i}") for i in range(4)]
+    report = judge_outputs(
+        rows, lambda p: "YES: ok", spec="s", temperature_note="t", judge_id="j"
+    )
+    assert report.error_count == 0
+    assert report.pass_rate == report.judged_pass_rate == 100.0
+
+
+def test_h6_all_errored_judged_rate_is_zero_not_a_crash() -> None:
+    rows = [JudgeInputRow(input="i", output="o")]
+    report = judge_outputs(
+        rows, _half_erroring_judge(10), spec="s", temperature_note="t", judge_id="j"
+    )
+    assert report.error_count == 1
+    assert report.judged_pass_rate == 0.0
+    assert report.judged_denominator.scored == 0
+
+
+def test_h11_errored_verdict_is_not_a_judge_disagreement() -> None:
+    """H-11: a case whose judge call *raised* was counted as "judge disagrees with
+    assertions", padding the list `judge.py`'s own docstring calls the case that
+    matters most. The judge was never consulted; there is no verdict to disagree
+    with."""
+    rows = [
+        JudgeInputRow(input="ok", output="o", rule_passed=True),
+        JudgeInputRow(input="err", output="o", rule_passed=True),
+    ]
+    calls = {"n": 0}
+
+    def _judge(prompt: str) -> str:
+        calls["n"] += 1
+        if "err" in prompt:
+            raise RuntimeError("rate limited")
+        return "YES: fine"
+
+    report = judge_outputs(rows, _judge, spec="s", temperature_note="t", judge_id="j")
+
+    errored = [v for v in report.verdicts if v.judge_error is not None]
+    assert len(errored) == 1
+    # It IS still `verdict=False` and still counted in error_count -- H-11 only
+    # changes what the disagreement listing shows.
+    assert errored[0].verdict is False
+    assert report.error_count == 1
+    assert judge_disagreements(report) == []
+
+
+def test_h11_a_genuine_disagreement_still_reports() -> None:
+    rows = [JudgeInputRow(input="a", output="o", rule_passed=True)]
+    report = judge_outputs(
+        rows, lambda p: "NO: wrong", spec="s", temperature_note="t", judge_id="j"
+    )
+    assert len(judge_disagreements(report)) == 1
+
+
+def _report_with(pairs, judge_id: str = "j") -> JudgeReport:
+    """A `JudgeReport` built directly from (input, output, verdict) triples."""
+    rows = [JudgeInputRow(input=i, output=o) for i, o, _ in pairs]
+    verdicts = dict(((i, o), v) for i, o, v in pairs)
+    return judge_outputs(
+        rows,
+        lambda prompt: "YES: y" if _lookup(verdicts, prompt) else "NO: n",
+        spec="s",
+        temperature_note="t",
+        judge_id=judge_id,
+    )
+
+
+def _lookup(verdicts, prompt: str) -> bool:
+    for (inp, _out), verdict in verdicts.items():
+        if f"\n{inp}\n" in prompt:
+            return verdict
+    return True
+
+
+def test_h7_disjoint_runs_do_not_read_as_no_flips() -> None:
+    """H-7: two 60-case verdict files with disjoint `case_id` sets gave
+    `No flips -- every comparable verdict matched. Flip rate: 0.0% (0/0)`, exit 0.
+    `case_id` hashes input **and** output, so any adapter change re-hashes every id --
+    and docs/results.md offers this as the check that temperature-0 pinning held."""
+    old = _report_with([(f"i{i}", "old-output", True) for i in range(60)], judge_id="old")
+    new = _report_with([(f"i{i}", "new-output", True) for i in range(60)], judge_id="new")
+
+    diff = diff_verdicts(old, new)
+
+    assert diff.compared_cases == 0
+    assert diff.old_total == 60
+    assert diff.new_total == 60
+    assert diff.old_only_count == 60
+    assert diff.new_only_count == 60
+    assert diff.coverage == 0.0
+    assert "none of 60 scored" in diff.comparison_denominator.note
+
+
+def test_h7_partial_overlap_reports_coverage_over_the_larger_run() -> None:
+    """Coverage is over `max(old_total, new_total)`: a 60-case run diffed against a
+    3-case subset has 3 comparable cases, and calling that 100% because every case of
+    the smaller run matched is the same denominator-hiding shape as the rest of this
+    cluster."""
+    old = _report_with([(f"i{i}", "o", True) for i in range(60)], judge_id="old")
+    new = _report_with([(f"i{i}", "o", True) for i in range(3)], judge_id="new")
+
+    diff = diff_verdicts(old, new)
+
+    assert diff.compared_cases == 3
+    assert diff.old_only_count == 57
+    assert diff.new_only_count == 0
+    assert diff.coverage == pytest.approx(3 / 60)
+    # Imported inside the test, not at module scope: a module-scope import of a symbol
+    # absent at `main` turns the file into a collection ERROR, and the red-at-main gate
+    # would then pass on an ImportError rather than on the behaviour.
+    from paw_kit.test.judge import MIN_DIFF_COVERAGE
+
+    assert diff.coverage < MIN_DIFF_COVERAGE
+
+
+def test_h7_duplicate_case_ids_within_one_report_do_not_collapse() -> None:
+    """H-7's second half: keying by `case_id` alone silently dropped all but the last
+    of a repeated (input, output) pair, losing any genuine flip between the two before
+    the diff even started."""
+    old = _report_with([("same", "same", True), ("same", "same", True)], judge_id="old")
+    new = _report_with([("same", "same", False), ("same", "same", False)], judge_id="new")
+
+    assert old.total_cases == new.total_cases == 2
+    assert len({v.case_id for v in old.verdicts}) == 1, "the fixture must duplicate the id"
+
+    diff = diff_verdicts(old, new)
+
+    assert diff.compared_cases == 2
+    assert diff.flipped_count == 2
+    assert diff.coverage == 1.0
+
+
+def test_h7_identical_runs_are_full_coverage_and_no_flips() -> None:
+    old = _report_with([(f"i{i}", "o", True) for i in range(5)], judge_id="old")
+    new = _report_with([(f"i{i}", "o", True) for i in range(5)], judge_id="new")
+    diff = diff_verdicts(old, new)
+    assert diff.compared_cases == 5
+    assert diff.flipped_count == 0
+    assert diff.coverage == 1.0
+    assert diff.old_only_count == diff.new_only_count == 0
+
+
+def _verdict_file(path: Path, judge_id: str, pairs) -> None:
+    """Write a `judge --out` file by hand, for the `--diff` CLI cases."""
+    verdicts = [
+        {
+            "case_id": case_id_for(inp, out),
+            "input": inp,
+            "output": out,
+            "verdict": verdict,
+            "reason": "r",
+            "rule_passed": None,
+            "judge_error": None,
+        }
+        for inp, out, verdict in pairs
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "judge_id": judge_id,
+                "spec": "s",
+                "temperature_note": "t",
+                "total_cases": len(verdicts),
+                "pass_count": sum(1 for v in verdicts if v["verdict"]),
+                "pass_rate": 0.0,
+                "unparseable_count": 0,
+                "error_count": 0,
+                "verdicts": verdicts,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_h7_cli_diff_exits_nonzero_on_disjoint_runs(tmp_path: Path) -> None:
+    """H-7 at the CLI: the command printed `No flips -- every comparable verdict
+    matched. Flip rate: 0.0% (0/0)` and exited 0 for two runs sharing no case."""
+    old_path, new_path = tmp_path / "old.json", tmp_path / "new.json"
+    _verdict_file(old_path, "old", [(f"i{i}", "old-out", True) for i in range(4)])
+    _verdict_file(new_path, "new", [(f"i{i}", "new-out", True) for i in range(4)])
+
+    result = runner.invoke(test_app, ["judge", "--diff", str(old_path), str(new_path)])
+    out = result.output
+
+    assert result.exit_code == 1, out
+    assert "No flips" not in out
+    assert "share no comparable case" in out
+    assert "Not comparable" in out
+
+
+def test_h7_cli_diff_exits_nonzero_below_the_coverage_floor(tmp_path: Path) -> None:
+    old_path, new_path = tmp_path / "old.json", tmp_path / "new.json"
+    _verdict_file(old_path, "old", [(f"i{i}", "o", True) for i in range(10)])
+    _verdict_file(new_path, "new", [(f"i{i}", "o", True) for i in range(5)])
+
+    result = runner.invoke(test_app, ["judge", "--diff", str(old_path), str(new_path)])
+
+    assert result.exit_code == 1, result.output
+    assert "below the 90% minimum" in " ".join(result.output.split())
+
+
+def test_h7_cli_diff_still_exits_zero_on_a_full_overlap(tmp_path: Path) -> None:
+    """The guard must not fire on the case the command was built for."""
+    old_path, new_path = tmp_path / "old.json", tmp_path / "new.json"
+    _verdict_file(old_path, "old", [(f"i{i}", "o", True) for i in range(4)])
+    _verdict_file(new_path, "new", [(f"i{i}", "o", True) for i in range(4)])
+
+    result = runner.invoke(test_app, ["judge", "--diff", str(old_path), str(new_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No flips" in result.output
+
+
+def test_g2_judge_disagreement_listing_prints_text_not_a_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G-2: "judge disagrees with assertions" -- the block `judge.py`'s own docstring
+    calls the case that matters most -- identified cases by a 64-character `case_id`
+    hash while every other listing in the same command prints input and output."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+    report_path = tmp_path / "check_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "task_name": "x",
+                "adapter_path": "a.paw",
+                "total_cases": 1,
+                "passed_cases": 1,
+                "failed_cases": 0,
+                "results": [
+                    {
+                        "input": "a-distinctive-input",
+                        "output": "a-distinctive-output",
+                        "passed": True,
+                        "failed_rules": [],
+                        "failed_rule_names": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    import paw_kit.cli as cli_module
+
+    monkeypatch.setattr(
+        cli_module, "anthropic_judge", lambda model="m", **kw: (lambda prompt: "NO: nope")
+    )
+
+    result = runner.invoke(test_app, ["judge", str(report_path), "--spec", "x"])
+    out = " ".join(result.output.split())
+
+    assert "judge disagrees with assertions" in out
+    assert "a-distinctive-input" in out
+    assert "a-distinctive-output" in out
+    assert case_id_for("a-distinctive-input", "a-distinctive-output") not in out
