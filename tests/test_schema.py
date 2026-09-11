@@ -1365,3 +1365,70 @@ def test_interegular_ast_surface_is_still_what_the_translator_expects() -> None:
     assert type(concat).__name__ == "_Concatenation"
     assert type(concat.parts[0]).__name__ == "_Repeated"
     assert type(concat.parts[1]).__name__ == "__DotCls"
+
+
+# --- S-1: alternation, named groups and (?i) fall out of the S-3 translation ---------
+
+
+@pytest.mark.parametrize(
+    "pattern_src,legal,truncated",
+    [
+        (r"cat|dog", ("cat", "dog"), "cat"),
+        (r"(cat|dog)s?", ("cats", "dog"), "cat"),
+    ],
+)
+def test_alternation_is_grouped_before_it_is_spliced_S_1(
+    pattern_src: str, legal: tuple, truncated: str
+) -> None:
+    """An un-grouped `|` became top level and rewrote the whole grammar (S-1).
+
+    `Field(pattern="cat|dog")` compiled to `^\\{...\"x\"...:...\"cat|dog\"\\s*\\}$`, which
+    means `...\"cat` OR `dog\"\\s*\\}$` -- so it rejected BOTH legal values and accepted
+    the truncated, unparseable `{"x": "cat`.
+    """
+    import re as _re
+
+    model = create_model("Alt", x=(str, Field(pattern=pattern_src)))
+    pat = pydantic_to_regex(model, anchors=True)
+    for value in legal:
+        assert _re.match(pat, '{"x": "%s"}' % value) is not None, value
+    assert _re.fullmatch(pat, '{"x": "%s' % truncated) is None, (
+        "the grammar still accepts a truncated object that is not JSON at all"
+    )
+
+
+def test_named_groups_across_fields_do_not_collide_S_1() -> None:
+    """Two fields sharing a group name made the exported string an invalid regex (S-1).
+
+    Python `re` raises "redefinition of group name" -- i.e. `pydantic_to_regex` returned
+    a string that is not a regex. The translation renders every group non-capturing, so
+    there is no name left to collide.
+    """
+    import re as _re
+
+    model = create_model(
+        "Named",
+        x=(str, Field(pattern=r"(?P<n>a)b")),
+        y=(str, Field(pattern=r"(?P<n>c)d")),
+    )
+    pat = pydantic_to_regex(model, anchors=True)
+    assert "(?P<" not in pat
+    assert _re.match(_re.compile(pat), '{"x": "ab", "y": "cd"}') is not None
+
+
+def test_leading_inline_ignorecase_is_honoured_not_refused_S_1() -> None:
+    """`(?i)abc` is case-folded into explicit classes rather than rejected (S-1).
+
+    Splicing it produced a string `re.compile()` refuses outright ("global flags not at
+    the start of the expression"), because by then the flag group is in the middle of
+    the assembled grammar.
+    """
+    import re as _re
+
+    model = create_model("Ci", x=(str, Field(pattern=r"(?i)abc")))
+    pat = pydantic_to_regex(model, anchors=True)
+    assert "(?i)" not in pat
+    compiled = _re.compile(pat)  # the S-1 failure mode is this line raising
+    for value in ("abc", "aBc", "ABC"):
+        assert compiled.match('{"x": "%s"}' % value) is not None, value
+    assert compiled.match('{"x": "abd"}') is None
