@@ -137,24 +137,40 @@ TARGETS: dict[str, Target] = {
         "tests/test_jit_agreement.py tests/test_jit_shadow.py", default=False
     ),
     "paw_kit/jit/shadow.py": Target(
-        "tests/test_jit_shadow.py tests/test_jit.py tests/test_jit_persistence.py",
+        "tests/test_jit_shadow.py tests/test_jit.py tests/test_jit_persistence.py "
+        "tests/test_jit_fail_open.py tests/test_jit_deadline_integration.py "
+        "tests/test_jit_shadow_raw_values.py tests/test_jit_shadow_drops.py",
         default=False,
-        note="slow (~23s per run) and shares the known test_jit_shadow flake",
+        note="slow (~23s per run) and shares the known test_jit_shadow flake. Track C "
+        "(bug-hunt-remediation) added the four tests/test_jit_*.py files after "
+        "test_jit_persistence.py above: without them a shadow.py run misses every "
+        "J-2/J-4/J-10/M-4b test and reports survivors those tests do in fact kill "
+        "(confirmed by execution: 3 mutants -- the pool-size constant, and two "
+        "drop-warning boundary conditions -- surfaced as false regressions the first "
+        "time this track ran the gate before this line was updated).",
     ),
     "paw_kit/jit/decorator.py": Target(
-        "tests/test_jit.py tests/test_jit_shadow.py tests/test_jit_persistence.py",
+        "tests/test_jit.py tests/test_jit_shadow.py tests/test_jit_persistence.py "
+        "tests/test_jit_fail_open.py tests/test_jit_deadline_integration.py "
+        "tests/test_jit_shadow_raw_values.py tests/test_jit_shadow_drops.py",
         default=False,
         note="M-4 (the ~1-in-12 test_jit_shadow flake that made this module's control gate "
         "intermittent) was fixed on track-instruments. Left out of the default set and "
         "the baseline until a clean multi-run measurement is recorded; re-enable with "
-        "--modules paw_kit/jit/decorator.py.",
+        "--modules paw_kit/jit/decorator.py. Track C added the four tests/test_jit_*.py "
+        "files after test_jit_persistence.py above, for the same reason as shadow.py's "
+        "entry just above.",
     ),
     "paw_kit/jit/db.py": Target(
-        "tests/test_jit.py tests/test_jit_shadow.py tests/test_jit_persistence.py",
+        "tests/test_jit.py tests/test_jit_shadow.py tests/test_jit_persistence.py "
+        "tests/test_jit_fail_open.py tests/test_jit_deadline_integration.py "
+        "tests/test_jit_shadow_raw_values.py",
         default=False,
         note="slow (~37s per run). tests/test_jit_persistence.py joins the selection "
         "for Track G: without it a db.py run misses every D-1/D-5/D-7/D-9 test and "
-        "reports survivors those tests do in fact kill.",
+        "reports survivors those tests do in fact kill. Track C added the three "
+        "tests/test_jit_*.py files after it, for J-1's real DB-fault injection and "
+        "J-2/J-10's pool_exhausted/teacher_error exclusion in get_agreement_stats.",
     ),
     "paw_kit/atomicio.py": Target(
         "tests/test_cli.py tests/test_jit.py tests/test_jit_persistence.py",

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from paw_kit import MockPAWBackend, compile_on_hit
+import paw_kit.jit.decorator as decorator_module
 import paw_kit.jit.shadow as shadow_module
 
 
@@ -159,3 +160,41 @@ def test_shadow_path_pool_exhaustion_from_other_tasks_scores_excluded_verdict(
     finally:
         for _ in range(held):
             pool._free.release()
+
+
+# --- Direct pins for the two process-wide pool sizes and the timeout validation ----
+
+
+def test_served_and_shadow_pool_sizes_are_exactly_four() -> None:
+    """Pins the documented default pool size directly (mutation-gate coverage:
+    a changed `_SERVED_POOL_MAX_WORKERS`/`_SHADOW_POOL_MAX_WORKERS` constant must
+    be visible here, not just indirectly through timing-based behaviour tests)."""
+    assert len(decorator_module._SERVED_DEADLINE_POOL.worker_threads) == 4
+    assert decorator_module._SERVED_POOL_MAX_WORKERS == 4
+    assert len(shadow_module._SHADOW_DEADLINE_POOL.worker_threads) == 4
+    assert shadow_module._SHADOW_POOL_MAX_WORKERS == 4
+
+
+def test_adapter_timeout_s_zero_is_rejected_at_decoration_time(tmp_path: Path) -> None:
+    """The boundary itself: `adapter_timeout_s=0` must raise, not silently be
+    treated as "no deadline" -- pins `<= 0`, not `< 0`."""
+    with pytest.raises(ValueError, match="adapter_timeout_s"):
+        compile_on_hit(
+            spec="boundary check", cache_dir=str(tmp_path / "boundary"),
+            adapter_timeout_s=0,
+        )(lambda text: text)
+
+
+def test_adapter_timeout_s_negative_is_rejected_at_decoration_time(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="adapter_timeout_s"):
+        compile_on_hit(
+            spec="boundary check negative", cache_dir=str(tmp_path / "boundary2"),
+            adapter_timeout_s=-1.0,
+        )(lambda text: text)
+
+
+def test_adapter_timeout_s_positive_is_accepted(tmp_path: Path) -> None:
+    compile_on_hit(
+        spec="boundary check positive", cache_dir=str(tmp_path / "boundary3"),
+        adapter_timeout_s=0.01,
+    )(lambda text: text)
