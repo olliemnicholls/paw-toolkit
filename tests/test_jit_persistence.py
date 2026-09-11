@@ -699,7 +699,9 @@ def test_atomic_write_text_fsyncs_the_file_and_the_directory_D_3(
     real_fsync = os.fsync
     monkeypatch.setattr(os, "fsync", lambda fd: (seen.append(fd), real_fsync(fd))[1])
 
-    target = tmp_path / "out" / "manifest.paw"
+    # Two missing directory levels, so `parents=True` is load-bearing rather than
+    # incidentally satisfied by a single mkdir.
+    target = tmp_path / "out" / "nested" / "manifest.paw"
     atomicio.atomic_write_text(target, "payload")
 
     assert target.read_text() == "payload"
@@ -707,6 +709,25 @@ def test_atomic_write_text_fsyncs_the_file_and_the_directory_D_3(
         f"{len(seen)} fsync call(s): the file and its parent directory must both be "
         "synced, or the rename can reach disk before the data blocks"
     )
+
+
+def test_atomic_write_text_creates_a_dangling_symlinks_target_directory_D_8(
+    tmp_path: Path,
+) -> None:
+    """A symlink can point somewhere that does not exist yet.
+
+    `target.parent` existing says nothing about the *resolved* target's parent, and
+    `mkstemp(dir=...)` fails outright if that directory is missing -- so the resolved
+    parent has to be created too, all of it.
+    """
+    from paw_kit.atomicio import atomic_write_text
+
+    real = tmp_path / "deep" / "deeper" / "program.paw"
+    link = tmp_path / "dangling.paw"
+    link.symlink_to(real)
+    atomic_write_text(link, "new")
+    assert real.read_text() == "new"
+    assert link.is_symlink()
 
 
 def test_atomic_write_text_follows_a_symlink_target_D_8(tmp_path: Path) -> None:
