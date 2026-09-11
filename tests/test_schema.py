@@ -2203,3 +2203,71 @@ def test_int_range_enumeration_is_capped_S_9() -> None:
     over_cap = create_model("S9OverCap", x=(int, Field(ge=1, le=_MAX_ENUMERATED_INT_RANGE + 1)))
     with pytest.warns(UserWarning, match="does not enforce"):
         pydantic_to_regex(over_cap, anchors=True)
+
+
+# --- S-10: Decimal is a number, not "any JSON string" -------------------------------
+
+
+S_10_ACCEPTED = ['{"x":1.5}', '{"x":42}', '{"x":-0.001}', '{"x":"1.5"}', '{"x":"42"}',
+                 '{"x":"-0.5"}', '{"x":1e5}', '{"x":"1E+5"}', '{"x":0}']
+S_10_REJECTED = ['{"x":"hello"}', '{"x":""}', '{"x":"Infinity"}', '{"x":"NaN"}',
+                 '{"x":null}', '{"x":true}']
+
+
+def test_decimal_accepts_numbers_and_quoted_numbers_not_any_string_S_10() -> None:
+    """`Decimal` compiled to JSON_STRING: it accepted `"hello"` and rejected `1.5`.
+
+    The natural output for a money field is a number, and that was exactly what the
+    grammar forbade. pydantic accepts both spellings, and `model_dump_json()` emits the
+    quoted one -- `Decimal("1.5")` round-trips as `{"x":"1.5"}` -- so both must stay.
+    """
+    import re as _re
+
+    from pydantic import ValidationError
+
+    model = create_model("S10", x=(Decimal, ...))
+    pat = pydantic_to_regex(model, anchors=True)
+
+    for value in S_10_ACCEPTED:
+        model.model_validate_json(value)  # precondition: pydantic accepts it
+        assert _re.fullmatch(pat, value) is not None, f"the grammar rejects {value!r}"
+    for value in S_10_REJECTED:
+        with pytest.raises(ValidationError):
+            model.model_validate_json(value)
+        assert _re.fullmatch(pat, value) is None, f"the grammar accepts {value!r}"
+
+
+def test_decimal_round_trips_through_its_own_grammar_S_10() -> None:
+    """Every Decimal pydantic serialises must satisfy the grammar it compiles to.
+
+    Passes at `main` by design: there `Decimal` compiled to "any JSON string" and
+    `model_dump_json()` always quotes, so the round trip trivially held. It is the
+    guard on *this* fix -- a numeric body that missed `1E+5` or a 100-digit coefficient
+    would break a round trip that used to work, and this is what would catch it.
+    """
+    import re as _re
+
+    model = create_model("S10RoundTrip", x=(Decimal, ...))
+    pat = pydantic_to_regex(model, anchors=True)
+    for raw in ("1.5", "42", "-0.001", "0", "1E+5", "1e-7", "123456789.123456789"):
+        dumped = model(x=Decimal(raw)).model_dump_json()
+        assert _re.fullmatch(pat, dumped) is not None, (
+            f"Decimal({raw!r}) serialises to {dumped!r}, which its own grammar rejects"
+        )
+
+
+def test_decimal_grammar_is_narrower_than_pydantic_but_never_wider_S_10() -> None:
+    """The spellings pydantic tolerates and the grammar refuses, pinned as narrowing.
+
+    pydantic will take `"0007"`, `"+1"` and `".5"` for a Decimal. The grammar emits
+    JSON's own number syntax instead, so there is one spelling per value for a decoder
+    to find. That is the narrowing direction (rule 1) and therefore allowed; it is
+    asserted here so a later widening is a visible change rather than a surprise.
+    """
+    import re as _re
+
+    model = create_model("S10Narrow", x=(Decimal, ...))
+    pat = pydantic_to_regex(model, anchors=True)
+    for value in ('{"x":"0007"}', '{"x":"+1"}', '{"x":".5"}', '{"x":"1."}'):
+        model.model_validate_json(value)  # pydantic accepts ...
+        assert _re.fullmatch(pat, value) is None  # ... and the grammar does not

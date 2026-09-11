@@ -96,8 +96,26 @@ JSON_FLOAT = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(\.[0-9]+)?([eE][
 JSON_BOOLEAN = r"(true|false)"
 JSON_NULL = r"null"
 
+# S-10: `Decimal` compiled to "any JSON string", so the grammar accepted
+# `{"x": "hello"}` and rejected `{"x": 1.5}` and `{"x": 42}` -- the natural output for a
+# money field, and the whole reason to annotate one as Decimal. pydantic accepts BOTH a
+# bare JSON number and a quoted numeric string (executed against pydantic 2.13.5: `1.5`,
+# `"1.5"`, `42`, `"42"`, `1e5` and `"1E+5"` all validate), and `model_dump_json()` emits
+# the QUOTED form -- `Decimal("1.5")` round-trips as `{"x":"1.5"}` -- so the quoted form
+# is not optional: the PAW-SCHEMA-07 kitchen-sink corpus asserts it, and dropping it
+# would make every Decimal model fail its own round trip.
+#
+# The body is JSON's own number grammar rather than everything `Decimal(str)` will
+# swallow. pydantic also accepts `"0007"`, `"+1"`, `".5"` and `"1. "`; the grammar
+# refuses them, which is the narrowing direction and keeps one spelling per value for a
+# decoder to find.
+_JSON_NUMBER_BODY = (
+    rf"-?(?:0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
+)
+JSON_DECIMAL = rf'(?:{_JSON_NUMBER_BODY}|"{_JSON_NUMBER_BODY}")'
+
 # Specialized type regex fragments
-JSON_UUID = r'"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"'
+JSON_UUID =r'"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"'
 JSON_DATE = r'"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"'
 JSON_DATETIME = (
     r'"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])'
@@ -1246,7 +1264,7 @@ def _type_to_regex(
     if annotation is dt.date:
         return JSON_DATE
     if annotation is Decimal:
-        return JSON_STRING
+        return JSON_DECIMAL  # S-10
 
     # 11. Primitive types
     if annotation is str:
