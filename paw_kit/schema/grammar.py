@@ -42,7 +42,31 @@ from paw_kit.schema.exceptions import PAWSchemaError
 _MAX_NUMBER_DIGITS = 100
 
 JSON_WHITESPACE = r"[ \t\n\r]*"
-JSON_STRING = r'"([^"\\\x00-\x1f\x7f-\x9f]|\\.)*"'
+
+# S-2: the escape sequences JSON actually permits after a backslash. The previous
+# spelling of this was `\\.`, which permits ANY character after a backslash, so the
+# grammar for the simplest possible schema accepted `{"text":"a\qb"}` and
+# `{"text":"\u12"}` -- strings that satisfy the grammar and fail `json.loads`. Driven
+# end to end through `RegexLogitsProcessor` every one of those characters was in the
+# allowed mask at its step and EOS was allowed at the end, so the headline claim that
+# structural validity is a property of the FSM did not hold as written.
+#
+# The `\uXXXX` form deliberately EXCLUDES the surrogate range D800-DFFF rather than
+# accepting all four hex digits. `json.loads` tolerates a lone surrogate
+# (`json.loads('"\\ud800"')` returns an unpaired code point) but pydantic's Rust JSON
+# parser does not -- `model_validate_json` rejects it with "unexpected end of hex
+# escape". Admitting it would therefore leave the grammar WIDER than the validator it
+# exists to guarantee, which is the defect this whole change is about. Excluding it is
+# the narrowing direction and costs nothing reachable: a non-BMP character is still
+# emittable verbatim as raw UTF-8 (see `_json_string_literal_regex`'s
+# `ensure_ascii=False` note), which is the form a decoder actually produces.
+#
+# Verified exhaustively: over all 234,256 four-hex-digit spellings (both letter cases)
+# this alternation matches exactly those whose value is outside D800-DFFF, and every
+# escape it permits satisfies both `json.loads` and `model_validate_json`.
+_JSON_HEX_ESCAPE = r"u(?:[0-9a-cA-Ce-fE-F][0-9a-fA-F]|[dD][0-7])[0-9a-fA-F]{2}"
+_JSON_ESCAPE = rf'\\(["\\/bfnrt]|{_JSON_HEX_ESCAPE})'
+JSON_STRING = rf'"([^"\\\x00-\x1f\x7f-\x9f]|{_JSON_ESCAPE})*"'
 JSON_INTEGER = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}}))"
 JSON_FLOAT = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(\.[0-9]+)?([eE][+-]?[0-9]+)?)"
 JSON_BOOLEAN = r"(true|false)"

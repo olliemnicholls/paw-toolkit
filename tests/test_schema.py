@@ -1022,3 +1022,60 @@ def test_pydantic_to_regex_fingerprint_property_equal_key_implies_equal_regex_PA
         '"pattern_field": "abc"}'
     )
     assert _re.match(pat, payload) is not None
+
+
+# --- S-2: JSON_STRING accepts only the escapes JSON really permits -------------------
+
+
+def test_json_string_rejects_invalid_escapes_S_2() -> None:
+    """`\\q` and a truncated `\\u12` must not satisfy the grammar (S-2).
+
+    The previous `\\\\.` spelling permitted any character after a backslash, so the
+    grammar for a one-`str`-field schema accepted strings that fail `json.loads`.
+    """
+    import json
+    import re as _re
+
+    class TextModel(BaseModel):
+        text: str
+
+    pat = pydantic_to_regex(TextModel, anchors=True)
+    for bad in (r'{"text":"a\qb"}', r'{"text":"\u12"}', r'{"text":"\x41"}', r'{"text":"\ "}'):
+        assert _re.match(pat, bad) is None, f"grammar still accepts invalid escape {bad!r}"
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(bad)
+
+
+def test_json_string_still_accepts_every_legal_escape_S_2() -> None:
+    """The eight legal short escapes and a legal \\uXXXX must stay reachable (S-2)."""
+    import re as _re
+
+    class TextModel(BaseModel):
+        text: str
+
+    pat = pydantic_to_regex(TextModel, anchors=True)
+    for good in (r'{"text":"a\"b"}', r'{"text":"a\\b"}', r'{"text":"a\/b"}',
+                 r'{"text":"a\bb"}', r'{"text":"a\fb"}', r'{"text":"a\nb"}',
+                 r'{"text":"a\rb"}', r'{"text":"a\tb"}', r'{"text":"aéb"}',
+                 r'{"text":"a퟿b"}'):
+        assert _re.match(pat, good) is not None, f"grammar rejects legal escape {good!r}"
+        TextModel.model_validate_json(good)
+
+
+def test_json_string_excludes_lone_surrogate_escapes_S_2() -> None:
+    """A lone `\\uD800`-`\\uDFFF` escape must not be accepted (S-2).
+
+    `json.loads` tolerates an unpaired surrogate but pydantic's Rust JSON parser does
+    not, so admitting it would leave the grammar wider than the validator -- exactly
+    the defect S-2 is about, one door along.
+    """
+    import re as _re
+
+    class TextModel(BaseModel):
+        text: str
+
+    pat = pydantic_to_regex(TextModel, anchors=True)
+    for surrogate in (r'{"text":"\ud800"}', r'{"text":"\uDFFF"}', r'{"text":"\uD83D"}'):
+        assert _re.match(pat, surrogate) is None, f"grammar accepts lone surrogate {surrogate!r}"
+        with pytest.raises(Exception):
+            TextModel.model_validate_json(surrogate)
