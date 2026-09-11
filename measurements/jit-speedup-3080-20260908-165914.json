@@ -220,5 +220,15 @@
         "urgency_score": 4
       }
     }
-  ]
+  ],
+  "corrections": {
+    "date": "2026-09-11",
+    "note": "speedup_x, pre_threshold.mean_ms and post_threshold.mean_ms above are each contaminated by a one-time cost inside their averaging window (pre_threshold includes call 5's synchronous compile; post_threshold includes call 6's adapter download + model load) -- both fields are one call each, both silently. post_threshold.note's \"no network call\" is also false of call 6 (7599.32ms, an adapter download). None of calls[] is touched by this correction. The honest split is in the sibling jit-speedup-3080-20260908-165914.recomputed.json, generated from this file's own calls[] by measure_jit_speedup.phase_stats -- see measurements/README.md.",
+    "contaminated_fields": [
+      "speedup_x",
+      "pre_threshold.mean_ms",
+      "post_threshold.mean_ms",
+      "post_threshold.note"
+    ]
+  }
 }

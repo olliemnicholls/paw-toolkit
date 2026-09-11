@@ -1,0 +1,1771 @@
+{
+  "label": "3080-b7fix",
+  "timestamp": "2026-09-11T17:25:02+0100",
+  "duration_s": 265.4621081352234,
+  "machine": "RTX 3080 (desktop), CUDA, llama-cpp-python CUDA build",
+  "spec": "Classify a customer support ticket into priority (low, medium, high, or critical), department (billing, technical, sales, or general), and urgency_score (integer 1-5).",
+  "adapter_manifest": {
+    "backend": "programasweights",
+    "program_id": "5338ff828a05608f7ac0",
+    "slug": null,
+    "compiler": "paw-4b-qwen3-0.6b",
+    "status": "ready",
+    "spec": "Classify a customer support ticket into priority (low, medium, high, or critical), department (billing, technical, sales, or general), and urgency_score (integer 1-5).",
+    "examples_folded_into_spec": 5,
+    "examples_count": 5,
+    "compiled_at": "2026-09-08T23:20:07Z"
+  },
+  "recorded_run_reused": "measurements/triage-semantic-agreement-3080-20260909-002033.json",
+  "recorded_full_agreement_rate": 60.0,
+  "teacher": "replay: a pure function returning the recorded live-Claude answer for each of the 20 recorded tickets. No teacher API call is made by this script.",
+  "agreement_fn": "field_tolerance_agreement({'urgency_score': 1})",
+  "compile_calls": 0,
+  "compile_calls_note": "backend.compile is wrapped in a counter for the whole run; every task is put into `shadow` by calling TraceDB.set_shadow_started directly with the existing manifest, and threshold=10**9 makes the compile path unreachable.",
+  "work_dir": "/tmp/paw-shadow-50thar19",
+  "binomial_residual": {
+    "p_agreement": 0.467,
+    "window": 20,
+    "threshold": 0.8,
+    "successes_needed": 16,
+    "p_one_window_clears": 0.0024797083938817503,
+    "windows_before_stall": 5,
+    "p_promotes_within_stall": 0.01233720471938915,
+    "doc_claim": "roughly a 2.5% chance of producing one 16-of-20 window"
+  },
+  "binomial_p_source": "--binomial-p on the command line",
+  "live_adapter_vs_recorded_adapter": [
+    {
+      "ticket": "I was charged twice on my credit card for invoice #INV-9821. Please refund immediately!",
+      "recorded_adapter": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "live_adapter": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "same": true
+    },
+    {
+      "ticket": "Our production API gateway is throwing 502 Bad Gateway errors across all regions!",
+      "recorded_adapter": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "live_adapter": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "same": true
+    },
+    {
+      "ticket": "We are interested in an enterprise annual contract for 250 seats. Who can we talk to?",
+      "recorded_adapter": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "live_adapter": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "same": true
+    },
+    {
+      "ticket": "How do I update my profile picture in the settings page? I can't find the upload button.",
+      "recorded_adapter": {
+        "priority": "low",
+        "department": "technical",
+        "urgency_score": 1
+      },
+      "live_adapter": {
+        "priority": "low",
+        "department": "technical",
+        "urgency_score": 1
+      },
+      "same": true
+    },
+    {
+      "ticket": "Database replication lag is exceeding 45 minutes on our primary PostgreSQL cluster.",
+      "recorded_adapter": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "live_adapter": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "same": true
+    },
+    {
+      "ticket": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "general",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "general",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "My password reset email is never arriving in my inbox or spam folder.",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "We need to add 5 more team members to our billing subscription plan.",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "Thank you for the quick support yesterday, everything is working smoothly now!",
+      "recorded_adapter": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "live_adapter": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "same": true
+    },
+    {
+      "ticket": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "Please cancel my subscription and confirm the final invoice amount.",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "billing",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "Is there a discount for non-profit organizations on the enterprise tier?",
+      "recorded_adapter": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "live_adapter": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "same": true
+    },
+    {
+      "ticket": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "Urgent: our webhook deliveries have been failing silently for 3 hours, losing orders.",
+      "recorded_adapter": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "live_adapter": {
+        "priority": "critical",
+        "department": "technical",
+        "urgency_score": 5
+      },
+      "same": true
+    },
+    {
+      "ticket": "Just wanted to say the new onboarding flow is much clearer, nice work.",
+      "recorded_adapter": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "live_adapter": {
+        "priority": "low",
+        "department": "general",
+        "urgency_score": 1
+      },
+      "same": true
+    },
+    {
+      "ticket": "Requesting a data export of all our account's usage logs for the last 12 months.",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+      "recorded_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "live_adapter": {
+        "priority": "medium",
+        "department": "technical",
+        "urgency_score": 3
+      },
+      "same": true
+    },
+    {
+      "ticket": "What's the SLA for critical incidents on the enterprise support plan?",
+      "recorded_adapter": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "live_adapter": {
+        "priority": "high",
+        "department": "sales",
+        "urgency_score": 4
+      },
+      "same": true
+    },
+    {
+      "ticket": "The billing page shows a negative balance that doesn't match our invoice history.",
+      "recorded_adapter": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "live_adapter": {
+        "priority": "high",
+        "department": "billing",
+        "urgency_score": 4
+      },
+      "same": true
+    }
+  ],
+  "captured_logs": [
+    {
+      "logger": "paw_kit.jit.shadow",
+      "level": "WARNING",
+      "phase": "exp1_defaults_cyclic",
+      "call_index": 101,
+      "message": "paw_kit.jit.shadow: task_id=62a33b58c0e0bac384f0e06c37a721928687bc470c1e0824fe85bad7d7fdfc6d is not converging: agreement 0.60 over 100 samples at this epoch; the teacher is still serving. From here, completed windows are no longer evaluated for promotion at this epoch -- comparisons keep being recorded (sampled one in every 20, so `get_agreement()`/`paw-kit report` keep moving) but nothing can promote until the epoch advances. Recover by changing one of this task's persisted shadow config values (shadow_window, shadow_threshold, audit_window, demote_threshold) or by passing shadow_window=0."
+    },
+    {
+      "logger": "paw_kit.jit.shadow",
+      "level": "WARNING",
+      "phase": "exp1b_defaults_random",
+      "call_index": 101,
+      "message": "paw_kit.jit.shadow: task_id=abd8de262e2b2ebe7eed2eab80d0ad1549ef50df284e4b8d4d0ea1ce73d18102 is not converging: agreement 0.60 over 100 samples at this epoch; the teacher is still serving. From here, completed windows are no longer evaluated for promotion at this epoch -- comparisons keep being recorded (sampled one in every 20, so `get_agreement()`/`paw-kit report` keep moving) but nothing can promote until the epoch advances. Recover by changing one of this task's persisted shadow config values (shadow_window, shadow_threshold, audit_window, demote_threshold) or by passing shadow_window=0."
+    },
+    {
+      "logger": "paw_kit.jit.shadow",
+      "level": "INFO",
+      "phase": "exp2_audit005/promote",
+      "call_index": 20,
+      "message": "paw_kit.jit.shadow: task_id=7f71de32dfa2e0e3140f86438463d416677dfb6d95526a066e57feb26926ae2e promoted to 'ready' -- agreement 0.60 over 20 comparisons."
+    },
+    {
+      "logger": "paw_kit.jit.shadow",
+      "level": "INFO",
+      "phase": "exp2d_audit005_fixedn/promote",
+      "call_index": 20,
+      "message": "paw_kit.jit.shadow: task_id=5b3ca38f905ceb545af8e388bf3706fd6b47d25b7a172b481ddc8233705f9cda promoted to 'ready' -- agreement 0.60 over 20 comparisons."
+    },
+    {
+      "logger": "paw_kit.jit.shadow",
+      "level": "INFO",
+      "phase": "exp2b_audit000/promote",
+      "call_index": 20,
+      "message": "paw_kit.jit.shadow: task_id=cbdeb5995e6547f78efccc6a177a0427e1e72796c8339ce250a8b2ab95630727 promoted to 'ready' -- agreement 0.60 over 20 comparisons."
+    },
+    {
+      "logger": "paw_kit.jit.shadow",
+      "level": "WARNING",
+      "phase": "exp2c_demote/serve",
+      "call_index": 42,
+      "message": "paw_kit.jit.shadow: task_id=b7548d7e72a6374a3e3258eadd1ee669ca1e61b4858f5a7fe0a11b2e4faac3dc demoted to 'shadow' -- audit agreement 0.55 over 20 comparisons is below the demote threshold 0.61. The wrapped function is serving again."
+    },
+    {
+      "logger": "paw_kit.jit.shadow",
+      "level": "WARNING",
+      "phase": "exp3_latency/shadow",
+      "call_index": 10,
+      "message": "paw_kit.jit.shadow: task_id=49157a0fc471a0dc55d11456738aadbae794fa322a68509215892a94f43879de shadow queue is full (size=8); dropping this comparison. A dropped comparison is not counted as a disagreement -- it is simply not sampled; a dropped fail-open is simply not counted. Further drops for this task log at DEBUG."
+    }
+  ],
+  "limitations": [
+    "Replay teacher: the teacher's answers are the recorded ones from measurements/triage-semantic-agreement-3080-20260909-002033.json, not fresh calls. Real teacher drift is therefore invisible here.",
+    "Repeated inputs: the same 20 tickets are cycled (experiments 1, 2, 3) or resampled with replacement (1b). The adapter is deterministic at temperature 0, so agreement per input is fixed and what is exercised is the window arithmetic, not fresh traffic.",
+    "The replay teacher is instantaneous and free, which inverts the real latency ratio: a live teacher is roughly 11x slower than this adapter (see the JIT section of measurements/README.md), not ~1000x faster.",
+    "One machine (RTX 3080, CUDA), one run, one adapter, one spec.",
+    "Experiment 2 lowers shadow_threshold from the shipped 0.8 to 0.5 so this adapter can reach `ready` at all; that is a knob turned to make the audit path measurable, not a recommendation and not the shipped behaviour.",
+    "Experiment 3's `ready` phase is entered by calling TraceDB.try_promote directly, for the same reason."
+  ],
+  "experiment_1_defaults_cyclic": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp1_defaults_cyclic",
+    "task_id": "62a33b58c0e0bac384f0e06c37a721928687bc470c1e0824fe85bad7d7fdfc6d",
+    "shadow_config": {
+      "shadow_window": 20,
+      "shadow_threshold": 0.8,
+      "audit_window": 20,
+      "audit_rate": 0.0,
+      "demote_threshold": 0.6,
+      "shadow_queue_size": 8,
+      "shadow_max_pairs": 500,
+      "agreement_fn": "_fn"
+    },
+    "input_draw": "cyclic",
+    "seed": null,
+    "calls_made": 200,
+    "teacher_calls": 200,
+    "comparisons_recorded": 105,
+    "promoted": false,
+    "promoted_at_call": null,
+    "final_state": "shadow",
+    "per_window": [
+      {
+        "window": 1,
+        "seq_range": [
+          1,
+          20
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      },
+      {
+        "window": 2,
+        "seq_range": [
+          21,
+          40
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      },
+      {
+        "window": 3,
+        "seq_range": [
+          41,
+          60
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      },
+      {
+        "window": 4,
+        "seq_range": [
+          61,
+          80
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      },
+      {
+        "window": 5,
+        "seq_range": [
+          81,
+          100
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      }
+    ],
+    "state_after_each_window": [
+      {
+        "window_completed": 1,
+        "calls_made": 20,
+        "seq": 20,
+        "rate_over_window": 0.6,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 2,
+        "calls_made": 40,
+        "seq": 40,
+        "rate_over_window": 0.6,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 3,
+        "calls_made": 60,
+        "seq": 60,
+        "rate_over_window": 0.6,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 4,
+        "calls_made": 80,
+        "seq": 80,
+        "rate_over_window": 0.6,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 5,
+        "calls_made": 100,
+        "seq": 100,
+        "rate_over_window": 0.6,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      }
+    ],
+    "stall_warning_fired": true,
+    "stall_warning": {
+      "logger": "paw_kit.jit.shadow",
+      "level": "WARNING",
+      "phase": "exp1_defaults_cyclic",
+      "call_index": 101,
+      "message": "paw_kit.jit.shadow: task_id=62a33b58c0e0bac384f0e06c37a721928687bc470c1e0824fe85bad7d7fdfc6d is not converging: agreement 0.60 over 100 samples at this epoch; the teacher is still serving. From here, completed windows are no longer evaluated for promotion at this epoch -- comparisons keep being recorded (sampled one in every 20, so `get_agreement()`/`paw-kit report` keep moving) but nothing can promote until the epoch advances. Recover by changing one of this task's persisted shadow config values (shadow_window, shadow_threshold, audit_window, demote_threshold) or by passing shadow_window=0."
+    },
+    "comparisons_skipped_by_stall_subsampling": 95,
+    "dropped": 0,
+    "fail_open_count": 0,
+    "final_get_agreement": {
+      "state": "shadow",
+      "phase": "shadow",
+      "rate": 0.5,
+      "window": 20,
+      "samples": 20,
+      "agree": 10,
+      "disagree": 10,
+      "error": 0,
+      "teacher_error": 0,
+      "stalled": true,
+      "dropped": 0,
+      "stall_subsampled": 95,
+      "pending": 0,
+      "last_disagreements": [
+        {
+          "input_payload": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:20:52.789926+00:00"
+        },
+        {
+          "input_payload": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+          "teacher_output": "{\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:20:52.514334+00:00"
+        },
+        {
+          "input_payload": "What's the SLA for critical incidents on the enterprise support plan?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:20:51.656470+00:00"
+        },
+        {
+          "input_payload": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:20:51.536857+00:00"
+        },
+        {
+          "input_payload": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+          "teacher_output": "{\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:20:51.059654+00:00"
+        }
+      ]
+    },
+    "caller_latency_paced": {
+      "n": 200,
+      "median_ms": 3.500933526083827,
+      "mean_ms": 3.1327110005076975,
+      "p95_ms": 4.116475116461515,
+      "min_ms": 1.0229900944977999,
+      "max_ms": 8.186592953279614
+    },
+    "per_ticket_agreement": [
+      {
+        "ticket": "I was charged twice on my credit card for invoice #INV-9821. Please refund immediately!",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"billing\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "Our production API gateway is throwing 502 Bad Gateway errors across all regions!",
+        "seen": 6,
+        "agreed": 6,
+        "adapter_output": "{\"priority\":\"critical\",\"department\":\"technical\",\"urgency_score\":5}"
+      },
+      {
+        "ticket": "We are interested in an enterprise annual contract for 250 seats. Who can we talk to?",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "How do I update my profile picture in the settings page? I can't find the upload button.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":1}"
+      },
+      {
+        "ticket": "Database replication lag is exceeding 45 minutes on our primary PostgreSQL cluster.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"critical\",\"department\":\"technical\",\"urgency_score\":5}"
+      },
+      {
+        "ticket": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+        "seen": 5,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "My password reset email is never arriving in my inbox or spam folder.",
+        "seen": 5,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "We need to add 5 more team members to our billing subscription plan.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"billing\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+        "seen": 5,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Thank you for the quick support yesterday, everything is working smoothly now!",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"low\",\"department\":\"general\",\"urgency_score\":1}"
+      },
+      {
+        "ticket": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+        "seen": 5,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Please cancel my subscription and confirm the final invoice amount.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"billing\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Is there a discount for non-profit organizations on the enterprise tier?",
+        "seen": 5,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+        "seen": 6,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Urgent: our webhook deliveries have been failing silently for 3 hours, losing orders.",
+        "seen": 6,
+        "agreed": 6,
+        "adapter_output": "{\"priority\":\"critical\",\"department\":\"technical\",\"urgency_score\":5}"
+      },
+      {
+        "ticket": "Just wanted to say the new onboarding flow is much clearer, nice work.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"low\",\"department\":\"general\",\"urgency_score\":1}"
+      },
+      {
+        "ticket": "Requesting a data export of all our account's usage logs for the last 12 months.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+        "seen": 6,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "What's the SLA for critical incidents on the enterprise support plan?",
+        "seen": 5,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "The billing page shows a negative balance that doesn't match our invoice history.",
+        "seen": 6,
+        "agreed": 6,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"billing\",\"urgency_score\":4}"
+      }
+    ]
+  },
+  "experiment_1b_defaults_random": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp1b_defaults_random",
+    "task_id": "abd8de262e2b2ebe7eed2eab80d0ad1549ef50df284e4b8d4d0ea1ce73d18102",
+    "shadow_config": {
+      "shadow_window": 20,
+      "shadow_threshold": 0.8,
+      "audit_window": 20,
+      "audit_rate": 0.0,
+      "demote_threshold": 0.6,
+      "shadow_queue_size": 8,
+      "shadow_max_pairs": 500,
+      "agreement_fn": "_fn"
+    },
+    "input_draw": "random",
+    "seed": 0,
+    "calls_made": 200,
+    "teacher_calls": 200,
+    "comparisons_recorded": 104,
+    "promoted": false,
+    "promoted_at_call": null,
+    "final_state": "shadow",
+    "per_window": [
+      {
+        "window": 1,
+        "seq_range": [
+          1,
+          20
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      },
+      {
+        "window": 2,
+        "seq_range": [
+          21,
+          40
+        ],
+        "agree": 13,
+        "disagree": 7,
+        "error": 0,
+        "rate": 0.65
+      },
+      {
+        "window": 3,
+        "seq_range": [
+          41,
+          60
+        ],
+        "agree": 13,
+        "disagree": 7,
+        "error": 0,
+        "rate": 0.65
+      },
+      {
+        "window": 4,
+        "seq_range": [
+          61,
+          80
+        ],
+        "agree": 11,
+        "disagree": 9,
+        "error": 0,
+        "rate": 0.55
+      },
+      {
+        "window": 5,
+        "seq_range": [
+          81,
+          100
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      }
+    ],
+    "state_after_each_window": [
+      {
+        "window_completed": 1,
+        "calls_made": 20,
+        "seq": 20,
+        "rate_over_window": 0.6,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 2,
+        "calls_made": 40,
+        "seq": 40,
+        "rate_over_window": 0.65,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 3,
+        "calls_made": 60,
+        "seq": 60,
+        "rate_over_window": 0.65,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 4,
+        "calls_made": 80,
+        "seq": 80,
+        "rate_over_window": 0.55,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      },
+      {
+        "window_completed": 5,
+        "calls_made": 100,
+        "seq": 100,
+        "rate_over_window": 0.6,
+        "samples": 20,
+        "state_after_window": "shadow",
+        "stalled": false
+      }
+    ],
+    "stall_warning_fired": true,
+    "stall_warning": {
+      "logger": "paw_kit.jit.shadow",
+      "level": "WARNING",
+      "phase": "exp1b_defaults_random",
+      "call_index": 101,
+      "message": "paw_kit.jit.shadow: task_id=abd8de262e2b2ebe7eed2eab80d0ad1549ef50df284e4b8d4d0ea1ce73d18102 is not converging: agreement 0.60 over 100 samples at this epoch; the teacher is still serving. From here, completed windows are no longer evaluated for promotion at this epoch -- comparisons keep being recorded (sampled one in every 20, so `get_agreement()`/`paw-kit report` keep moving) but nothing can promote until the epoch advances. Recover by changing one of this task's persisted shadow config values (shadow_window, shadow_threshold, audit_window, demote_threshold) or by passing shadow_window=0."
+    },
+    "comparisons_skipped_by_stall_subsampling": 96,
+    "dropped": 0,
+    "fail_open_count": 0,
+    "final_get_agreement": {
+      "state": "shadow",
+      "phase": "shadow",
+      "rate": 0.65,
+      "window": 20,
+      "samples": 20,
+      "agree": 13,
+      "disagree": 7,
+      "error": 0,
+      "teacher_error": 0,
+      "stalled": true,
+      "dropped": 0,
+      "stall_subsampled": 96,
+      "pending": 0,
+      "last_disagreements": [
+        {
+          "input_payload": "My password reset email is never arriving in my inbox or spam folder.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:21:05.116816+00:00"
+        },
+        {
+          "input_payload": "Is there a discount for non-profit organizations on the enterprise tier?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:21:04.854755+00:00"
+        },
+        {
+          "input_payload": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:21:04.737849+00:00"
+        },
+        {
+          "input_payload": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:21:03.799378+00:00"
+        },
+        {
+          "input_payload": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"general\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:21:03.452188+00:00"
+        }
+      ]
+    },
+    "caller_latency_paced": {
+      "n": 200,
+      "median_ms": 3.6152704851701856,
+      "mean_ms": 3.2038709276821464,
+      "p95_ms": 4.090027883648872,
+      "min_ms": 0.9990839753299952,
+      "max_ms": 9.95172094553709
+    },
+    "per_ticket_agreement": [
+      {
+        "ticket": "Is there a discount for non-profit organizations on the enterprise tier?",
+        "seen": 5,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+        "seen": 2,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Our production API gateway is throwing 502 Bad Gateway errors across all regions!",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"critical\",\"department\":\"technical\",\"urgency_score\":5}"
+      },
+      {
+        "ticket": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+        "seen": 4,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Requesting a data export of all our account's usage logs for the last 12 months.",
+        "seen": 6,
+        "agreed": 6,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Just wanted to say the new onboarding flow is much clearer, nice work.",
+        "seen": 7,
+        "agreed": 7,
+        "adapter_output": "{\"priority\":\"low\",\"department\":\"general\",\"urgency_score\":1}"
+      },
+      {
+        "ticket": "Thank you for the quick support yesterday, everything is working smoothly now!",
+        "seen": 7,
+        "agreed": 7,
+        "adapter_output": "{\"priority\":\"low\",\"department\":\"general\",\"urgency_score\":1}"
+      },
+      {
+        "ticket": "Please cancel my subscription and confirm the final invoice amount.",
+        "seen": 2,
+        "agreed": 2,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"billing\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "What's the SLA for critical incidents on the enterprise support plan?",
+        "seen": 4,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "My password reset email is never arriving in my inbox or spam folder.",
+        "seen": 6,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Database replication lag is exceeding 45 minutes on our primary PostgreSQL cluster.",
+        "seen": 6,
+        "agreed": 6,
+        "adapter_output": "{\"priority\":\"critical\",\"department\":\"technical\",\"urgency_score\":5}"
+      },
+      {
+        "ticket": "How do I update my profile picture in the settings page? I can't find the upload button.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":1}"
+      },
+      {
+        "ticket": "The billing page shows a negative balance that doesn't match our invoice history.",
+        "seen": 7,
+        "agreed": 7,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"billing\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+        "seen": 10,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "We are interested in an enterprise annual contract for 250 seats. Who can we talk to?",
+        "seen": 9,
+        "agreed": 9,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+        "seen": 7,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Urgent: our webhook deliveries have been failing silently for 3 hours, losing orders.",
+        "seen": 3,
+        "agreed": 3,
+        "adapter_output": "{\"priority\":\"critical\",\"department\":\"technical\",\"urgency_score\":5}"
+      },
+      {
+        "ticket": "I was charged twice on my credit card for invoice #INV-9821. Please refund immediately!",
+        "seen": 2,
+        "agreed": 2,
+        "adapter_output": "{\"priority\":\"high\",\"department\":\"billing\",\"urgency_score\":4}"
+      },
+      {
+        "ticket": "We need to add 5 more team members to our billing subscription plan.",
+        "seen": 5,
+        "agreed": 5,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"billing\",\"urgency_score\":3}"
+      },
+      {
+        "ticket": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+        "seen": 2,
+        "agreed": 0,
+        "adapter_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":3}"
+      }
+    ]
+  },
+  "experiment_2_audit_rate_005": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp2_audit005",
+    "task_id": "7f71de32dfa2e0e3140f86438463d416677dfb6d95526a066e57feb26926ae2e",
+    "shadow_config": {
+      "shadow_window": 20,
+      "shadow_threshold": 0.5,
+      "audit_window": 20,
+      "audit_rate": 0.05,
+      "demote_threshold": 0.4,
+      "shadow_queue_size": 8,
+      "shadow_max_pairs": 500,
+      "agreement_fn": "_fn"
+    },
+    "shadow_threshold_used": 0.5,
+    "demote_threshold_used": 0.4,
+    "promotion_forced": false,
+    "promoted": true,
+    "calls_to_promotion": 20,
+    "promotion_agreement": 0.6,
+    "shadow_windows_before_promotion": [
+      {
+        "window": 1,
+        "seq_range": [
+          1,
+          20
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      }
+    ],
+    "served_calls_after_promotion": 335,
+    "teacher_calls_after_promotion": 20,
+    "audit_rate_configured": 0.05,
+    "stopped_at_first_audit_window": true,
+    "serve_calls_requested": 1200,
+    "teacher_calls_per_served_call": null,
+    "teacher_calls_per_served_call_note": "null on purpose: this arm stopped on the call that completed the audit window, so teacher_calls/served is the stopping time 20/N for a negative-binomial N, not a rate. See stopping_time_ratio and report B-7.",
+    "stopping_time_ratio": 0.05970149253731343,
+    "calls_to_first_completed_window": 335,
+    "audit_comparisons_recorded": 20,
+    "audit_window_completed_after_served_calls": 335,
+    "audit_window_rate": 0.6,
+    "state_after_audit_window": "ready",
+    "demoted": false,
+    "trace_rows_written_while_ready": 0,
+    "traces_at_promotion": 20,
+    "rows_at_promotion": 20,
+    "dropped": 0,
+    "fail_open_count": 0,
+    "caller_latency_ready": {
+      "n": 335,
+      "median_ms": 109.81998383067548,
+      "mean_ms": 109.81613273676763,
+      "p95_ms": 113.53045306168497,
+      "min_ms": 105.20182084292173,
+      "max_ms": 123.78601101227105
+    },
+    "final_get_agreement": {
+      "state": "ready",
+      "phase": "audit",
+      "rate": 0.6,
+      "window": 20,
+      "samples": 20,
+      "agree": 12,
+      "disagree": 8,
+      "error": 0,
+      "teacher_error": 0,
+      "stalled": false,
+      "dropped": 0,
+      "stall_subsampled": 0,
+      "pending": 0,
+      "last_disagreements": [
+        {
+          "input_payload": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+          "teacher_output": "{\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:21:45.503207+00:00"
+        },
+        {
+          "input_payload": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:21:38.552169+00:00"
+        },
+        {
+          "input_payload": "Is there a discount for non-profit organizations on the enterprise tier?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:21:23.379980+00:00"
+        },
+        {
+          "input_payload": "My password reset email is never arriving in my inbox or spam folder.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:21:20.538385+00:00"
+        },
+        {
+          "input_payload": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:21:16.367313+00:00"
+        }
+      ]
+    }
+  },
+  "experiment_2d_audit_rate_005_fixed_n": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp2d_audit005_fixedn",
+    "task_id": "5b3ca38f905ceb545af8e388bf3706fd6b47d25b7a172b481ddc8233705f9cda",
+    "shadow_config": {
+      "shadow_window": 20,
+      "shadow_threshold": 0.5,
+      "audit_window": 20,
+      "audit_rate": 0.05,
+      "demote_threshold": 0.4,
+      "shadow_queue_size": 8,
+      "shadow_max_pairs": 500,
+      "agreement_fn": "_fn"
+    },
+    "shadow_threshold_used": 0.5,
+    "demote_threshold_used": 0.4,
+    "promotion_forced": false,
+    "promoted": true,
+    "calls_to_promotion": 20,
+    "promotion_agreement": 0.6,
+    "shadow_windows_before_promotion": [
+      {
+        "window": 1,
+        "seq_range": [
+          1,
+          20
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      }
+    ],
+    "served_calls_after_promotion": 1200,
+    "teacher_calls_after_promotion": 68,
+    "audit_rate_configured": 0.05,
+    "stopped_at_first_audit_window": false,
+    "serve_calls_requested": 1200,
+    "teacher_calls_per_served_call": 0.056666666666666664,
+    "teacher_calls_per_served_call_note": "teacher calls per served call, over a number of served calls fixed before the run. Comparable to audit_rate_configured.",
+    "stopping_time_ratio": null,
+    "calls_to_first_completed_window": 320,
+    "audit_comparisons_recorded": 68,
+    "audit_window_completed_after_served_calls": 320,
+    "audit_window_rate": 0.6911764705882353,
+    "state_after_audit_window": "ready",
+    "demoted": false,
+    "trace_rows_written_while_ready": 0,
+    "traces_at_promotion": 20,
+    "rows_at_promotion": 20,
+    "dropped": 0,
+    "fail_open_count": 0,
+    "caller_latency_ready": {
+      "n": 1200,
+      "median_ms": 112.71593440324068,
+      "mean_ms": 112.13716013706289,
+      "p95_ms": 114.09179796464741,
+      "min_ms": 105.80499703064561,
+      "max_ms": 119.12687099538743
+    },
+    "final_get_agreement": {
+      "state": "ready",
+      "phase": "audit",
+      "rate": 0.75,
+      "window": 20,
+      "samples": 20,
+      "agree": 15,
+      "disagree": 5,
+      "error": 0,
+      "teacher_error": 0,
+      "stalled": false,
+      "dropped": 0,
+      "stall_subsampled": 0,
+      "pending": 0,
+      "last_disagreements": [
+        {
+          "input_payload": "What's the SLA for critical incidents on the enterprise support plan?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:23:53.639956+00:00"
+        },
+        {
+          "input_payload": "Is there a discount for non-profit organizations on the enterprise tier?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:23:52.954766+00:00"
+        },
+        {
+          "input_payload": "What's the SLA for critical incidents on the enterprise support plan?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:23:40.012484+00:00"
+        },
+        {
+          "input_payload": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:23:34.359913+00:00"
+        },
+        {
+          "input_payload": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:23:32.323437+00:00"
+        }
+      ]
+    }
+  },
+  "experiment_2b_audit_rate_zero": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp2b_audit000",
+    "task_id": "cbdeb5995e6547f78efccc6a177a0427e1e72796c8339ce250a8b2ab95630727",
+    "shadow_config": {
+      "shadow_window": 20,
+      "shadow_threshold": 0.5,
+      "audit_window": 20,
+      "audit_rate": 0.0,
+      "demote_threshold": 0.4,
+      "shadow_queue_size": 8,
+      "shadow_max_pairs": 500,
+      "agreement_fn": "_fn"
+    },
+    "shadow_threshold_used": 0.5,
+    "demote_threshold_used": 0.4,
+    "promotion_forced": false,
+    "promoted": true,
+    "calls_to_promotion": 20,
+    "promotion_agreement": 0.6,
+    "shadow_windows_before_promotion": [
+      {
+        "window": 1,
+        "seq_range": [
+          1,
+          20
+        ],
+        "agree": 12,
+        "disagree": 8,
+        "error": 0,
+        "rate": 0.6
+      }
+    ],
+    "served_calls_after_promotion": 200,
+    "teacher_calls_after_promotion": 0,
+    "audit_rate_configured": 0.0,
+    "stopped_at_first_audit_window": true,
+    "serve_calls_requested": 200,
+    "teacher_calls_per_served_call": null,
+    "teacher_calls_per_served_call_note": "null on purpose: this arm stopped on the call that completed the audit window, so teacher_calls/served is the stopping time 20/N for a negative-binomial N, not a rate. See stopping_time_ratio and report B-7.",
+    "stopping_time_ratio": 0.0,
+    "calls_to_first_completed_window": null,
+    "audit_comparisons_recorded": 0,
+    "audit_window_completed_after_served_calls": null,
+    "audit_window_rate": null,
+    "state_after_audit_window": "ready",
+    "demoted": false,
+    "trace_rows_written_while_ready": 0,
+    "traces_at_promotion": 20,
+    "rows_at_promotion": 20,
+    "dropped": 0,
+    "fail_open_count": 0,
+    "caller_latency_ready": {
+      "n": 200,
+      "median_ms": 113.11079643201083,
+      "mean_ms": 113.24486307916231,
+      "p95_ms": 114.37346716411412,
+      "min_ms": 112.19371296465397,
+      "max_ms": 116.44019512459636
+    },
+    "final_get_agreement": {
+      "state": "ready",
+      "phase": "audit",
+      "rate": null,
+      "window": 20,
+      "samples": 0,
+      "agree": 0,
+      "disagree": 0,
+      "error": 0,
+      "teacher_error": 0,
+      "stalled": false,
+      "dropped": 0,
+      "stall_subsampled": 0,
+      "pending": 0,
+      "last_disagreements": [
+        {
+          "input_payload": "What's the SLA for critical incidents on the enterprise support plan?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:24:05.307483+00:00"
+        },
+        {
+          "input_payload": "Two-factor authentication codes via SMS aren't arriving for EU phone numbers.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:24:05.178175+00:00"
+        },
+        {
+          "input_payload": "The dashboard chart colors are unreadable in dark mode, can this be fixed?",
+          "teacher_output": "{\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:24:04.672219+00:00"
+        },
+        {
+          "input_payload": "Is there a discount for non-profit organizations on the enterprise tier?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:24:04.546983+00:00"
+        },
+        {
+          "input_payload": "Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "shadow",
+          "timestamp": "2026-09-11T16:24:04.293546+00:00"
+        }
+      ]
+    }
+  },
+  "experiment_2c_demotion": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp2c_demote",
+    "task_id": "b7548d7e72a6374a3e3258eadd1ee669ca1e61b4858f5a7fe0a11b2e4faac3dc",
+    "shadow_config": {
+      "shadow_window": 20,
+      "shadow_threshold": 0.8,
+      "audit_window": 20,
+      "audit_rate": 0.5,
+      "demote_threshold": 0.61,
+      "shadow_queue_size": 8,
+      "shadow_max_pairs": 500,
+      "agreement_fn": "_fn"
+    },
+    "shadow_threshold_used": 0.8,
+    "demote_threshold_used": 0.61,
+    "promotion_forced": true,
+    "promoted": true,
+    "calls_to_promotion": 0,
+    "promotion_agreement": null,
+    "shadow_windows_before_promotion": [],
+    "served_calls_after_promotion": 42,
+    "teacher_calls_after_promotion": 20,
+    "audit_rate_configured": 0.5,
+    "stopped_at_first_audit_window": true,
+    "serve_calls_requested": 200,
+    "teacher_calls_per_served_call": null,
+    "teacher_calls_per_served_call_note": "null on purpose: this arm stopped on the call that completed the audit window, so teacher_calls/served is the stopping time 20/N for a negative-binomial N, not a rate. See stopping_time_ratio and report B-7.",
+    "stopping_time_ratio": 0.47619047619047616,
+    "calls_to_first_completed_window": 42,
+    "audit_comparisons_recorded": 20,
+    "audit_window_completed_after_served_calls": 42,
+    "audit_window_rate": 0.55,
+    "state_after_audit_window": "shadow",
+    "demoted": true,
+    "trace_rows_written_while_ready": 0,
+    "traces_at_promotion": 0,
+    "rows_at_promotion": 0,
+    "dropped": 0,
+    "fail_open_count": 0,
+    "caller_latency_ready": {
+      "n": 42,
+      "median_ms": 113.53650502860546,
+      "mean_ms": 113.93910454630497,
+      "p95_ms": 117.09132604300976,
+      "min_ms": 112.14452283456922,
+      "max_ms": 123.5660610254854
+    },
+    "final_get_agreement": {
+      "state": "shadow",
+      "phase": "shadow",
+      "rate": null,
+      "window": 20,
+      "samples": 0,
+      "agree": 0,
+      "disagree": 0,
+      "error": 0,
+      "teacher_error": 0,
+      "stalled": false,
+      "dropped": 0,
+      "stall_subsampled": 0,
+      "pending": 0,
+      "last_disagreements": [
+        {
+          "input_payload": "Is there a discount for non-profit organizations on the enterprise tier?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:24:31.939426+00:00"
+        },
+        {
+          "input_payload": "The iOS app crashes immediately upon opening on iOS 18 beta.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:24:31.486280+00:00"
+        },
+        {
+          "input_payload": "My password reset email is never arriving in my inbox or spam folder.",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:24:31.261005+00:00"
+        },
+        {
+          "input_payload": "Can you provide a copy of your SOC-2 Type II audit report for our compliance review?",
+          "teacher_output": "{\"priority\":\"high\",\"department\":\"general\",\"urgency_score\":4}",
+          "adapter_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":3}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:24:31.147695+00:00"
+        },
+        {
+          "input_payload": "What's the SLA for critical incidents on the enterprise support plan?",
+          "teacher_output": "{\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}",
+          "adapter_output": "{\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}",
+          "verdict": "disagree",
+          "error_type": null,
+          "phase": "audit",
+          "timestamp": "2026-09-11T16:24:30.348449+00:00"
+        }
+      ]
+    }
+  },
+  "experiment_3_caller_latency": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp3_latency",
+    "task_id": "49157a0fc471a0dc55d11456738aadbae794fa322a68509215892a94f43879de",
+    "shadow_config": {
+      "shadow_window": 20,
+      "shadow_threshold": 0.8,
+      "audit_window": 20,
+      "audit_rate": 0.0,
+      "demote_threshold": 0.6,
+      "shadow_queue_size": 8,
+      "shadow_max_pairs": 500,
+      "agreement_fn": "_fn"
+    },
+    "n_calls": 200,
+    "tracing": {
+      "n": 200,
+      "median_ms": 3.659356967546046,
+      "mean_ms": 3.542222393443808,
+      "p95_ms": 3.8131410256028175,
+      "min_ms": 2.755702007561922,
+      "max_ms": 6.750378990545869
+    },
+    "tracing_state": "tracing",
+    "shadow": {
+      "n": 200,
+      "median_ms": 0.9818768594413996,
+      "mean_ms": 1.346241852734238,
+      "p95_ms": 3.4661118406802416,
+      "min_ms": 0.8725251536816359,
+      "max_ms": 6.302406080067158
+    },
+    "shadow_state": "shadow",
+    "shadow_dropped": 189,
+    "shadow_pending_at_end_of_phase": 9,
+    "shadow_worker_drained_within_timeout": true,
+    "shadow_comparisons_recorded": 11,
+    "shadow_agreement_after_phase": {
+      "state": "shadow",
+      "phase": "shadow",
+      "rate": 0.6363636363636364,
+      "window": 20,
+      "samples": 11,
+      "agree": 7,
+      "disagree": 4,
+      "error": 0,
+      "teacher_error": 0,
+      "stalled": false,
+      "dropped": 189,
+      "stall_subsampled": 0,
+      "pending": 0,
+      "last_disagreements": []
+    },
+    "ready": {
+      "n": 200,
+      "median_ms": 113.00803802441806,
+      "mean_ms": 113.1771554122679,
+      "p95_ms": 114.27516210824251,
+      "min_ms": 112.10465198382735,
+      "max_ms": 116.07010592706501
+    },
+    "ready_state": "ready",
+    "ready_dropped": 0,
+    "ready_note": "audit_rate=0.0 here, so `ready` is the bare served path: its wall time is the adapter's own GPU inference, not shadow-mode overhead.",
+    "fail_open_count": 0,
+    "teacher_calls_total": 400
+  },
+  "experiment_3b_latency_control": {
+    "cache_dir": "/tmp/paw-shadow-50thar19/exp3b_control",
+    "task_id": "0dc26482ccbfcb26a0d6cf1708bd7c9388312d2beb7ba5c1544a5f44b03c9ab1",
+    "state_during_both": "tracing",
+    "tracing_idle": {
+      "n": 200,
+      "median_ms": 3.5941165406256914,
+      "mean_ms": 3.477344843558967,
+      "p95_ms": 3.773977980017662,
+      "min_ms": 2.6807310059666634,
+      "max_ms": 7.184610003605485
+    },
+    "tracing_under_background_gpu_load": {
+      "n": 200,
+      "median_ms": 0.904031447134912,
+      "mean_ms": 1.2854936229996383,
+      "p95_ms": 3.0218500178307295,
+      "min_ms": 0.8321329951286316,
+      "max_ms": 9.699341841042042
+    },
+    "background_inferences_run": 12,
+    "cpu_governor": "powersave",
+    "note": "Both blocks are the same wrapper in the same `tracing` state, so any difference between them is the machine responding to background load, not shadow-mode code."
+  },
+  "experiment_4_sanity": {
+    "exp1_defaults_cyclic": {
+      "files_before_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "files_after_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "file_modes": {
+        "traces.db": "0o600",
+        "traces.db-shm": "0o600",
+        "traces.db-wal": "0o600"
+      },
+      "no_file_beyond_sqlite": true,
+      "traces_db_mode": "0o600",
+      "traces_db_mode_is_0600": true,
+      "cache_dir_mode": "0o700",
+      "paw_kit_report_returncode": 0,
+      "paw_kit_report_stdout": "                                          paw-kit task report                                           \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Task            \u2503 State            \u2503 Calls \u2503 Agreement              \u2503 Fail-open \u2503 Promoted \u2503 Demoted \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 62a33b58c0e0... \u2502 shadow (stalled) \u2502   200 \u2502 0.50 (10/20) shadow/20 \u2502         0 \u2502 -        \u2502 -       \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Last disagreements: 62a33b58c0e0... \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 disagree shadow 2026-09-11 16:20:52                                                                                  \u2502\n\u2502   in:      Two-factor authentication codes via SMS aren't arriving for EU phone numbers.                             \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:20:52                                                                                  \u2502\n\u2502   in:      The dashboard chart colors are unreadable in dark mode, can this be fixed?                                \u2502\n\u2502   teacher: {\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}                                             \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:20:51                                                                                  \u2502\n\u2502   in:      What's the SLA for critical incidents on the enterprise support plan?                                     \u2502\n\u2502   teacher: {\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}                                            \u2502\n\u2502   adapter: {\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}                                                \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:20:51                                                                                  \u2502\n\u2502   in:      Two-factor authentication codes via SMS aren't arriving for EU phone numbers.                             \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:20:51                                                                                  \u2502\n\u2502   in:      The dashboard chart colors are unreadable in dark mode, can this be fixed?                                \u2502\n\u2502   teacher: {\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}                                             \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n",
+      "paw_kit_report_stderr": ""
+    },
+    "exp1b_defaults_random": {
+      "files_before_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "files_after_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "file_modes": {
+        "traces.db": "0o600",
+        "traces.db-shm": "0o600",
+        "traces.db-wal": "0o600"
+      },
+      "no_file_beyond_sqlite": true,
+      "traces_db_mode": "0o600",
+      "traces_db_mode_is_0600": true,
+      "cache_dir_mode": "0o700",
+      "paw_kit_report_returncode": 0,
+      "paw_kit_report_stdout": "                                          paw-kit task report                                           \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Task            \u2503 State            \u2503 Calls \u2503 Agreement              \u2503 Fail-open \u2503 Promoted \u2503 Demoted \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 abd8de262e2b... \u2502 shadow (stalled) \u2502   200 \u2502 0.65 (13/20) shadow/20 \u2502         0 \u2502 -        \u2502 -       \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Last disagreements: abd8de262e2b... \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 disagree shadow 2026-09-11 16:21:05                                                                                  \u2502\n\u2502   in:      My password reset email is never arriving in my inbox or spam folder.                                     \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:21:04                                                                                  \u2502\n\u2502   in:      Is there a discount for non-profit organizations on the enterprise tier?                                  \u2502\n\u2502   teacher: {\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}                                              \u2502\n\u2502   adapter: {\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}                                                \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:21:04                                                                                  \u2502\n\u2502   in:      Two-factor authentication codes via SMS aren't arriving for EU phone numbers.                             \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:21:03                                                                                  \u2502\n\u2502   in:      The iOS app crashes immediately upon opening on iOS 18 beta.                                              \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:21:03                                                                                  \u2502\n\u2502   in:      Can you provide a copy of your SOC-2 Type II audit report for our compliance review?                      \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"general\",\"urgency_score\":4}                                              \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":3}                                            \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n",
+      "paw_kit_report_stderr": ""
+    },
+    "exp2_audit005": {
+      "files_before_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "files_after_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "file_modes": {
+        "traces.db": "0o600",
+        "traces.db-shm": "0o600",
+        "traces.db-wal": "0o600"
+      },
+      "no_file_beyond_sqlite": true,
+      "traces_db_mode": "0o600",
+      "traces_db_mode_is_0600": true,
+      "cache_dir_mode": "0o700",
+      "paw_kit_report_returncode": 0,
+      "paw_kit_report_stdout": "                                          paw-kit task report                                          \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Task            \u2503 State \u2503 Calls \u2503 Agreement             \u2503 Fail-open \u2503 Promoted            \u2503 Demoted \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 7f71de32dfa2... \u2502 ready \u2502    20 \u2502 0.60 (12/20) audit/20 \u2502         0 \u2502 2026-09-11 16:21:08 \u2502 -       \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Last disagreements: 7f71de32dfa2... \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 disagree audit 2026-09-11 16:21:45                                                                                   \u2502\n\u2502   in:      The dashboard chart colors are unreadable in dark mode, can this be fixed?                                \u2502\n\u2502   teacher: {\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}                                             \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:21:38                                                                                   \u2502\n\u2502   in:      Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.                    \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:21:23                                                                                   \u2502\n\u2502   in:      Is there a discount for non-profit organizations on the enterprise tier?                                  \u2502\n\u2502   teacher: {\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}                                              \u2502\n\u2502   adapter: {\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}                                                \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:21:20                                                                                   \u2502\n\u2502   in:      My password reset email is never arriving in my inbox or spam folder.                                     \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:21:16                                                                                   \u2502\n\u2502   in:      The iOS app crashes immediately upon opening on iOS 18 beta.                                              \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n",
+      "paw_kit_report_stderr": ""
+    },
+    "exp2b_audit000": {
+      "files_before_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "files_after_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "file_modes": {
+        "traces.db": "0o600",
+        "traces.db-shm": "0o600",
+        "traces.db-wal": "0o600"
+      },
+      "no_file_beyond_sqlite": true,
+      "traces_db_mode": "0o600",
+      "traces_db_mode_is_0600": true,
+      "cache_dir_mode": "0o700",
+      "paw_kit_report_returncode": 0,
+      "paw_kit_report_stdout": "                                    paw-kit task report                                     \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Task            \u2503 State \u2503 Calls \u2503 Agreement  \u2503 Fail-open \u2503 Promoted            \u2503 Demoted \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 cbdeb5995e65... \u2502 ready \u2502    20 \u2502 - audit/20 \u2502         0 \u2502 2026-09-11 16:24:05 \u2502 -       \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Last disagreements: cbdeb5995e65... \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 disagree shadow 2026-09-11 16:24:05                                                                                  \u2502\n\u2502   in:      What's the SLA for critical incidents on the enterprise support plan?                                     \u2502\n\u2502   teacher: {\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}                                            \u2502\n\u2502   adapter: {\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}                                                \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:24:05                                                                                  \u2502\n\u2502   in:      Two-factor authentication codes via SMS aren't arriving for EU phone numbers.                             \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:24:04                                                                                  \u2502\n\u2502   in:      The dashboard chart colors are unreadable in dark mode, can this be fixed?                                \u2502\n\u2502   teacher: {\"priority\":\"low\",\"department\":\"technical\",\"urgency_score\":2}                                             \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:24:04                                                                                  \u2502\n\u2502   in:      Is there a discount for non-profit organizations on the enterprise tier?                                  \u2502\n\u2502   teacher: {\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}                                              \u2502\n\u2502   adapter: {\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}                                                \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:24:04                                                                                  \u2502\n\u2502   in:      Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.                    \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n",
+      "paw_kit_report_stderr": ""
+    },
+    "exp2c_demote": {
+      "files_before_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "files_after_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "file_modes": {
+        "traces.db": "0o600",
+        "traces.db-shm": "0o600",
+        "traces.db-wal": "0o600"
+      },
+      "no_file_beyond_sqlite": true,
+      "traces_db_mode": "0o600",
+      "traces_db_mode_is_0600": true,
+      "cache_dir_mode": "0o700",
+      "paw_kit_report_returncode": 0,
+      "paw_kit_report_stdout": "                                           paw-kit task report                                            \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Task            \u2503 State  \u2503 Calls \u2503 Agreement   \u2503 Fail-open \u2503 Promoted            \u2503 Demoted             \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 b7548d7e72a6... \u2502 shadow \u2502     0 \u2502 - shadow/20 \u2502         0 \u2502 2026-09-11 16:24:28 \u2502 2026-09-11 16:24:32 \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Last disagreements: b7548d7e72a6... \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 disagree audit 2026-09-11 16:24:31                                                                                   \u2502\n\u2502   in:      Is there a discount for non-profit organizations on the enterprise tier?                                  \u2502\n\u2502   teacher: {\"priority\":\"medium\",\"department\":\"sales\",\"urgency_score\":2}                                              \u2502\n\u2502   adapter: {\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}                                                \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:24:31                                                                                   \u2502\n\u2502   in:      The iOS app crashes immediately upon opening on iOS 18 beta.                                              \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:24:31                                                                                   \u2502\n\u2502   in:      My password reset email is never arriving in my inbox or spam folder.                                     \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:24:31                                                                                   \u2502\n\u2502   in:      Can you provide a copy of your SOC-2 Type II audit report for our compliance review?                      \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"general\",\"urgency_score\":4}                                              \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":3}                                            \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree audit 2026-09-11 16:24:30                                                                                   \u2502\n\u2502   in:      What's the SLA for critical incidents on the enterprise support plan?                                     \u2502\n\u2502   teacher: {\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":2}                                            \u2502\n\u2502   adapter: {\"priority\":\"high\",\"department\":\"sales\",\"urgency_score\":4}                                                \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n",
+      "paw_kit_report_stderr": ""
+    },
+    "exp3_latency": {
+      "files_before_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "files_after_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "file_modes": {
+        "traces.db": "0o600",
+        "traces.db-shm": "0o600",
+        "traces.db-wal": "0o600"
+      },
+      "no_file_beyond_sqlite": true,
+      "traces_db_mode": "0o600",
+      "traces_db_mode_is_0600": true,
+      "cache_dir_mode": "0o700",
+      "paw_kit_report_returncode": 0,
+      "paw_kit_report_stdout": "                                    paw-kit task report                                     \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Task            \u2503 State \u2503 Calls \u2503 Agreement  \u2503 Fail-open \u2503 Promoted            \u2503 Demoted \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 49157a0fc471... \u2502 ready \u2502   400 \u2502 - audit/20 \u2502         0 \u2502 2026-09-11 16:24:35 \u2502 -       \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Last disagreements: 49157a0fc471... \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 disagree shadow 2026-09-11 16:24:35                                                                                  \u2502\n\u2502   in:      Getting a 403 Forbidden error when calling the /v2/export endpoint since this morning.                    \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:24:34                                                                                  \u2502\n\u2502   in:      The iOS app crashes immediately upon opening on iOS 18 beta.                                              \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:24:34                                                                                  \u2502\n\u2502   in:      My password reset email is never arriving in my inbox or spam folder.                                     \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"technical\",\"urgency_score\":4}                                            \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"technical\",\"urgency_score\":3}                                          \u2502\n\u2502                                                                                                                      \u2502\n\u2502 disagree shadow 2026-09-11 16:24:34                                                                                  \u2502\n\u2502   in:      Can you provide a copy of your SOC-2 Type II audit report for our compliance review?                      \u2502\n\u2502   teacher: {\"priority\":\"high\",\"department\":\"general\",\"urgency_score\":4}                                              \u2502\n\u2502   adapter: {\"priority\":\"medium\",\"department\":\"general\",\"urgency_score\":3}                                            \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n",
+      "paw_kit_report_stderr": ""
+    },
+    "exp3b_control": {
+      "files_before_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "files_after_report": [
+        "traces.db",
+        "traces.db-shm",
+        "traces.db-wal"
+      ],
+      "file_modes": {
+        "traces.db": "0o600",
+        "traces.db-shm": "0o600",
+        "traces.db-wal": "0o600"
+      },
+      "no_file_beyond_sqlite": true,
+      "traces_db_mode": "0o600",
+      "traces_db_mode_is_0600": true,
+      "cache_dir_mode": "0o700",
+      "paw_kit_report_returncode": 0,
+      "paw_kit_report_stdout": "                               paw-kit task report                                \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Task            \u2503 State   \u2503 Calls \u2503 Agreement \u2503 Fail-open \u2503 Promoted \u2503 Demoted \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 0dc26482ccbf... \u2502 tracing \u2502   400 \u2502 -         \u2502         0 \u2502 -        \u2502 -       \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n",
+      "paw_kit_report_stderr": ""
+    }
+  }
+}

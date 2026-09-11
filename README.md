@@ -13,7 +13,8 @@ A reliability and migration harness for Program-as-Weights (PAW) neural function
 > service on an RTX 3080 and an A100. What that showed: a compiled date normaliser answers
 > in ~65 ms on the 3080 and passes 71/82 of its own suite; a compiled ticket-triage adapter
 > replaced a live Claude teacher at ~11x lower latency and zero tokens billed, but agreed
-> with a fresh teacher call on only 60% of tickets. Everything not labelled "measured"
+> with a fresh teacher call on only 46.7% of held-out tickets (first published as 60%,
+> before a scoring leak was found and fixed — see `docs/results.md`). Everything not labelled "measured"
 > runs on a deterministic mock, so the workflow can be tried with no GPU and no API key.
 > Read [`measurements/README.md`](./measurements/README.md) before repeating any figure
 > from this repo; several first-pass numbers were wrong and are corrected there in place.

@@ -2102,5 +2102,11 @@
         }
       ]
     }
-  ]
+  ],
+  "corrections": {
+    "date": "2026-09-11",
+    "note": "This artifact predates commit 28585ef, which removed the unconditional recompile-every-iteration behavior. recompiled: true on a repaired_edge_cases: 0 iteration is a state current code cannot produce -- re-running the same command today gives recompiled: false, recompiles_skipped: 2, stuck_reason: \"all_labels_rejected\". The 0-repaired conclusion is unaffected; only reproducibility of this exact artifact is.",
+    "starting_program_id": "8fc80fb0687b6f0b8ce0",
+    "starting_examples_folded_into_spec": 0
+  }
 }

@@ -51,7 +51,7 @@ One run, threshold=5, 20 total calls, `claude-haiku-4-5` as teacher, 3080:
 
 **Correction (2026-09-08, caught by an Opus review):** this section originally claimed
 "steady-state ≈ 21x" by dividing `pre_threshold.mean_ms` (1879.8) by `post_threshold.mean_ms`
-(88.4) straight from the script's own summary JSON — but `pre_threshold.mean_ms` averages
+straight from the script's own summary JSON — but `pre_threshold.mean_ms` averages
 calls **1-5**, and call 5 is the one that includes the synchronous compile (5450ms), not
 a clean teacher-only call. That's the same mistake the paragraph below criticizes the
 script for making on the *other* side of the split (burying the one-time model-load cost
@@ -62,6 +62,20 @@ correct, honest split, straight from the per-call data in
 - Teacher-only, calls 1-4: **987ms mean**
 - Steady-state local, calls 7-20: **88ms mean**
 - **Honest steady-state ratio: ~11.2x**, not 21x.
+
+**Second correction (2026-09-11):** the account above of *how* 21x arose was itself wrong
+in one detail — it named `post_threshold.mean_ms` as 88.4. The artifact's actual
+`post_threshold.mean_ms` is **589.1**, not 88.4 (verified by reading the committed JSON
+directly); it averages calls 6-20, and call 6 is the one-time adapter download and model
+load (7599ms), contaminating that average in exactly the same way `pre_threshold.mean_ms`
+was contaminated by call 5. Both of the artifact's own top-level split fields are
+therefore unreliable, and so is its `speedup_x` field (3.19, computed from those two). The
+987ms / 88ms split above was always correct — it comes from the per-call data, not from
+either contaminated field — but the committed artifact itself has never contained a field
+that holds the honest number. It now does: see
+[`jit-speedup-3080-20260908-165914.recomputed.json`](jit-speedup-3080-20260908-165914.recomputed.json),
+generated from this file's own `calls[]` by the same split this section describes, with
+`teacher_only.mean_ms` 987.33, `steady_state.mean_ms` 88.37, `speedup_x` **11.17**.
 
 Also **zero tokens billed** per call after hot-swap (vs 501 in / 185 out over the 5 traced
 calls). The compiled model's classifications aren't identical to Claude's on every ticket
@@ -108,6 +122,18 @@ the recompiled program's ID was byte-identical to the previous one, both times).
 for a deterministic compiler, but it's a wasted upstream compile call every time this
 exact situation recurs; worth skipping recompilation when `newly_repaired == 0`.
 
+> **Correction, 2026-09-11.** That unconditional-recompile behaviour was since removed
+> (`28585ef`), and this committed artifact (`active-learning-20260908-170147.json`)
+> **predates that change** — its `recompiled: true` on a `repaired_edge_cases: 0`
+> iteration is a state today's code cannot produce; re-running the same command now gives
+> `recompiled: false, recompiles_skipped: 2, stuck_reason: "all_labels_rejected"`. The
+> conclusion ("0 repaired, correctly") is unaffected, and is not being re-run here — this
+> note exists so a reader trying to reproduce the artifact literally doesn't file a false
+> bug report against current code. `starting_program_id: 8fc80fb0687b6f0b8ce0`,
+> `starting_examples_folded_into_spec: 0` — the committed `date_normalizer` manifest's
+> `examples_folded_into_spec: 4` is the *output* of the recompile `28585ef` removed, not
+> what this run started from.
+
 ## Grammar-constrained decoding, for real: 100% either way, and the "~13x cost" was a bug
 
 `scripts/measure_schema_real_model.py` is the first time `RegexLogitsProcessor` has
@@ -133,18 +159,28 @@ prompts, same model, same machine.
 
 | Mode | Valid Pydantic parses (raw) | With a markdown fence stripped | Mean latency/call |
 |---|---|---|---|
-| Unconstrained (asked nicely, zero-shot) | 0/15 (0.0%) | **11/15 (73.3%)** | 643ms (691ms in the original, uncorrected run) |
-| FSM-masked decoding | 15/15 (100.0%) | 15/15 (100.0%) | **1084ms including one cold call; ~501ms steady-state (calls 2-15)** |
+| Unconstrained (asked nicely, zero-shot) | 0/15 (0.0%) | **11/15 (73.3%)** | 643ms all-calls (**559ms warm**, calls 2-15); 691ms in the original, uncorrected run |
+| FSM-masked decoding | 15/15 (100.0%) | 15/15 (100.0%) | **1084ms including one cold call; 501ms warm (calls 2-15)** |
 
-Two corrections in this table, not one:
+Two corrections in this table, not one — and a third landed 2026-09-11 on top of the first:
 
 1. **Cost**: warm, constrained decoding is **not slower than unconstrained** — if
-   anything slightly faster (501ms vs 643ms), because the schema forces compact output
-   with no markdown decoration, while the unconstrained model pads its answer with a
-   ` ```json ` fence and indentation. There is still a real, one-time cold-cache cost on
-   the *first* call with a new schema (9236ms in this run, matching the original run's
-   number almost exactly — that number wasn't wrong, it was just wrongly generalized to
-   every call instead of only the first one).
+   anything slightly faster, because the schema forces compact output with no markdown
+   decoration, while the unconstrained model pads its answer with a ` ```json ` fence and
+   indentation. There is still a real, one-time cold-cache cost on the *first* call with
+   a new schema (9236ms in this run, matching the original run's number almost exactly —
+   that number wasn't wrong, it was just wrongly generalized to every call instead of
+   only the first one).
+   - **Correction, 2026-09-11:** the gap above was published as "501ms vs 643ms" — but
+     643ms is the unconstrained arm's **all-call** mean, and its own call 1 carries a
+     1819ms one-time cost (the same framework warm-up the constrained arm's call 1 pays
+     as 9236ms), so the unconstrained side of that comparison was warm-vs-**cold**, not
+     warm-vs-warm — inflating the apparent advantage of constrained decoding by 2.4x.
+     Recomputed directly from this section's own committed artifact, dropping call 1 of
+     *both* arms: unconstrained warm mean **559.4ms**, constrained warm mean **501.4ms**,
+     an honest gap of **58ms**, not 142ms. The conclusion is unchanged (constrained is not
+     slower once warm) — only the stated size of the effect was wrong, in the direction
+     that favoured the library's own claim.
 2. **"0/15 unconstrained" was technically true but misleadingly framed.** Every one of
    those 15 failures is the same shape: correct JSON wrapped in a code fence, not garbage.
    With the fence stripped, 11/15 (73.3%) actually parse — the 4 real failures are a
@@ -201,8 +237,25 @@ just "did it memorize the trace").
 
 | Metric | Result |
 |---|---|
-| Full agreement (priority + department + urgency within 1) | **60%** (12/20) |
-| Urgency score within 1, alone | 90% (18/20) |
+| Full agreement, all 20 scored tickets | 60% (12/20) — **see correction below: this figure leaks** |
+| Full agreement, 15 tickets held out of the fold | **46.7% (7/15)** |
+| Full agreement, 5 folded-into-the-spec tickets | 100% (5/5) |
+| Urgency score within 1, alone (held out) | 86.7% (13/15) |
+
+> **Correction, 2026-09-11.** The 60% figure folds `TICKETS[:5]` into the adapter's own
+> spec text as few-shot examples, then scores all 20 tickets including those same 5 — so
+> a fifth of the "agreement" measurement is the adapter reciting an answer it was handed
+> verbatim. Confirmed byte-identical: all 5 folded tickets' adapter output matches the
+> fresh teacher call exactly. The honest number is the 15 genuinely held-out tickets:
+> **46.7%**, thirteen points below the figure this project has quoted since 2026-09-09.
+> Re-derived directly from the committed `cases` array in
+> `triage-semantic-agreement-3080-20260909-002033.json` — no re-run was needed to produce
+> this number, only to un-conflate two slices that were always both present in the data.
+> The disagreement analysis below still describes the same 8 raw mismatches; only the
+> denominator used to call it "60%" was wrong. The script itself now folds from a
+> disjoint pool (`FOLDING_TICKETS`, 5 new tickets) rather than the eval set, asserts the
+> disjointness at runtime, and reports the held-out rate explicitly — so this leak cannot
+> recur silently.
 
 The disagreements are not random noise: in 5 of the 8 mismatches, the adapter says
 `medium` where the fresh teacher call says `high` (SOC-2 report, password reset, iOS
@@ -211,7 +264,7 @@ at above, now confirmed by an independent comparison rather than inferred from o
 output distribution. Two mismatches go the other way (adapter `high`, teacher `medium`,
 on a non-profit-discount and an SLA question), so it isn't a uniform downward bias, but
 a real central-tendency pull is visible. Caveat, honestly stated: the teacher itself is
-not perfectly consistent call to call, so 60% is a ceiling on "the adapter is wrong," not
+not perfectly consistent call to call, so 46.7% is a ceiling on "the adapter is wrong," not
 a floor — a disagreement means the two differ, not necessarily that the adapter is at
 fault. Either way, **the JIT speedup and the semantic fidelity are two separate claims**;
 11.2x describes the first, not the second.
@@ -1885,8 +1938,29 @@ adds latency to [the caller]"; and shadow mode creates no new file.
 `scripts/measure_shadow_mode.py` measures all four in one run
 (`measurements/shadow-mode-3080-20260910-124735.json`, 160 s wall, RTX 3080 + CUDA).
 
+> **Correction, 2026-09-11.** Everything below was run against the 20-ticket dataset
+> whose "60% agreement" figure is corrected above to **46.7% held out** (60% conflated
+> 5 tickets the adapter had memorised via its own spec with 15 genuinely scored ones).
+> This section's window tables are an empirical replay of that exact recorded sequence —
+> they are historical facts about that specific run, not recomputed, and still read 0.60
+> on the cyclic draw because the sequence itself hasn't changed. What *is* recomputed
+> below is the theoretical binomial arithmetic, which depends on the adapter's true
+> agreement rate as an input: at the corrected p=0.467 (rather than the leaked 0.6), the
+> chance of one lucky 16-of-20 window drops from **5.10%** to **0.25%**, and the chance of
+> promoting within the five-window stall drops from **23.0%** to **1.2%** — the gate's
+> real-world conclusion (this adapter should not and does not promote) gets *stronger*,
+> not weaker, at the honest rate. A second, independent error in the same paragraph is
+> also fixed below (B-8c): the "0.40 to 0.80 in 90% of draws" claim was never a 90%
+> interval at p=0.6 — it's a 96.3% one. And **the audit-cost section's headline number is
+> replaced**: "20 teacher calls over 621 served calls" was a stopping-time ratio (how long
+> until 20 audits complete), not a measured rate, and reads as 3.2% against a configured
+> 5% — a fixed-1,200-served-call re-run (§16 item 6, `shadow-mode-3080-b7fix-20260911-172502.json`)
+> gives the honest rate: **68 teacher calls over 1,200 served calls, 5.67%**, against the
+> configured 5%, with the old figure kept alongside as `calls_to_first_completed_window`.
+
 **Setup, and what is real in it.** The adapter is the *same* compiled adapter that scored
-60% in the section above — `measurements/triage_semantic_agreement-paw-4b-qwen3-0.6b.paw`,
+60% in the section above (**46.7% held out** — see the correction) —
+`measurements/triage_semantic_agreement-paw-4b-qwen3-0.6b.paw`,
 run live through `ProgramAsWeightsBackend` on the GPU, ~113 ms per call. The teacher is a
 **replay teacher**: a pure function returning the recorded live-Claude answer for each of
 the 20 recorded tickets in `measurements/triage-semantic-agreement-3080-20260909-002033.json`.
@@ -1952,14 +2026,26 @@ This adapter cannot reach `ready` at the shipped `shadow_threshold=0.8` — that
 a knob turned to make promotion reachable, not a recommendation. It promoted on the first
 window at 0.60, after 20 calls.
 
-| | `audit_rate=0.05` | `audit_rate=0.0` |
-|---|---|---|
-| Served calls after promotion | 621 | 200 |
-| Teacher calls on those | **20** | **0** |
-| Teacher calls per served call | 0.032 | 0.000 |
-| Served calls to complete one 20-sample audit window | **621** | never (0 audit rows) |
-| `traces` rows written while `ready` | 0 | 0 |
-| Caller p50 / p95 (ms) | 112.8 / 114.0 | 113.2 / 114.0 |
+| | `audit_rate=0.05`, stopping time | `audit_rate=0.05`, **fixed N (corrected)** | `audit_rate=0.0` |
+|---|---|---|---|
+| Served calls after promotion | 621 | **1,200 (fixed in advance)** | 200 |
+| Teacher calls on those | **20** | **68** | **0** |
+| Teacher calls per served call | 0.032 | **0.0567 (5.67%, vs. configured 5%)** | 0.000 |
+| Served calls to complete one 20-sample audit window | 621 | *(not this experiment's question)* | never (0 audit rows) |
+| `traces` rows written while `ready` | 0 | 0 | 0 |
+| Caller p50 / p95 (ms) | 112.8 / 114.0 | *(not remeasured)* | 113.2 / 114.0 |
+
+> **Correction, 2026-09-11.** The "0.032" / "3.2%" figure in the first column was always a
+> **stopping-time ratio** — the served-call count needed to collect 20 audit samples — not
+> a measured audit *rate*. Read as a rate against the configured 5%, it understates the true
+> cost by more than a third, because 20 ÷ (a Bernoulli(0.05) stopping time) is a biased
+> estimator of 0.05 at small sample counts. The fixed-N re-run (§16 item 6,
+> `shadow-mode-3080-b7fix-20260911-172502.json`) fixes the served-call count in advance
+> (1,200) and counts however many teacher calls land in it — 68, **5.67%**, matching the
+> configured 5% far more closely than 3.2% did. The 621-served-calls figure is kept, renamed
+> to what it actually measures: calls to the first *completed* window, a genuinely different
+> and still useful quantity (it tells you how long you wait for the first audit signal, not
+> what the audit costs on an ongoing basis).
 
 `audit_rate=0.0` really is free: zero teacher invocations across 200 served calls, zero
 `shadow_pairs` rows, and demotion is unreachable, exactly as documented. The `traces` row
@@ -1974,7 +2060,7 @@ window as "a few hundred to a thousand served calls", not 400.
 
 **The finding that contradicts the design: at `audit_window=20`, the audit is not a drift
 detector.** A 20-sample window drawn from an adapter whose true agreement is 0.60 reads
-anywhere between 0.40 and 0.80 in 90% of draws. The audit windows actually observed on this
+anywhere between 0.40 and 0.80 in 90% of draws<sup>‡</sup>. The audit windows actually observed on this
 adapter, whose true rate is exactly 0.60: **0.75** (this run, experiment 2), **0.65** (this
 run, experiment 2c), 0.55 and 0.48 in the two trial runs. Two consequences:
 
@@ -1991,6 +2077,14 @@ run, experiment 2c), 0.55 and 0.48 in the two trial runs. Two consequences:
   "comparisons per audit window after promotion" and offers no guidance on sizing it; on
   this evidence, a drift signal you would act on needs a window several times larger than
   the shipped 20, and the doc should say so.
+
+<sup>‡</sup> **Correction, 2026-09-11.** "0.40 to 0.80 in 90% of draws" is not a 90% interval
+at n=20, p=0.6 — it's a **96.3%** one (exact binomial `P(8 ≤ X ≤ 16) = 0.9630`). The
+tightest range actually covering ~90% is `[9,15]`, i.e. **0.45 to 0.75** (89.25% coverage —
+discreteness means no integer range hits exactly 90%). The point of the paragraph — that a
+20-sample window is noisy relative to `demote_threshold=0.6` — is unaffected; the stated
+band was simply wider than "90%" should mean. The four observed windows (0.75, 0.65, 0.55,
+0.48) still straddle the corrected band about as they straddled the original one.
 
 ### 3. Caller-path latency: the claim holds, but the cost lands somewhere else
 

@@ -8,10 +8,17 @@ produced on the mock backend.
 **The short version.** PAW compiles a spec into a tiny local model that answers in about
 65 ms on a consumer GPU, and paw-kit can swap it in for a frontier API call at 11x lower
 latency. Whether you should is a different question: the first model swapped in this way
-agreed with Claude on 60% of tickets. paw-kit's value is in that gap. The test tools
-found it, and shadow mode now stops it from reaching users. The same tools then located
-the difference between upstream's two compilers: the fast one cannot put a mapping stated
-in the spec into an adapter, and the finetune one can.
+agreed with Claude on 46.7% of held-out tickets. paw-kit's value is in that gap. The test
+tools found it, and shadow mode now stops it from reaching users. The same tools then
+located the difference between upstream's two compilers: the fast one cannot put a
+mapping stated in the spec into an adapter, and the finetune one can.
+
+*Correction, 2026-09-11: the 46.7% above was first published as 60%, computed by scoring
+five tickets that had been folded into the adapter's own prompt alongside the fifteen
+genuinely held out. Those five score 5/5 on their own — the adapter has the answer key —
+which is what inflated 46.7% to 60%. Found and fixed by an internal review; see
+[`measurements/README.md`](../measurements/README.md) for the full account, and the
+`docs/results.md` and shadow-mode entries below for what it changes.*
 
 ## Speed
 
@@ -30,8 +37,8 @@ work is latency-bound, so a consumer GPU is the realistic target. GPU versus CPU
 
 | Question | Result |
 |---|---|
-| Does the swapped-in triage model agree with a fresh Claude call? | 12 of 20 tickets, 60% |
-| Semantic correctness of three one-sentence specs, judged by Claude | 60% to 90% depending on the task |
+| Does the swapped-in triage model agree with a fresh Claude call? | 7 of 15 held-out tickets, 46.7% (the other 5 were folded into the adapter's spec and score 5/5 — the leak that inflated the first published figure to 60%) |
+| Semantic correctness of three one-sentence specs, judged by Claude | 70% to 90% depending on the task |
 | Structural pass rate of the same specs | 0% to 100% depending on whether the spec pinned the output format |
 | Date normaliser test suite | 71 of 82; the 11 failures are whitespace-only inputs the suite gave no legal answer for |
 | Fabrications found by the fuzzer | `1-800-FLOWERS` became invented digits |
@@ -47,8 +54,8 @@ zero and `paw-test judge --diff` shows whether that held.
 | Folding traced examples into the spec | Fixed format failures outright on one task, 0% to 92.5% structural. Did nothing for unicode-handling failures. Introduced verbatim memorisation of an example on out-of-distribution input |
 | The finetune compiler versus the fast one, easy task (phone extraction) | 132 of 134 outputs byte-identical. The two differences: it stopped copying an example verbatim, and it fabricated a phone number where the fast compiler declined |
 | The finetune compiler versus the fast one, hard task (ticket triage, 60 tickets, teacher ceiling 91.7%) | Fast with no examples 38.3%; fast with 8 examples 53.3%; finetune with the same 8 examples 60.0%, at 223 s to compile against 5 s. It closed about a sixth of the gap: it recovered the three critical tickets that folding had cost, and it is the only arm willing to say "low", but it lost 6.7 points on department. On a task the finetune compiler fails, the fast compiler also fails; neither rescues it |
-| The finetune compiler versus the fast one, on a rule the base model does not know (fiscal weeks, 300 dates, exact ground truth) | Fast 11.3% with no examples and 10.3% with 8; finetune 49.0% with the same 8; Claude Haiku zero-shot 85.7%. The fast compiler emitted a fixed vocabulary of week labels regardless of the date, and folding examples made it worse. The finetune compiler located the fiscal year on 298 of 300 and was within one week on 85%. First measurement that separates the two compilers: a real capability difference, and still not a usable adapter |
-| The finetune compiler versus the fast one, on an arbitrary lookup table (30 countries to 6 made-up codes, 300 sentences, exact ground truth) | Fast 33.0% with no examples and 29.0% with 8; finetune 97.7% with the same 8; Claude Haiku zero-shot 100%. The fast compiler never emitted two of the six codes, and with examples it memorised the eight folded countries (87.5%) and fell below chance on the other 22 (7.7%). The finetune adapter matched Haiku byte for byte on 293 of 300 at 32 ms per call against 750 ms. Together with fiscal weeks: the fast compiler cannot put an arbitrary spec-stated mapping into an adapter at any example count, and the finetune compiler can |
+| The finetune compiler versus the fast one, on a rule the base model does not know (fiscal weeks, 300 dates, exact ground truth) | Fast 11.3% with no examples and 10.3% with 8; finetune 49.0% with the same 8; Claude Haiku zero-shot 98.0%<sup>†</sup>. The fast compiler emitted a fixed vocabulary of week labels regardless of the date, and folding examples made it worse. The finetune compiler located the fiscal year on 298 of 300 and was within one week on 85%. First measurement that separates the two compilers: a real capability difference, and still not a usable adapter — and a bigger gap from the frontier than first published |
+| The finetune compiler versus the fast one, on an arbitrary lookup table (30 countries to 6 made-up codes, 300 sentences, exact ground truth) | Fast 33.0% with no examples and 29.0% with 8 (32.8% / 28.8% excluding the one lookup the spec's own worked example answers); finetune 97.7% with the same 8; Claude Haiku zero-shot 100%. The fast compiler never emitted two of the six codes, and with examples it memorised the eight folded countries (87.5%) and fell below chance on the other 22 (7.7%). The finetune adapter matched Haiku byte for byte on 293 of 300 at 32 ms per call against 750 ms. Together with fiscal weeks: the fast compiler cannot put an arbitrary spec-stated mapping into an adapter at any example count, and the finetune compiler can |
 | The active-learning repair loop on the 11 date failures | 0 repaired, correctly: every teacher label failed the suite's own rules, so the loop refused to train on them. The gap was in the suite, which now has `abstain_value` |
 | Grammar-constrained decoding on a real model | 15 of 15 valid outputs versus 0 of 15 unconstrained, no latency cost once warm. The official runtime cannot apply it yet |
 
@@ -57,15 +64,20 @@ zero and `paw-test judge --diff` shows whether that held.
 | Question | Result |
 |---|---|
 | Adapter file deleted after a real compile | Calls fell back to the teacher; no crash |
-| Shadow mode on the 60% adapter, shipped defaults | 12 of 20 on every window, parked after five windows, never promoted. Zero compiles, zero paid calls |
-| Cost of the optional post-promotion audit at 5% | 20 teacher calls over 621 served calls; zero at the default rate |
+| Shadow mode on the recorded 20-ticket replay, shipped defaults | 12 of 20 on every window (cyclic) or 11–13 of 20 (random draw); parked after five windows, never promoted. Zero compiles, zero paid calls. *This replays the original recorded 20-ticket sequence verbatim — including the 5 tickets later found to be folded into that adapter's own spec — so it still reads 60%, not the corrected 46.7% held-out rate; see the correction above* |
+| Cost of the optional post-promotion audit at 5% | 68 teacher calls over a fixed 1,200 served calls (5.7%, against a configured 5%); zero at the default rate |
 | Latency added to the caller by shadow mode | None measurable |
-| Compiles private by default | Upstream publishes the spec and folded examples otherwise; verified live |
+| Compiles private by default | **Yes, since 2026-09-10 (`b47ddea`) — but every program compiled before that fix is still live and public today, and nothing detects that.** Verified live, 2026-09-11: all six `program_id`s this project has ever compiled report `public: True` from the server and download anonymously — no key required — from the `hf_url` it returns. Every one predates `b47ddea` by at least a day. The manifest's `public` field records what was *requested*, not what the server confirmed, and that gap is unchanged by the default fix: a manifest written today still can't tell you whether the compile actually landed private. Upstream also caches by spec text and ignores `public` on a cache hit, so literally re-running any of this project's own historical measurement scripts unchanged would hand back the same old public program regardless of what `public=` the caller passes now. Nothing in this project's data was sensitive (the folded examples are synthetic demo tickets), but the mechanism is real and current: publishing this repository publishes every `program_id` it commits, and each one resolves, permanently — a later code fix doesn't reach backward |
 
-Two corrections came out of the shadow-mode run. The chance of a 60% adapter passing
-one window by luck is 5.1%, about 23% over five windows, not the 2.5% first written.
-And a 20-sample audit window catches drift to 60% on only about 40% of windows, so
-the audit window needs sizing for the drift you care about.
+Three corrections came out of the shadow-mode section. The 60% agreement figure above the
+first table was itself wrong (see the correction note near the top of this page); this
+section's binomial arithmetic is corrected to the true 46.7% throughout. The chance of a
+46.7%-agreement adapter passing one window by luck is correspondingly different from the
+2.5%-then-5.1% figures first written for a 60% adapter — recomputed in
+[`measurements/README.md`](../measurements/README.md) rather than restated here, since the
+exact percentile depends on which window boundary you ask about. And a 20-sample audit
+window catches drift on only a minority of windows regardless of the true rate, so the
+audit window needs sizing for the drift you care about, independent of this correction.
 
 ## Limitations
 
@@ -74,3 +86,8 @@ one used 48 teacher-generated tickets alongside 20 real ones, and its adapter sc
 within a few points of the teacher's own run-to-run variation. The shadow-mode run used a
 replay of recorded Claude answers, so it exercised the gate arithmetic, not fresh
 traffic. Judge-scored numbers carry the judge's own ±2-point noise.
+
+<sup>†</sup> Corrected 2026-09-11 from 85.7%: the reference call was silently capped at 400
+output tokens, truncating 39 of 300 answers to failures. Re-run uncapped at 2,000 tokens:
+300/300 answered, 0 truncated, 98.0% exact — the frontier baseline was understated, and the
+finetune compiler's 49.0% is further from it than first published, not closer.
