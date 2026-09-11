@@ -586,3 +586,111 @@ def test_semantic_summary_records_the_adapter_identity_and_the_held_out_ids() ->
     )
     assert "program_id" not in committed
     assert "folded_case_ids" not in committed
+
+
+# ================================================================================  B-7
+#
+# `measure_shadow_mode.py`'s audit arm broke on the call that completed the 20th audit
+# sample, so `teacher_calls / served` was `20 / N` for a negative-binomial `N` -- published
+# under the name `teacher_calls_per_served_call`, which reads as a measured rate.
+
+SHADOW_ARTIFACT = _MEASUREMENTS / "shadow-mode-3080-20260910-124735.json"
+
+
+@pytest.fixture(scope="module")
+def shadow_run() -> dict:
+    return json.loads(SHADOW_ARTIFACT.read_text())
+
+
+def test_shadow_stopping_time_is_not_reported_as_a_rate(shadow_run: dict) -> None:
+    """The recorded arm's numbers, through the new block: 20/621 is a stopping time.
+
+    The committed artifact reports `teacher_calls_per_served_call: 0.0322` for an arm that
+    stopped as soon as 20 audit samples existed, against a configured `audit_rate` of 0.05.
+    """
+    msm = _load("measure_shadow_mode")
+    recorded = shadow_run["experiment_2_audit_rate_005"]
+    assert recorded["served_calls_after_promotion"] == 621
+    assert recorded["teacher_calls_after_promotion"] == 20
+    assert round(recorded["teacher_calls_per_served_call"], 4) == 0.0322
+
+    block = msm.audit_cost_block(
+        teacher_calls=20, served=621, audit_rate=0.05, serve_calls_requested=1200,
+        stopped_at_first_audit_window=True, calls_to_first_completed_window=621,
+    )
+    assert block["teacher_calls_per_served_call"] is None
+    assert round(block["stopping_time_ratio"], 4) == 0.0322
+    assert block["calls_to_first_completed_window"] == 621
+    assert block["audit_rate_configured"] == 0.05
+    assert "stopping time" in block["teacher_calls_per_served_call_note"]
+
+    # The same arithmetic on the 0.5-rate arm gave 0.69, which is the other half of the
+    # evidence that the quantity is not a rate.
+    demote = shadow_run["experiment_2c_demotion"]
+    assert round(demote["teacher_calls_per_served_call"], 4) == 0.6897
+    assert msm.audit_cost_block(
+        teacher_calls=20, served=29, audit_rate=0.5, serve_calls_requested=200,
+        stopped_at_first_audit_window=True, calls_to_first_completed_window=29,
+    )["teacher_calls_per_served_call"] is None
+
+
+def test_shadow_fixed_n_arm_does_report_a_rate() -> None:
+    """With the served-call count fixed in advance the ratio *is* an estimate of the rate."""
+    msm = _load("measure_shadow_mode")
+    block = msm.audit_cost_block(
+        teacher_calls=61, served=1200, audit_rate=0.05, serve_calls_requested=1200,
+        stopped_at_first_audit_window=False, calls_to_first_completed_window=400,
+    )
+    assert block["stopping_time_ratio"] is None
+    assert round(block["teacher_calls_per_served_call"], 5) == round(61 / 1200, 5)
+    assert "fixed before the run" in block["teacher_calls_per_served_call_note"]
+    assert block["calls_to_first_completed_window"] == 400
+    # Zero served calls must not divide by zero in either mode.
+    for stopped in (True, False):
+        zero = msm.audit_cost_block(
+            teacher_calls=0, served=0, audit_rate=0.05, serve_calls_requested=0,
+            stopped_at_first_audit_window=stopped, calls_to_first_completed_window=None,
+        )
+        assert zero["teacher_calls_per_served_call"] is None
+        assert zero["stopping_time_ratio"] is None
+
+
+def test_shadow_has_a_fixed_served_calls_arm() -> None:
+    """Report §5's suggestion for B-7: run a fixed number of served calls and report from it."""
+    src = (_SCRIPTS / "measure_shadow_mode.py").read_text()
+    assert "experiment_2d_audit_rate_005_fixed_n" in src
+    assert "stop_at_first_audit_window=False" in src
+    assert "--fixed-serve-calls" in src
+    # The loop only breaks when the arm asked to stop early.
+    assert "if stop_at_first_audit_window:\n                    break" in src
+
+
+def test_shadow_binomial_p_is_parameterised_and_exact(shadow_run: dict) -> None:
+    """`p` was the literal 0.6 at the call site -- B-1's leaked all-rows rate.
+
+    The arithmetic itself is exact and was independently re-verified; what was wrong was
+    the `p` it was evaluated at. Both values are asserted so the A3 re-basing has a
+    committed reference: at the held-out 0.467 the gate's conclusion gets *stronger*.
+    """
+    msm = _load("measure_shadow_mode")
+    assert shadow_run["binomial_residual"]["p_agreement"] == 0.6
+    assert shadow_run["recorded_full_agreement_rate"] == 60.0
+
+    leaked = msm.binomial_residual(0.6, 20, 0.8, 5)
+    assert leaked["successes_needed"] == 16
+    assert round(leaked["p_one_window_clears"] * 100, 1) == 5.1
+    assert round(leaked["p_promotes_within_stall"] * 100, 1) == 23.0
+
+    corrected = msm.binomial_residual(0.467, 20, 0.8, 5)
+    assert corrected["p_agreement"] == 0.467
+    assert corrected["successes_needed"] == 16
+    assert round(corrected["p_one_window_clears"] * 100, 2) == 0.25
+    assert round(corrected["p_promotes_within_stall"] * 100, 2) == 1.23
+    assert corrected["p_promotes_within_stall"] < leaked["p_promotes_within_stall"]
+
+    src = (_SCRIPTS / "measure_shadow_mode.py").read_text()
+    assert "binomial_residual(0.6, 20, 0.8, 5)" not in src
+    assert "binomial_residual(binomial_p, 20, 0.8, 5)" in src
+    assert "--binomial-p" in src
+    assert '"binomial_p_source"' in src
+    assert "full_agreement_rate_heldout" in src

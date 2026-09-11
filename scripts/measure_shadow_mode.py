@@ -310,6 +310,51 @@ def experiment_defaults(
     }
 
 
+def audit_cost_block(
+    teacher_calls: int,
+    served: int,
+    audit_rate: float,
+    serve_calls_requested: int,
+    stopped_at_first_audit_window: bool,
+    calls_to_first_completed_window: Optional[int],
+) -> Dict[str, Any]:
+    """The audit-cost fields of an audit arm. Pure, so B-7 is unit testable.
+
+    B-7: a serving loop that stops on the call completing the 20th audit sample yields
+    `teacher_calls / served == 20 / N` for a negative-binomial `N`. That is a stopping
+    time. Published as `teacher_calls_per_served_call` it reads as a measured rate: the
+    2026-09-10 run's 20/621 = 0.032 against a configured 0.05 became "20 teacher calls over
+    621 served calls", understating audit cost by ~36%, while the `audit_rate=0.5` arm gave
+    20/29 = 0.69 by the same arithmetic.
+
+    `teacher_calls_per_served_call` is therefore reported only when the served-call count
+    was fixed before the run. Otherwise it is `None` and the stopping time is reported
+    under its own name.
+    """
+    ratio = (teacher_calls / served) if served else None
+    return {
+        "audit_rate_configured": audit_rate,
+        "stopped_at_first_audit_window": stopped_at_first_audit_window,
+        "serve_calls_requested": serve_calls_requested,
+        # Only an estimate of the configured audit rate when the number of served calls was
+        # fixed in advance. Otherwise None -- see `stopping_time_ratio`.
+        "teacher_calls_per_served_call": (
+            None if stopped_at_first_audit_window else ratio
+        ),
+        "teacher_calls_per_served_call_note": (
+            "null on purpose: this arm stopped on the call that completed the audit window, "
+            "so teacher_calls/served is the stopping time 20/N for a negative-binomial N, "
+            "not a rate. See stopping_time_ratio and report B-7."
+            if stopped_at_first_audit_window else
+            "teacher calls per served call, over a number of served calls fixed before the "
+            "run. Comparable to audit_rate_configured."
+        ),
+        "stopping_time_ratio": ratio if stopped_at_first_audit_window else None,
+        # The stopping time itself, named as one.
+        "calls_to_first_completed_window": calls_to_first_completed_window,
+    }
+
+
 def experiment_audit(
     tickets: List[str],
     teacher_answers: Dict[str, Dict[str, Any]],
@@ -321,8 +366,23 @@ def experiment_audit(
     shadow_threshold: float = 0.5,
     demote_threshold: float = 0.4,
     force_promote: bool = False,
+    stop_at_first_audit_window: bool = True,
 ) -> Dict[str, Any]:
     """2 / 2b: promotion with a lowered `shadow_threshold`, then the cost of the audit path.
+
+    B-7 (bug hunt 2026-09-11): with `stop_at_first_audit_window=True` this serving loop
+    breaks on the call that completes the 20th audit sample, so `teacher_calls / served`
+    is `20 / N` for a negative-binomial `N` -- a stopping time, not an estimate of
+    `audit_rate`. This draw gave 20/621 = 0.032 against a configured 0.05 and was published
+    as "20 teacher calls over 621 served calls", understating audit cost by ~36%; the
+    `audit_rate=0.5` arm gave 20/29 = 0.69 by the same arithmetic. The field was literally
+    named `teacher_calls_per_served_call`, which is what made it readable as a rate.
+
+    So: `calls_to_first_completed_window` is the stopping time, named as one, and
+    `teacher_calls_per_served_call` is reported **only** when the arm served a fixed number
+    of calls (`stop_at_first_audit_window=False`) and the ratio is therefore an estimate of
+    the configured rate. When the loop stopped early the field is `None` and
+    `stopping_time_ratio` carries `20/N` with a note saying what it is.
 
     `shadow_threshold=0.5` is a knob turned to make promotion reachable for *this* adapter --
     it is not the shipped default (0.8) and this adapter does not clear the shipped default
@@ -377,7 +437,8 @@ def experiment_audit(
             if seq >= audit_window:
                 drain(wrapped)
                 audit_window_completed_at = served
-                break
+                if stop_at_first_audit_window:
+                    break
     drain(wrapped)
 
     rows = pairs(wrapped)
@@ -396,7 +457,14 @@ def experiment_audit(
         "shadow_windows_before_promotion": window_rates(rows, epoch, "shadow", window),
         "served_calls_after_promotion": served,
         "teacher_calls_after_promotion": teacher_calls_serving,
-        "teacher_calls_per_served_call": (teacher_calls_serving / served) if served else None,
+        **audit_cost_block(
+            teacher_calls=teacher_calls_serving,
+            served=served,
+            audit_rate=audit_rate,
+            serve_calls_requested=serve_calls,
+            stopped_at_first_audit_window=stop_at_first_audit_window,
+            calls_to_first_completed_window=audit_window_completed_at,
+        ),
         "audit_comparisons_recorded": len(audit_rows),
         "audit_window_completed_after_served_calls": audit_window_completed_at,
         "audit_window_rate": (
@@ -624,6 +692,15 @@ def main() -> int:
                     help="Calls for experiments 1/1b and each phase of experiment 3.")
     ap.add_argument("--serve-calls", type=int, default=1200,
                     help="Cap on served calls while hunting one completed audit window.")
+    ap.add_argument("--fixed-serve-calls", type=int, default=1200,
+                    help="Served calls for experiment 2d, the fixed-N audit-cost arm. "
+                         "Fixed before the run, so its teacher-calls-per-served-call IS an "
+                         "estimate of audit_rate (B-7).")
+    ap.add_argument("--binomial-p", type=float, default=None,
+                    help="Per-call agreement probability for the binomial residual. "
+                         "Default: derived from the recorded run, preferring its held-out "
+                         "rate over its all-rows rate. The 2026-09-09 run's 0.6 is itself "
+                         "downstream of B-1's leak; the held-out figure is 0.467.")
     ap.add_argument("--keep-work-dir", action="store_true")
     args = ap.parse_args()
 
@@ -633,6 +710,26 @@ def main() -> int:
     tickets = [c["ticket"] for c in recorded["cases"]]
     teacher_answers = {c["ticket"]: c["teacher_fresh"] for c in recorded["cases"]}
     recorded_adapter = {c["ticket"]: c["adapter_parsed"] for c in recorded["cases"]}
+
+    # B-7 / B-1: `p` for the binomial residual used to be the literal 0.6 at the call site,
+    # which is the leaked all-rows rate from the 2026-09-09 triage run. Prefer the recorded
+    # run's held-out rate when it has one (runs from the fixed
+    # measure_triage_semantic_agreement.py do), fall back to the all-rows rate, and let
+    # --binomial-p override either. Whichever it is, say so in the artifact.
+    if args.binomial_p is not None:
+        binomial_p = args.binomial_p
+        binomial_p_source = "--binomial-p on the command line"
+    elif recorded.get("full_agreement_rate_heldout") is not None:
+        binomial_p = recorded["full_agreement_rate_heldout"] / 100.0
+        binomial_p_source = f"{RECORDED_RUN}:full_agreement_rate_heldout"
+    else:
+        binomial_p = recorded["full_agreement_rate"] / 100.0
+        binomial_p_source = (
+            f"{RECORDED_RUN}:full_agreement_rate -- all 20 scored rows, five of which were "
+            "folded into the adapter's own spec (report B-1). The held-out rate is 46.7%; "
+            "pass --binomial-p 0.467 for the corrected residual."
+        )
+    print(f"[binomial] p={binomial_p} from {binomial_p_source}")
 
     backend = ProgramAsWeightsBackend(compiler="paw-4b-qwen3-0.6b", max_spec_examples=16)
     compile_calls = {"n": 0, "args": []}
@@ -676,6 +773,19 @@ def main() -> int:
     print(f"    promoted_at={r2['calls_to_promotion']} served={r2['served_calls_after_promotion']} "
           f"teacher_calls={r2['teacher_calls_after_promotion']} "
           f"audit_window_after={r2['audit_window_completed_after_served_calls']}")
+
+    print(f"[2d] audit path cost at audit_rate=0.05 over a FIXED {args.fixed_serve_calls} "
+          "served calls (B-7)")
+    results["experiment_2d_audit_rate_005_fixed_n"] = experiment_audit(
+        tickets, teacher_answers, backend, work, "exp2d_audit005_fixedn", 0.05,
+        args.fixed_serve_calls, stop_at_first_audit_window=False,
+    )
+    r2d = results["experiment_2d_audit_rate_005_fixed_n"]
+    print(f"    served={r2d['served_calls_after_promotion']} "
+          f"teacher_calls={r2d['teacher_calls_after_promotion']} "
+          f"teacher_calls_per_served_call={r2d['teacher_calls_per_served_call']} "
+          f"(configured {r2d['audit_rate_configured']}) "
+          f"first_window_after={r2d['calls_to_first_completed_window']}")
 
     print("[2b] audit_rate=0.0 makes zero teacher calls after promotion")
     results["experiment_2b_audit_rate_zero"] = experiment_audit(
@@ -756,7 +866,8 @@ def main() -> int:
             "and threshold=10**9 makes the compile path unreachable."
         ),
         "work_dir": str(work),
-        "binomial_residual": binomial_residual(0.6, 20, 0.8, 5),
+        "binomial_residual": binomial_residual(binomial_p, 20, 0.8, 5),
+        "binomial_p_source": binomial_p_source,
         "live_adapter_vs_recorded_adapter": live_vs_recorded,
         "captured_logs": CAPTURED_LOGS,
         "limitations": [
