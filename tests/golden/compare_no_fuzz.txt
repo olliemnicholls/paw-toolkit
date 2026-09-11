@@ -7,6 +7,10 @@ Differences (1/2):
     alpha -> 2026-09-11
     beta -> tomorrow
     pass differs: alpha=True beta=False
+    expected differs: want 2026-09-11 -- alpha=True beta=False
+
+Correct against expected: alpha 2/2 (100.0%) -- all 2 scored; beta 1/2 (50.0%) -- all 2 scored
+  1 case(s) where exactly one adapter matched the answer key -- listed under Differences above.
 
 Summary: 2 cases, 1 identical output (byte-for-byte), 1 equivalent output (byte-for-byte + JSON/whitespace-normalized),
 alpha pass 2/2, beta pass 1/2, only-alpha-pass 1, only-beta-pass 0, errored 0/2

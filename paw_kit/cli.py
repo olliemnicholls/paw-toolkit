@@ -778,6 +778,14 @@ def compare_cmd(
                     f"    [yellow]pass differs:[/yellow] {_e(label_a)}={_e(row.pass_a)} "
                     f"{_e(label_b)}={_e(row.pass_b)}"
                 )
+            # H-5: the line that distinguishes "A is right and B is wrong" from "the
+            # two produce different text" -- the comparison this command was supposed
+            # to make and could not, because `CompareReport` had no expected field.
+            if row.expected is not None and row.a_expected_match != row.b_expected_match:
+                console.print(
+                    f"    [yellow]expected differs:[/yellow] want {_e(row.expected[:60])} -- "
+                    f"{_e(label_a)}={_e(row.a_expected_match)} {_e(label_b)}={_e(row.b_expected_match)}"
+                )
     elif not errored_rows and not whitespace_only:
         # Suppressed whenever any case errored, or any case is a whitespace-only
         # difference -- both would make "identical output ... on every case" false.
@@ -793,7 +801,21 @@ def compare_cmd(
             "either. Collapsed to input only:\n"
         )
         for row in whitespace_only:
-            console.print(f"  {_e(row.input[:80])}")
+            # G-4: a quoting difference that *flips* pass status used to be excluded
+            # from this list entirely (`equivalent_only_rows` required `pass_a ==
+            # pass_b`), so `compare` listed such a row under full `Differences` and
+            # simultaneously summarised it as "equivalent output once unwrapped" five
+            # lines below -- contradicting itself. The row belongs here; the flip is
+            # annotated rather than being grounds for exile.
+            if row.pass_a != row.pass_b:
+                console.print(
+                    f"  {_e(row.input[:80])} "
+                    f"[yellow](pass differs: {_e(label_a)}={_e(row.pass_a)} "
+                    f"{_e(label_b)}={_e(row.pass_b)} -- same value, but only one side "
+                    f"satisfies the suite's assertions)[/yellow]"
+                )
+            else:
+                console.print(f"  {_e(row.input[:80])}")
 
     # Quoted-scalar follow-up: only printed when unquoting widened the equivalent count
     # -- otherwise it would just repeat equivalent_count with no new information.
@@ -803,6 +825,23 @@ def compare_cmd(
         if report.equivalent_unquoted_count > report.equivalent_count
         else ""
     )
+    # H-5: answer-key agreement, printed above the aggregate summary for the same
+    # reason `check` prints it above the pass rate -- two adapters with identical pass
+    # rates and no byte differences can still be 10/10 and 0/10 against ground truth,
+    # and before this the command had no way to say so.
+    if report.expected_total > 0:
+        console.print(
+            f"\n[bold]Correct against expected:[/bold] "
+            f"{_e(label_a)} {_e(report.a_expected_denominator.render(report.a_expected_matched))}; "
+            f"{_e(label_b)} {_e(report.b_expected_denominator.render(report.b_expected_matched))}"
+        )
+        only_one_right = report.expected_disagreeing_rows
+        if only_one_right:
+            console.print(
+                f"  [yellow]{_e(len(only_one_right))} case(s) where exactly one adapter "
+                "matched the answer key[/yellow] -- listed under Differences above."
+            )
+
     console.print(
         f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output "
         f"(byte-for-byte), {_e(report.equivalent_count)} equivalent output "
