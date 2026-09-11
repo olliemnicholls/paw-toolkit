@@ -1,12 +1,13 @@
 """Thread-safe SQLite tracing database for paw.jit."""
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 
 # INSERT ... ON CONFLICT ... DO UPDATE (used by record_trace) requires SQLite >= 3.24.
 _MIN_SQLITE_VERSION = (3, 24, 0)
@@ -14,14 +15,26 @@ _MIN_SQLITE_VERSION = (3, 24, 0)
 T = TypeVar("T")
 
 # PAW-JIT-04: the 30s connection busy_timeout and WAL journal mode already in place
-# (both from Track 03) reduce but don't eliminate multi-process write contention --
-# `isolation_level="IMMEDIATE"` below (making every write transaction acquire
-# SQLite's write lock immediately, via `BEGIN IMMEDIATE`, rather than deferring it
-# until the first write statement executes) closes the specific class of
-# "database is locked" error that a deferred transaction leaves reachable: two
-# connections both starting as readers and then racing to upgrade to a writer at the
-# same moment, which busy_timeout does not always cover cleanly. The retry/backoff
-# loop below is defense-in-depth on top of that, not a replacement for it.
+# (both from Track 03) reduce but don't eliminate multi-process write contention.
+#
+# D-1 (bug hunt 2026-09-11): `isolation_level="IMMEDIATE"` does NOT make a method's
+# leading read part of its write transaction, which is what the comment that used to
+# stand here asserted. Python's sqlite3 emits `BEGIN IMMEDIATE` only immediately
+# before a *DML* statement, so a read-then-write method runs its SELECT in autocommit
+# and opens the transaction on the following write -- leaving the classic lost-update
+# window wide open across processes. Measured on this source: `record_shadow_pair`
+# over 6 processes x 30 writes gave rows=180 with max(seq) 173-175 and up to 4
+# duplicate seq values in 5 of 5 trials, and `set_status`'s epoch bumps over
+# 4 processes x 40 changes gave 160 transitions sharing 40 distinct epochs in 5 of 5
+# trials -- with `PRAGMA integrity_check` reading `ok` throughout, because this is
+# logical corruption the file format cannot see.
+#
+# The fix is `_write_txn()` below: an explicit `BEGIN IMMEDIATE` issued before the
+# leading read, factored into the same context manager that takes the instance lock so
+# a new method cannot acquire one without the other. `isolation_level="IMMEDIATE"` is
+# kept because it still covers every single-statement write correctly.
+#
+# The retry/backoff loop below is defense-in-depth on top of that, not a replacement.
 _DB_RETRY_ATTEMPTS = 5
 _DB_RETRY_BASE_DELAY_SECONDS = 0.05
 
@@ -141,6 +154,34 @@ class TraceDB:
         """
         with self._lock:
             self._status_listeners.append(listener)
+
+    @contextmanager
+    def _write_txn(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction whose **leading read** is already inside it (D-1).
+
+        Every read-modify-write method on this class must use this and nothing else.
+        Acquiring `self._lock` and issuing `BEGIN IMMEDIATE` are deliberately the same
+        gesture: a method that forgets the transaction cannot get the lock either, so
+        the two can never drift apart the way they did before D-1.
+
+        The `in_transaction` guard is load-bearing. A nested `BEGIN IMMEDIATE` raises
+        `OperationalError("cannot start a transaction within a transaction")`, which
+        `_with_write_retry` would catch and retry five times with exponential backoff
+        before re-raising -- laundering a programming error into ~0.75s of latency and
+        a lock-shaped message that says nothing about the real cause.
+
+        **`_init_db` deliberately does not use this.** `PRAGMA journal_mode=WAL` issued
+        inside an open transaction on a fresh database returns `"delete"` and leaves
+        the file in rollback-journal mode *with no exception raised* (verified; on an
+        already-populated database it raises instead, which is louder but no better).
+        Wrapping `_init_db` -- whose column-probe-then-`ALTER TABLE` shape reads then
+        writes, and so attracts any blanket rule -- would therefore silently destroy
+        the WAL guarantee that this module's concurrency story rests on.
+        """
+        with self._lock, self._conn:
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE;")
+            yield self._conn
 
     def _with_write_retry(self, fn: Callable[[], T]) -> T:
         """Run `fn` (one write transaction) with bounded exponential-backoff retry on
@@ -301,7 +342,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> int:
-            with self._lock, self._conn:
+            with self._write_txn():
                 # 1. Upsert task record and increment call_count
                 # Avoid RETURNING (requires SQLite >= 3.35): follow up with a plain SELECT instead.
                 self._conn.execute(
@@ -371,7 +412,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 previous, epoch = self._get_status_and_epoch_locked(task_id)
                 changed = previous is not None and previous != status
                 new_epoch = epoch + 1 if changed else epoch
@@ -427,7 +468,7 @@ class TraceDB:
         fix, which turns into an unbounded retry loop).
         """
         def _do() -> int:
-            with self._lock, self._conn:
+            with self._write_txn():
                 self._conn.execute(
                     "UPDATE tasks SET compile_attempts = compile_attempts + 1 WHERE task_id = ?;",
                     (task_id,),
@@ -537,7 +578,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 self._record_transition_locked(
                     task_id, from_status, to_status, agreement, sample_count,
                     state_epoch, now, reason,
@@ -550,7 +591,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 previous, epoch = self._get_status_and_epoch_locked(task_id)
                 new_epoch = epoch + 1
                 self._conn.execute(
@@ -575,7 +616,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 previous, epoch = self._get_status_and_epoch_locked(task_id)
                 new_epoch = epoch + 1
                 self._conn.execute(
@@ -693,7 +734,7 @@ class TraceDB:
         encoded = json.dumps(config, sort_keys=True)
 
         def _do() -> bool:
-            with self._lock, self._conn:
+            with self._write_txn():
                 cur = self._conn.execute(
                     "SELECT status, state_epoch, shadow_config FROM tasks WHERE task_id = ?;",
                     (task_id,),
@@ -754,7 +795,7 @@ class TraceDB:
         any other process; this one is neither.
         """
         def _do() -> None:
-            with self._lock, self._conn:
+            with self._write_txn():
                 self._conn.execute(
                     "UPDATE tasks SET fail_open_count = COALESCE(fail_open_count, 0) + 1 "
                     "WHERE task_id = ?;",
@@ -793,7 +834,7 @@ class TraceDB:
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> Dict[str, int]:
-            with self._lock, self._conn:
+            with self._write_txn():
                 if verdict == "teacher_error":
                     seq = 0
                 else:
