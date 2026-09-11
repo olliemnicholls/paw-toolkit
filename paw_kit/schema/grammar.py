@@ -116,12 +116,40 @@ JSON_DECIMAL = rf'(?:{_JSON_NUMBER_BODY}|"{_JSON_NUMBER_BODY}")'
 
 # Specialized type regex fragments
 JSON_UUID =r'"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"'
-JSON_DATE = r'"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"'
-JSON_DATETIME = (
-    r'"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])'
-    r"[T ](?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
-    r'(?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?"'
+# S-11: the day alternation used to be month-INDEPENDENT -- `[0-9]{4}-(?:0[1-9]|1[0-2])
+# -(?:0[1-9]|[12][0-9]|3[01])` -- so `"2026-02-30"` and `"2026-04-31"` full-matched
+# while pydantic rejects both. `2026-02-30` is a classic LLM output, and a date field is
+# one of the main reasons to reach for constrained decoding in the first place.
+#
+# Four cases, because a calendar has four: 31-day months, 30-day months, February up to
+# the 28th in any year, and February the 29th in a leap year only. Accepting 29 February
+# unconditionally would leave the grammar wider than the validator for three years in
+# four, which is the defect this is fixing rather than a smaller version of it.
+#
+# `_LEAP_YEAR`'s two branches are "divisible by 4 but not by 100" (the last two digits
+# are a non-zero multiple of four) and "divisible by 400" (a century year whose first
+# two digits are a multiple of four). `_YEAR` excludes 0000 because `datetime.date`
+# does: its minimum year is 1, so `"0000-01-01"` is a string the old `[0-9]{4}` accepted
+# and pydantic refuses. Both branches of `_LEAP_YEAR` already imply a year of at least
+# 4, so they need no such exclusion.
+_LEAP_YEAR = (
+    r"(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:0[48]|[2468][048]|[13579][26])00)"
 )
+_YEAR = r"(?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})"
+_CALENDAR_DATE = (
+    rf"(?:{_YEAR}-(?:"
+    r"(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])"  # 31-day months
+    r"|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)"  # 30-day months
+    r"|02-(?:0[1-9]|1[0-9]|2[0-8])"  # February, any year
+    rf")|{_LEAP_YEAR}-02-29)"  # February 29th, leap years only
+)
+# `[T ]` and the optional fraction/offset are unchanged; only the date half moved.
+_ISO_TIME = (
+    r"[T ](?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?"
+)
+JSON_DATE = rf'"{_CALENDAR_DATE}"'
+JSON_DATETIME = rf'"{_CALENDAR_DATE}{_ISO_TIME}"'
 
 # Maximum recursion depth for nested BaseModel resolution
 _MAX_RECURSION_DEPTH = 10

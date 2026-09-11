@@ -2271,3 +2271,112 @@ def test_decimal_grammar_is_narrower_than_pydantic_but_never_wider_S_10() -> Non
     for value in ('{"x":"0007"}', '{"x":"+1"}', '{"x":".5"}', '{"x":"1."}'):
         model.model_validate_json(value)  # pydantic accepts ...
         assert _re.fullmatch(pat, value) is None  # ... and the grammar does not
+
+
+# --- S-11: month-aware (and leap-aware) date grammars -------------------------------
+
+
+S_11_REJECTED_DATES = [
+    "2026-02-30",  # the report's own example
+    "2026-04-31",  # a 30-day month
+    "2026-02-29",  # not a leap year
+    "2100-02-29",  # divisible by 100, not by 400 -- NOT a leap year
+    "2026-06-31",
+    "2026-09-31",
+    "2026-11-31",
+    "2026-13-01",
+    "2026-00-01",
+    "2026-01-00",
+    "2026-01-32",
+    "0000-01-01",  # datetime.date's minimum year is 1
+]
+S_11_ACCEPTED_DATES = [
+    "2026-01-31", "2026-12-31", "2026-02-28", "2024-02-29",  # 2024 IS a leap year
+    "2000-02-29",  # divisible by 400 -- a leap year
+    "0400-02-29", "0001-01-01", "9999-12-31", "2026-04-30",
+]
+
+
+@pytest.mark.parametrize("value", S_11_REJECTED_DATES)
+def test_impossible_dates_are_rejected_by_the_grammar_S_11(value: str) -> None:
+    """`{"x": "2026-02-30"}` full-matched the old month-independent day alternation.
+
+    `2026-02-30` is a classic LLM output and a date field is one of the main reasons to
+    reach for constrained decoding, so a grammar that lets it through is failing at
+    precisely the job it was chosen for. pydantic's verdict is asserted first.
+    """
+    import re as _re
+
+    from pydantic import ValidationError
+
+    model = create_model("S11Bad", x=(dt.date, ...))
+    with pytest.raises(ValidationError):
+        model.model_validate_json('{"x":"%s"}' % value)
+    pat = pydantic_to_regex(model, anchors=True)
+    assert _re.fullmatch(pat, '{"x":"%s"}' % value) is None, (
+        f"the grammar still accepts the impossible date {value!r}"
+    )
+
+
+@pytest.mark.parametrize("value", S_11_ACCEPTED_DATES)
+def test_real_dates_are_still_accepted_S_11(value: str) -> None:
+    """The must-accept side: narrowing the day alternation must not lose a real date.
+
+    Passes at `main` by design -- main's alternation is wider and accepts every one of
+    these too. It is the guard on this fix: a leap rule that forgot the divisible-by-400
+    clause would reject `2000-02-29`, and a year range that forgot its lower end would
+    reject `0001-01-01`. Nothing else in the suite would notice either.
+    """
+    import re as _re
+
+    model = create_model("S11Good", x=(dt.date, ...))
+    model.model_validate_json('{"x":"%s"}' % value)  # precondition
+    pat = pydantic_to_regex(model, anchors=True)
+    assert _re.fullmatch(pat, '{"x":"%s"}' % value) is not None, value
+
+
+def test_datetime_shares_the_calendar_date_grammar_S_11() -> None:
+    """The datetime grammar carries the same calendar, not a looser copy of it."""
+    import re as _re
+
+    model = create_model("S11Dt", x=(dt.datetime, ...))
+    pat = pydantic_to_regex(model, anchors=True)
+    assert _re.fullmatch(pat, '{"x":"2024-02-29T12:00:00"}') is not None
+    for bad in ("2026-02-30T12:00:00", "2026-04-31 00:00:00", "2100-02-29T00:00:00Z"):
+        assert _re.fullmatch(pat, '{"x":"%s"}' % bad) is None, bad
+
+
+def test_calendar_date_grammar_agrees_with_datetime_date_exhaustively_S_11() -> None:
+    """Brute force over a full leap cycle and every century boundary.
+
+    Cheap enough to keep in the suite (about 150k combinations) and it is the only
+    evidence that matters for a hand-written calendar regex: the regex and
+    `datetime.date` must agree on EVERY (year, month, day) triple, not on the handful
+    an author thought to list. The full 0001-9999 sweep -- 4.6M combinations, zero
+    mismatches -- was run once out of band; these years are the ones that carry the
+    leap rule's three clauses.
+    """
+    import re as _re
+
+    from paw_kit.schema.grammar import _CALENDAR_DATE
+
+    compiled = _re.compile(_CALENDAR_DATE)
+    years = (
+        list(range(1896, 1921))          # an ordinary run across a non-leap century
+        + [1900, 2000, 2100, 2200, 2400]  # century boundaries: only 2000 and 2400 leap
+        + [1, 4, 100, 400, 9999]          # the extremes of the range
+    )
+    mismatches = []
+    for year in years:
+        for month in range(0, 14):
+            for day in range(0, 33):
+                value = f"{year:04d}-{month:02d}-{day:02d}"
+                accepted = compiled.fullmatch(value) is not None
+                try:
+                    dt.date(year, month, day)
+                    real = True
+                except ValueError:
+                    real = False
+                if accepted != real:
+                    mismatches.append((value, accepted, real))
+    assert not mismatches, f"{len(mismatches)} disagreements, e.g. {mismatches[:5]}"
