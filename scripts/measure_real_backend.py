@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import platform
 import statistics
@@ -37,6 +38,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from paw_kit import ProgramAsWeightsBackend, TestRunner, load_suite
 
@@ -52,9 +54,37 @@ def _gpu_name() -> str:
         return "none"
 
 
-def _pct(sorted_vals: list[float], p: float) -> float:
+#: Smallest sample in which a percentile is estimable at all -- see `_pct`.
+def _min_n_for_percentile(p: float) -> int:
+    """How many observations a `p` percentile needs before it means anything.
+
+    At least one observation has to be expected above the percentile, i.e.
+    `n * (1 - p) >= 1`, so `n >= 1 / (1 - p)`: 2 for p50, 10 for p90, 100 for p99.
+
+    The `round` before the `ceil` is not cosmetic: `1 / (1 - 0.9)` is
+    10.000000000000002 in binary floating point, and ceiling that gives 11, which would
+    rule out the p90 over 10 warm calls that this script legitimately reports.
+    """
+    if not 0.0 < p < 1.0:
+        raise ValueError(f"p must be in (0, 1), got {p}")
+    return max(1, int(math.ceil(round(1.0 / (1.0 - p), 9))))
+
+
+def _pct(sorted_vals: list[float], p: float) -> Optional[float]:
+    """The `p` percentile of `sorted_vals`, or `None` if the sample is too small for it.
+
+    B-8d (bug hunt 2026-09-11): this used to index
+    `min(n - 1, round(p * (n - 1)))` unconditionally. At n=10 and p=0.99 that is index 9 --
+    the maximum. Both published 3080 `p99_ms` values are therefore a single observation
+    dressed as a tail statistic, and `README.md` additionally quotes `--calls 50` for rows
+    that ran at 10. Returning `None` rather than the maximum makes the absence of a p99
+    visible in the artifact; `max_ms` is emitted separately, because the maximum is a
+    perfectly good thing to report as long as it is called the maximum.
+    """
     if not sorted_vals:
-        return float("nan")
+        return None
+    if len(sorted_vals) < _min_n_for_percentile(p):
+        return None
     idx = min(len(sorted_vals) - 1, int(round(p * (len(sorted_vals) - 1))))
     return sorted_vals[idx]
 
@@ -113,15 +143,40 @@ def main() -> int:
         backend.infer(adapter_path, text)
         warm.append((time.perf_counter() - t0) * 1000)
     warm_sorted = sorted(warm)
+
+    def _ms(value: Optional[float]) -> str:
+        return "n/a" if value is None else f"{value:.0f}ms"
+
     lat = {
         "cold_ms": cold_ms,
+        # B-8d: what was actually run, recorded next to the numbers derived from it.
+        "calls_requested": args.calls,
         "warm_calls": len(warm),
         "p50_ms": _pct(warm_sorted, 0.50),
         "p90_ms": _pct(warm_sorted, 0.90),
         "p99_ms": _pct(warm_sorted, 0.99),
-        "mean_ms": statistics.fmean(warm) if warm else float("nan"),
+        "percentiles_unavailable": {
+            f"p{int(p * 100)}": _min_n_for_percentile(p)
+            for p in (0.50, 0.90, 0.99)
+            if _pct(warm_sorted, p) is None
+        },
+        "min_ms": warm_sorted[0] if warm_sorted else None,
+        "max_ms": warm_sorted[-1] if warm_sorted else None,
+        "mean_ms": statistics.fmean(warm) if warm else None,
+        "percentile_note": (
+            "A percentile is reported only when the sample can support it: at least one "
+            "observation must be expected above it, so n >= 1/(1-p) -- 2 for p50, 10 for "
+            "p90, 100 for p99. Otherwise the field is null and the minimum n it would need "
+            "is listed in percentiles_unavailable. max_ms is always reported. (Report B-8d: "
+            "p99 over 10 warm calls used to return the maximum.)"
+        ),
     }
-    print(f"[infer] warm p50={lat['p50_ms']:.0f}ms p90={lat['p90_ms']:.0f}ms p99={lat['p99_ms']:.0f}ms over {len(warm)} calls")
+    print(f"[infer] warm p50={_ms(lat['p50_ms'])} p90={_ms(lat['p90_ms'])} "
+          f"p99={_ms(lat['p99_ms'])} max={_ms(lat['max_ms'])} over {len(warm)} calls "
+          f"(requested {args.calls})")
+    if lat["percentiles_unavailable"]:
+        print(f"[infer] not estimable at n={len(warm)}: "
+              + ", ".join(f"{k} needs n>={v}" for k, v in lat["percentiles_unavailable"].items()))
 
     # 3. suite pass rate (standard + fuzzed), using the adapter we just compiled
     config = suite.model_copy(update={"adapter_path": adapter_path})
@@ -140,6 +195,7 @@ def main() -> int:
         "compiler": args.compiler,
         "gpu_layers": args.gpu_layers,
         "max_spec_examples": args.max_spec_examples,
+        "calls": args.calls,
         "compile_wall_s": compile_s,
         "manifest": manifest,
         "latency": lat,

@@ -805,3 +805,85 @@ def test_lookup_summary_and_fixture_record_the_overlap() -> None:
     assert "spec_overlap_ids = spec_eval_overlap(SPEC, evaluation)" in src
     committed = json.loads(LOOKUP_FIXTURE.read_text())
     assert "spec_eval_overlap_ids" not in committed
+
+
+# ===============================================================================  B-8d
+#
+# `measure_real_backend.py`'s `_pct` indexed `min(n - 1, round(p * (n - 1)))`
+# unconditionally, so at n=10 and p=0.99 it returned the maximum. Both published 3080
+# `p99_ms` values are a single observation.
+
+
+def test_real_backend_p99_over_ten_calls_is_not_the_maximum() -> None:
+    """The exact arrangement of the two published 3080 rows: ten warm calls, p99.
+
+    The old arithmetic returned index `min(9, round(0.99 * 9)) == 9`, the maximum.
+    """
+    mrb = _load("measure_real_backend")
+    ten = [float(i) for i in range(10)]
+    assert mrb._pct(ten, 0.99) is None
+    # The old index arithmetic, shown explicitly so the regression is unmistakable.
+    assert min(len(ten) - 1, round(0.99 * (len(ten) - 1))) == 9
+    assert ten[9] == max(ten)
+
+    # p50 and p90 are estimable at n=10 and must keep working: the "numbers checked and
+    # found sound" list includes the 3080 and A100 p50 latencies.
+    assert mrb._pct(ten, 0.50) == 4.0
+    assert mrb._pct(ten, 0.90) == 8.0
+    assert mrb._pct(ten, 0.90) != max(ten)
+
+    # A hundred calls can support a p99.
+    hundred = [float(i) for i in range(100)]
+    assert mrb._pct(hundred, 0.99) == 98.0
+
+
+def test_real_backend_minimum_n_per_percentile() -> None:
+    """`n >= 1/(1-p)`: 2 for p50, 10 for p90, 100 for p99.
+
+    The float-rounding guard matters here -- `1 / (1 - 0.9)` is 10.000000000000002, and
+    ceiling that would rule out the p90 over 10 calls this script legitimately reports.
+    """
+    mrb = _load("measure_real_backend")
+    assert mrb._min_n_for_percentile(0.50) == 2
+    assert mrb._min_n_for_percentile(0.90) == 10
+    assert mrb._min_n_for_percentile(0.95) == 20
+    assert mrb._min_n_for_percentile(0.99) == 100
+    assert mrb._min_n_for_percentile(0.999) == 1000
+    for bad in (0.0, 1.0, -0.5, 1.5):
+        with pytest.raises(ValueError):
+            mrb._min_n_for_percentile(bad)
+    assert mrb._pct([], 0.50) is None
+    assert mrb._pct([1.0], 0.50) is None
+
+
+def test_real_backend_records_the_calls_it_ran_and_the_maximum() -> None:
+    """B-8d's second half: `README.md` quotes `--calls 50` for rows that ran at 10.
+
+    The artifact now carries `calls_requested` next to `warm_calls`, `max_ms` always, and
+    `percentiles_unavailable` naming the n each missing percentile would need.
+    """
+    src = (_SCRIPTS / "measure_real_backend.py").read_text()
+    lat_block = src[src.index("    lat = {"):src.index('    print(f"[infer] warm p50=')]
+    for key in ("calls_requested", "warm_calls", "min_ms", "max_ms",
+                "percentiles_unavailable", "percentile_note"):
+        assert f'"{key}"' in lat_block, key
+    assert '"calls": args.calls,' in src
+
+    # The two published 3080 rows ran 10 warm calls and their p99 is the largest value
+    # recorded for them -- which is what makes it one observation.
+    for name in ("3080-cuda-paw-4b-qwen3-0.6b-20260908-155314.json",
+                 "3080-paw-4b-qwen3-0.6b-20260908-152233.json"):
+        lat = json.loads((_MEASUREMENTS / name).read_text())["latency"]
+        assert lat["warm_calls"] == 10
+        assert lat["p99_ms"] > lat["p90_ms"] > lat["p50_ms"]
+        assert "calls_requested" not in lat
+    # And the A100 row ran 50, which is still under the 100 a p99 needs: at n=50 the old
+    # arithmetic indexed round(0.99 * 49) == 49, the maximum again. Not in the report's
+    # wording, which named only the 3080 rows.
+    a100 = json.loads(
+        (_MEASUREMENTS / "a100-paw-4b-qwen3-0.6b-20260908-160856.json").read_text()
+    )["latency"]
+    assert a100["warm_calls"] == 50
+    assert round(0.99 * (a100["warm_calls"] - 1)) == a100["warm_calls"] - 1
+    mrb = _load("measure_real_backend")
+    assert a100["warm_calls"] < mrb._min_n_for_percentile(0.99)
