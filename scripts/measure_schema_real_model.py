@@ -52,6 +52,81 @@ from paw_kit.schema.logits_processor import RegexLogitsProcessor
 
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
+# ------------------------------------------------------------------- arm timing
+#
+# B-4 (bug hunt 2026-09-11): the published "constrained decoding costs no latency" sentence
+# compared 501 ms (constrained, warm) against 643.4 ms (unconstrained, warm + cold). The
+# unconstrained arm runs first, so *its* call 1 carried 1819 ms of Torch/CUDA warm-up and
+# stayed in its mean, while the constrained arm's own cold cost -- the 9236 ms FSM build --
+# had already been excluded. Recomputed from the untouched per-call `ms` of
+# `measurements/schema-real-model-3080-fixed-20260908-194022.json`, dropping call 1 of each
+# arm: 559.4 vs 501.4, a 58 ms gap rather than 142 ms. The conclusion survives; the stated
+# advantage was inflated 2.4x, and which arm ran first decided who paid warm-up.
+#
+# Three changes, so that shape of mistake is not available again: one generation is
+# discarded before each arm, both means are emitted per arm, and the comparison helper
+# refuses to mix them.
+
+#: A mean over calls that followed at least one discarded warm-up generation.
+WARM = "warm"
+#: A mean that still contains a first call paying framework or FSM warm-up.
+COLD = "cold"
+
+
+def arm_timing(ms: "list[float]", warmup_discarded: bool) -> dict:
+    """Both means for one arm, from its per-call latencies. Pure.
+
+    `mean_ms` is every timed call; `mean_ms_warm` drops the first timed call as well.
+    After a discarded warm-up generation the two should be close, and `mean_ms_warm` is
+    the one to compare across arms.
+    """
+    if not ms:
+        return {"n": 0, "mean_ms": None, "mean_ms_warm": None, "first_call_ms": None,
+                "warmup_generation_discarded": warmup_discarded,
+                "mean_ms_kind": WARM if warmup_discarded else COLD,
+                "mean_ms_warm_kind": WARM}
+    return {
+        "n": len(ms),
+        "mean_ms": sum(ms) / len(ms),
+        "mean_ms_warm": (sum(ms[1:]) / len(ms[1:])) if len(ms) > 1 else None,
+        "first_call_ms": ms[0],
+        "warmup_generation_discarded": warmup_discarded,
+        # `mean_ms` is only a warm mean if something was discarded before the arm ran.
+        "mean_ms_kind": WARM if warmup_discarded else COLD,
+        "mean_ms_warm_kind": WARM,
+    }
+
+
+def compare_arm_means(a_label: str, a_mean_ms: Optional[float], a_kind: str,
+                      b_label: str, b_mean_ms: Optional[float], b_kind: str) -> dict:
+    """Compare two arm means, refusing to compare a warm one against a cold one.
+
+    This raise is the whole point: B-4 was a warm mean quoted against a warm+cold mean,
+    which no code prevented and no assertion caught. `a_kind`/`b_kind` are `WARM`/`COLD`
+    as reported by `arm_timing`.
+    """
+    for kind in (a_kind, b_kind):
+        if kind not in (WARM, COLD):
+            raise ValueError(f"kind must be {WARM!r} or {COLD!r}, got {kind!r}")
+    if a_kind != b_kind:
+        raise ValueError(
+            f"refusing to compare a {a_kind} mean against a {b_kind} mean: "
+            f"{a_label} is {a_kind}, {b_label} is {b_kind}. This is B-4 -- the published "
+            "58 ms gap was quoted as 142 ms because the first arm's framework warm-up was "
+            "still inside its mean while the second arm's cold cost had been excluded. "
+            "Compare mean_ms_warm to mean_ms_warm."
+        )
+    if a_mean_ms is None or b_mean_ms is None:
+        raise ValueError(f"both means must be present: {a_label}={a_mean_ms}, "
+                         f"{b_label}={b_mean_ms}")
+    return {
+        "kind": a_kind,
+        "a": {"label": a_label, "mean_ms": a_mean_ms},
+        "b": {"label": b_label, "mean_ms": b_mean_ms},
+        "delta_ms": a_mean_ms - b_mean_ms,
+        "ratio": a_mean_ms / b_mean_ms,
+    }
+
 
 class Triage(BaseModel):
     priority: Literal["low", "medium", "high", "critical"]
@@ -198,6 +273,14 @@ def main() -> int:
     results = {"constrained": [], "unconstrained": []}
     for mode, constrained in [("unconstrained", False), ("constrained", True)]:
         print(f"\n=== {mode} ===")
+        # B-4: discard one generation per arm before timing anything. The unconstrained arm
+        # ran first and so paid ~1819 ms of Torch/CUDA warm-up inside its own mean, while
+        # the constrained arm, running second, did not -- arm order decided the result.
+        # Discarding here makes both arms' `mean_ms` a warm mean and removes the order
+        # dependence; `mean_ms_warm` is reported as well so the two can be compared.
+        t_warm0 = time.perf_counter()
+        generate(TICKETS[0], constrained)
+        print(f"  [warmup, discarded] {(time.perf_counter() - t_warm0) * 1000:7.1f}ms")
         for ticket in TICKETS:
             raw, dt_ms = generate(ticket, constrained)
             ok, err = try_parse(raw)
@@ -222,21 +305,54 @@ def main() -> int:
             status = "OK  " if ok else ("FENCE" if ok_stripped else "FAIL")
             print(f"  [{status}] {dt_ms:7.1f}ms {ticket[:40]!r:44} -> {raw[:60]!r}" + (f"  ({err})" if err else ""))
 
+    arms = {}
     for mode in ("unconstrained", "constrained"):
         n = len(results[mode])
         n_ok = sum(1 for r in results[mode] if r["valid"])
         n_ok_stripped = sum(1 for r in results[mode] if r["valid_fence_stripped"])
-        mean_ms = sum(r["ms"] for r in results[mode]) / n
+        timing = arm_timing([r["ms"] for r in results[mode]], warmup_discarded=True)
+        arms[mode] = {
+            "n": n,
+            "valid_raw": n_ok,
+            "valid_fence_stripped": n_ok_stripped,
+            "valid_raw_pct": 100 * n_ok / n if n else None,
+            "valid_fence_stripped_pct": 100 * n_ok_stripped / n if n else None,
+            **timing,
+        }
         print(
             f"\n{mode}: {n_ok}/{n} valid Pydantic parses raw ({100 * n_ok / n:.1f}%), "
             f"{n_ok_stripped}/{n} with a markdown fence stripped ({100 * n_ok_stripped / n:.1f}%), "
-            f"mean {mean_ms:.0f}ms/call"
+            f"mean {timing['mean_ms']:.0f}ms/call, "
+            f"mean excluding the first timed call {timing['mean_ms_warm']:.0f}ms/call"
         )
+
+    # Warm against warm, and the helper raises rather than quietly producing a number if
+    # either side is not warm. (B-4.)
+    comparison = compare_arm_means(
+        "unconstrained", arms["unconstrained"]["mean_ms_warm"],
+        arms["unconstrained"]["mean_ms_warm_kind"],
+        "constrained", arms["constrained"]["mean_ms_warm"],
+        arms["constrained"]["mean_ms_warm_kind"],
+    )
+    print(f"\nwarm-vs-warm: unconstrained {comparison['a']['mean_ms']:.1f}ms vs "
+          f"constrained {comparison['b']['mean_ms']:.1f}ms "
+          f"(delta {comparison['delta_ms']:+.1f}ms, ratio {comparison['ratio']:.2f}x)")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"schema-real-model-{args.label}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    out_path.write_text(json.dumps({"model": MODEL_NAME, "grammar_regex": grammar_regex, **results}, indent=2))
+    out_path.write_text(json.dumps({
+        "model": MODEL_NAME,
+        "grammar_regex": grammar_regex,
+        "max_new_tokens": args.max_new_tokens,
+        "device": device,
+        "warmup_generations_discarded_per_arm": 1,
+        # The summary means the published sentence is derived from. Before B-4 the artifact
+        # carried no summary at all: 643.4 and 501 existed only in stdout.
+        "arms": arms,
+        "comparison_warm": comparison,
+        **results,
+    }, indent=2))
     print(f"\nwrote {out_path}")
     return 0
 

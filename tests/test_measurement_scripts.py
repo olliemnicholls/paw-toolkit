@@ -386,3 +386,94 @@ def test_fiscal_truncation_count_comes_from_the_api_stop_reason() -> None:
     assert rates["truncated_n"] == 1
     assert rates["unanswered_n"] == 2
     assert rates["exact_when_answered"] == 2
+
+
+# ================================================================================  B-4
+#
+# "Constrained decoding costs no latency" compared 501 ms (constrained, warm) against
+# 643.4 ms (unconstrained, warm + 1819 ms of Torch/CUDA warm-up). Arm order decided it.
+
+SCHEMA_ARTIFACT = _MEASUREMENTS / "schema-real-model-3080-fixed-20260908-194022.json"
+
+
+@pytest.fixture(scope="module")
+def schema_run() -> dict:
+    return json.loads(SCHEMA_ARTIFACT.read_text())
+
+
+@pytest.fixture(scope="module")
+def msrm() -> ModuleType:
+    # This script imports torch and transformers at module scope (it drives a real HF
+    # model); both are installed for the `measure` extra. ~3s, once per session.
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    return _load("measure_schema_real_model")
+
+
+def test_schema_arm_timing_emits_both_means(msrm: ModuleType, schema_run: dict) -> None:
+    """A named recomputation over the untouched per-call `ms` of the committed artifact.
+
+    Dropping call 1 of each arm: unconstrained 643.4 -> 559.4, constrained 1083.7 ->
+    501.4. Those two warm means differ by 58.0 ms, not the published 142 ms.
+    """
+    unc = msrm.arm_timing([r["ms"] for r in schema_run["unconstrained"]], False)
+    con = msrm.arm_timing([r["ms"] for r in schema_run["constrained"]], False)
+
+    assert unc["n"] == 15 and con["n"] == 15
+    assert round(unc["mean_ms"], 1) == 643.4
+    assert round(unc["mean_ms_warm"], 1) == 559.4
+    assert round(unc["first_call_ms"], 1) == 1819.3
+    assert round(con["mean_ms"], 1) == 1083.7
+    assert round(con["mean_ms_warm"], 1) == 501.4
+    assert round(con["first_call_ms"], 1) == 9235.9
+
+    # The recorded run discarded nothing, so its `mean_ms` values are cold by construction.
+    assert unc["mean_ms_kind"] == msrm.COLD
+    assert con["mean_ms_kind"] == msrm.COLD
+    assert unc["mean_ms_warm_kind"] == msrm.WARM
+
+    warm = msrm.compare_arm_means(
+        "unconstrained", unc["mean_ms_warm"], msrm.WARM,
+        "constrained", con["mean_ms_warm"], msrm.WARM,
+    )
+    assert round(warm["delta_ms"], 1) == 58.0
+    assert round(warm["ratio"], 2) == 1.12
+
+
+def test_schema_comparison_helper_refuses_to_mix_warm_and_cold(msrm: ModuleType) -> None:
+    """Report §5's named test for B-4: the helper must refuse, not just report both.
+
+    This is the exact comparison that produced the published 142 ms: one arm's warm+cold
+    mean against the other arm's warm mean.
+    """
+    with pytest.raises(ValueError, match="refusing to compare"):
+        msrm.compare_arm_means("unconstrained", 643.4, msrm.COLD,
+                               "constrained", 501.4, msrm.WARM)
+    with pytest.raises(ValueError, match="refusing to compare"):
+        msrm.compare_arm_means("constrained", 501.4, msrm.WARM,
+                               "unconstrained", 643.4, msrm.COLD)
+    with pytest.raises(ValueError):
+        msrm.compare_arm_means("a", 1.0, "lukewarm", "b", 2.0, msrm.WARM)
+    with pytest.raises(ValueError):
+        msrm.compare_arm_means("a", None, msrm.WARM, "b", 2.0, msrm.WARM)
+
+    # Like-for-like is allowed, in both directions.
+    assert msrm.compare_arm_means("a", 643.4, msrm.COLD, "b", 1083.7, msrm.COLD)["kind"] == "cold"
+    assert msrm.compare_arm_means("a", 559.4, msrm.WARM, "b", 501.4, msrm.WARM)["kind"] == "warm"
+
+
+def test_schema_script_discards_a_generation_before_each_arm_and_writes_a_summary() -> None:
+    """The artifact carried no summary means at all: 643.4 and 501 existed only in stdout.
+
+    The run itself needs a GPU and a model download, so what is pinned here is that the
+    summariser is wired in and that a warm-up generation is discarded per arm.
+    """
+    src = (_SCRIPTS / "measure_schema_real_model.py").read_text()
+    arm_loop = src[src.index('for mode, constrained in [("unconstrained", False)'):]
+    assert "[warmup, discarded]" in arm_loop
+    assert "generate(TICKETS[0], constrained)" in arm_loop
+    writer = src[src.index("out_path.write_text("):]
+    assert '"arms": arms' in writer
+    assert '"comparison_warm": comparison' in writer
+    assert '"warmup_generations_discarded_per_arm": 1' in writer
+    assert "compare_arm_means(" in src
