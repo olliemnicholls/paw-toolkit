@@ -2243,9 +2243,13 @@ def test_int_range_enumeration_is_capped_S_9() -> None:
 
 
 S_10_ACCEPTED = ['{"x":1.5}', '{"x":42}', '{"x":-0.001}', '{"x":"1.5"}', '{"x":"42"}',
-                 '{"x":"-0.5"}', '{"x":1e5}', '{"x":"1E+5"}', '{"x":0}']
+                 '{"x":"-0.5"}', '{"x":"1E+5"}', '{"x":0}', '{"x":"1E+400"}']
 S_10_REJECTED = ['{"x":"hello"}', '{"x":""}', '{"x":"Infinity"}', '{"x":"NaN"}',
-                 '{"x":null}', '{"x":true}']
+                 '{"x":null}', '{"x":true}',
+                 # An exponent on a BARE number overflows the f64 pydantic parses it
+                 # through, so pydantic rejects it as non-finite; the grammar must not
+                 # offer it. Found by the structural fuzz.
+                 '{"x":8E383}', '{"x":1e400}', '{"x":95.3e2761312999}']
 
 
 def test_decimal_accepts_numbers_and_quoted_numbers_not_any_string_S_10() -> None:
@@ -2269,6 +2273,44 @@ def test_decimal_accepts_numbers_and_quoted_numbers_not_any_string_S_10() -> Non
         with pytest.raises(ValidationError):
             model.model_validate_json(value)
         assert _re.fullmatch(pat, value) is None, f"the grammar accepts {value!r}"
+
+
+def test_decimal_bare_number_carries_no_exponent_S_10() -> None:
+    """The bare and quoted halves are different grammars, and the difference matters.
+
+    pydantic parses a BARE JSON number for a Decimal field through an f64, so an
+    exponent past the double range makes it infinite and validation then fails with
+    "Input should be a finite number" -- `{"x": 8E383}` satisfied the first cut of this
+    fix and failed validation. The QUOTED form goes straight to `Decimal(str)` with no
+    f64 in the middle, so it keeps its exponent. Found by the structural fuzz rather
+    than by reading, which is the reason the fuzz is part of the exit criteria.
+    """
+    import re as _re
+
+    from pydantic import ValidationError
+
+    model = create_model("S10Exp", x=(Decimal, ...))
+    pat = pydantic_to_regex(model, anchors=True)
+
+    # Quoted: exponent kept, because it is exact.
+    for value in ('{"x":"1E+400"}', '{"x":"1e-7"}', '{"x":"1E+999999"}'):
+        model.model_validate_json(value)
+        assert _re.fullmatch(pat, value) is not None, value
+
+    # Bare: no exponent at all, so overflow is unreachable by construction.
+    for value in ('{"x":8E383}', '{"x":1e5}'):
+        assert _re.fullmatch(pat, value) is None, (
+            f"the bare form still offers an exponent: {value!r}"
+        )
+    with pytest.raises(ValidationError):
+        model.model_validate_json('{"x":8E383}')
+
+    # The largest bare number the grammar can spell is still finite for pydantic.
+    from paw_kit.schema.grammar import _MAX_NUMBER_DIGITS
+
+    biggest = '{"x":%s}' % ("9" * _MAX_NUMBER_DIGITS)
+    model.model_validate_json(biggest)
+    assert _re.fullmatch(pat, biggest) is not None
 
 
 def test_decimal_round_trips_through_its_own_grammar_S_10() -> None:
@@ -2566,3 +2608,48 @@ def test_filter_logits_preserves_the_input_container_M_3() -> None:
     sparse_out = processor.filter_logits(processor.initial_state, sparse_in)
     assert sparse_in == {0: 1.0, 2: 3.0}, "filter_logits mutated its dict input"
     assert sparse_out == {0: 1.0, 2: -float("inf")}
+
+
+def test_two_fields_claiming_the_same_alias_are_refused_S_5() -> None:
+    """A JSON object cannot carry the same key twice, so the compiler refuses.
+
+    Found by the structural fuzz, and it is a hazard the S-5 fix itself introduces:
+    before aliases were read at all the keys were the Python field names and could not
+    collide. pydantic builds such a model without complaint and then reads the duplicate
+    key last-wins, so a grammar emitting `{"x": <for a>, "x": <for b>}` validates one
+    field against the other's value -- an unsound grammar, which the track's invariant
+    says must become an error instead.
+    """
+    class Clash(BaseModel):
+        first: str = Field(alias="x")
+        second: int = Field(alias="x")
+
+    with pytest.raises(PAWSchemaError, match="both validate the JSON object key"):
+        pydantic_to_regex(Clash)
+
+    # ... including the subtler shape: an alias that collides with another field's name.
+    from pydantic import ConfigDict
+
+    class ShadowsAName(BaseModel):
+        model_config = ConfigDict(populate_by_name=True)
+        first: str = Field(alias="second")
+        second: int
+
+    with pytest.raises(PAWSchemaError, match="both validate the JSON object key"):
+        pydantic_to_regex(ShadowsAName)
+
+
+def test_an_alias_equal_to_its_own_field_name_is_not_a_collision_S_5() -> None:
+    """The check is per KEY across fields, not a blanket ban on repeating a name."""
+    import re as _re
+
+    from pydantic import ConfigDict
+
+    class SelfAlias(BaseModel):
+        model_config = ConfigDict(populate_by_name=True)
+        full_name: str = Field(alias="full_name")
+
+    pat = pydantic_to_regex(SelfAlias, anchors=True)
+    assert _re.fullmatch(pat, '{"full_name":"v"}') is not None
+    # ... and the alternation is not doubled up.
+    assert pat.count('"full_name"') == 1, pat

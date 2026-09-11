@@ -109,10 +109,22 @@ JSON_NULL = r"null"
 # swallow. pydantic also accepts `"0007"`, `"+1"`, `".5"` and `"1. "`; the grammar
 # refuses them, which is the narrowing direction and keeps one spelling per value for a
 # decoder to find.
-_JSON_NUMBER_BODY = (
-    rf"-?(?:0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
-)
-JSON_DECIMAL = rf'(?:{_JSON_NUMBER_BODY}|"{_JSON_NUMBER_BODY}")'
+# The two halves are NOT the same grammar, and the difference is load bearing. pydantic
+# parses a BARE JSON number for a Decimal field through an f64 first, so an exponent
+# that overflows the double range makes it infinite and pydantic then rejects it
+# ("Input should be a finite number"): `{"x": 8E383}` would satisfy the grammar and fail
+# validation. Caught by the structural fuzz, not by inspection. So the bare form carries
+# no exponent at all -- with the integer part capped at _MAX_NUMBER_DIGITS it can then
+# never exceed 1e100 and can never overflow. The QUOTED form is parsed as a string by
+# `Decimal` itself, exactly and without an f64 in the middle, so it keeps its exponent;
+# its digits are capped because pydantic refuses an exponent that does not fit in its
+# own integer type (executed: `"1E+99999999999"` validates, `"1E+9999999999999999999"`
+# does not), and six digits is far inside that while being far beyond any real schema.
+# Losing the bare `1e5` spelling is a narrowing, which rule 1 permits, and costs
+# nothing reachable: `model_dump_json()` emits the quoted form.
+_DECIMAL_COEFFICIENT = rf"-?(?:0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(?:\.[0-9]+)?"
+_DECIMAL_QUOTED_BODY = rf"{_DECIMAL_COEFFICIENT}(?:[eE][+-]?[0-9]{{1,6}})?"
+JSON_DECIMAL = rf'(?:{_DECIMAL_COEFFICIENT}|"{_DECIMAL_QUOTED_BODY}")'
 
 # Specialized type regex fragments
 JSON_UUID =r'"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"'
@@ -1526,6 +1538,28 @@ def _pydantic_to_regex_impl(
     if not fields:
         pattern = r"\{" + JSON_WHITESPACE + r"\}"
         return f"^{pattern}$" if anchors else pattern
+
+    # S-5, found by the structural fuzz: two fields can resolve to the SAME JSON object
+    # key once aliases are in play -- `Field(alias="x")` on two different fields, or an
+    # alias equal to another field's name. pydantic builds such a model without
+    # complaint and then reads the duplicate key last-wins, so the grammar would emit
+    # `{"x": <for field a>, "x": <for field b>}`, which validates one field against the
+    # other's value. Before aliases were read at all the keys were the Python field
+    # names and could not collide, so this is a hazard the S-5 fix introduces and has to
+    # close. Refuse, per the "never emit an unsound grammar in preference to an error"
+    # invariant.
+    claimed: Dict[str, str] = {}
+    for field_name, field_info in fields.items():
+        for key in _field_validation_keys(model, field_name, field_info):
+            if key in claimed and claimed[key] != field_name:
+                raise PAWSchemaError(
+                    f"Fields {claimed[key]!r} and {field_name!r} of {model.__name__} "
+                    f"both validate the JSON object key {key!r} (via Field(alias=...) "
+                    "or validation_alias). A JSON object cannot carry the same key "
+                    "twice unambiguously, so there is no grammar that feeds both fields "
+                    "correctly. Give them distinct aliases."
+                )
+            claimed[key] = field_name
 
     field_patterns: List[str] = []
     for field_name, field_info in fields.items():
