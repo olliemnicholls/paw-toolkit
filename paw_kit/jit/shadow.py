@@ -32,8 +32,28 @@ from pydantic import BaseModel
 
 from paw_kit.jit.agreement import safe_agreement, stringify_answer
 from paw_kit.jit.db import _SHADOW_STALL_FACTOR
+from paw_kit.jit.deadline import DeadlinePool, PoolExhausted
 
 logger = logging.getLogger("paw_kit.jit.shadow")
+
+# J-2: a single, process-wide bounded pool of daemon worker threads for every
+# shadow-phase adapter call, across every task's own per-(db_path, task_id)
+# worker thread -- separate from decorator.py's `_SERVED_DEADLINE_POOL` (see
+# this track's Dependency check for why two pools, not one shared one).
+#
+# Residual limitation, stated plainly rather than glossed over: this pool IS
+# shared across every task's shadow comparisons. N wedged shadow comparisons
+# (from N different tasks, or repeated ones from a single wedged task) can
+# still starve *other* tasks' shadow comparisons of a slot -- a real, accepted,
+# and much narrower limitation than today's "one wedged adapter blocks its own
+# task's queue forever," not a claim of full cross-task isolation. A timeout
+# caused by this kind of cross-task pool exhaustion is infrastructure, not this
+# adapter's own drift, and is scored `verdict = "pool_exhausted"` below --
+# excluded from both the promotion numerator and denominator the same way
+# `get_agreement_stats` (paw_kit.jit.db) already excludes `teacher_error`,
+# rather than `error`, which counts against the adapter being compared.
+_SHADOW_POOL_MAX_WORKERS = 4
+_SHADOW_DEADLINE_POOL = DeadlinePool(max_workers=_SHADOW_POOL_MAX_WORKERS, name="paw-shadow-deadline")
 
 # Once a task has accumulated this many times `shadow_window` comparisons at one epoch
 # without promoting, the runner drops to sampling one comparison in every
@@ -105,6 +125,12 @@ class ShadowJob:
     demote_threshold: float = 0.0
     max_pairs: int = 500
     queue_size: int = 8
+    # J-2: deadline for this job's own run_adapter call (phase="shadow" only --
+    # unused, harmless, for phase in ("audit", "fail_open")). Carried per job
+    # rather than read from a module constant so a caller's `adapter_timeout_s=`
+    # decoration parameter (decorator.py) applies here too, not just the served
+    # path.
+    adapter_timeout_s: float = 10.0
     # Finding 1: a "fail_open" job carries nothing but enough to key the worker and
     # call `db.increment_fail_open(task_id)` there -- the persisted fail-open counter
     # must never be written on the caller thread. Every field above this one is
@@ -385,10 +411,29 @@ class ShadowRunner:
         if job.phase == "shadow":
             started = time.perf_counter()
             try:
-                adapter_value = job.run_adapter(job.input_payload)  # type: ignore[misc]
+                # J-2: the same deadline mechanism as the served path, on the
+                # separate shadow-path pool -- a wedged adapter must not stall
+                # this task's queue forever.
+                adapter_value = _SHADOW_DEADLINE_POOL.call(
+                    job.run_adapter, job.input_payload, job.adapter_timeout_s
+                )
                 adapter_latency = (time.perf_counter() - started) * 1000
                 adapter_output = stringify_answer(adapter_value)
+            except PoolExhausted as exc:
+                # Infrastructure, not this adapter's drift (see the pool's own
+                # module-level comment above): a different task's wedged
+                # comparisons consumed every slot. Excluded from both the
+                # promotion numerator and denominator, same as `teacher_error`
+                # -- never `error`, which would count against this adapter.
+                verdict = "pool_exhausted"
+                error_type = type(exc).__name__
+                adapter_output = None
+                self._log_shadow_error(job.task_id, error_type, exc)
             except BaseException as exc:  # noqa: BLE001
+                # Includes DeadlineExceeded: unlike PoolExhausted, this call got
+                # its own slot and still didn't finish in time -- that reflects
+                # on *this* adapter (too slow, or itself wedged) exactly the way
+                # any other adapter exception does, so it stays `error`.
                 verdict = "error"
                 error_type = type(exc).__name__
                 adapter_output = None

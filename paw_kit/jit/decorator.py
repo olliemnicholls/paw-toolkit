@@ -21,6 +21,7 @@ from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.jit.agreement import default_agreement_fn, stringify_answer
 from paw_kit.jit.compiler import BackgroundCompiler
 from paw_kit.jit.db import TraceDB
+from paw_kit.jit.deadline import DeadlinePool
 from paw_kit.jit.shadow import _GLOBAL_SHADOW_RUNNER, ShadowJob
 from paw_kit.schema.loader import get_default_backend, load
 
@@ -29,6 +30,17 @@ T = TypeVar("T")
 logger = logging.getLogger("paw_kit.jit")
 
 _GLOBAL_COMPILER = BackgroundCompiler()
+
+# J-2: a single, process-wide bounded pool of daemon worker threads for every
+# *served* (`ready`-state) adapter call, across every decorated task -- not one
+# pool per task and not a per-call thread. See paw_kit.jit.deadline's module
+# docstring for why ThreadPoolExecutor is disqualified and what this buys.
+# `shadow.py` has its own, separate pool for the shadow/audit-comparison path
+# (`_SHADOW_DEADLINE_POOL`) -- two pools, not one shared one, so a wedged
+# adapter on the served path cannot exhaust capacity a shadow comparison needs,
+# and vice versa (see this track's Dependency check).
+_SERVED_POOL_MAX_WORKERS = 4
+_SERVED_DEADLINE_POOL = DeadlinePool(max_workers=_SERVED_POOL_MAX_WORKERS, name="paw-served-deadline")
 
 # Deferred-topic fix (conductor/deferred/index.md, "Silent fail-open, no signal"):
 # the fail-open except block below used to be silent -- no log, no counter -- on the
@@ -377,6 +389,7 @@ def compile_on_hit(
     shadow_queue_size: int = 8,
     shadow_max_pairs: int = 500,
     task_id: Optional[str] = None,
+    adapter_timeout_s: float = 10.0,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator converting production LLM API calls into local neural functions.
 
@@ -438,6 +451,17 @@ def compile_on_hit(
             disagreement and never enters the window denominator.
         shadow_max_pairs: Per-task retention cap on `shadow_pairs`, oldest-first.
             Must be at least `2 * max(shadow_window, audit_window)` (J-12).
+        adapter_timeout_s: J-2. Deadline for one adapter inference call, on both
+            the served (`ready`) path and the shadow worker's own adapter call
+            in `shadow` state. A backend whose `infer` blocks forever (a
+            deadlocked llama.cpp, a stalled mmap, a socket with no timeout)
+            fails open after this many seconds instead of hanging the caller,
+            or the task's shadow queue, forever. Both paths run under a small,
+            process-wide bounded pool of daemon worker threads (see
+            `paw_kit.jit.deadline.DeadlinePool`); once every slot is genuinely
+            wedged, a further call fails open in ~0ms rather than paying this
+            deadline too. Default 10s is conservative for a local adapter;
+            lower it for a served path with its own stricter SLA.
         task_id: J-8. Override the derived task identity. The derived one is
             `sha256(module.qualname : spec : co_filename : co_firstlineno)`, which
             separates same-named functions in different files but *cannot* separate
@@ -457,6 +481,8 @@ def compile_on_hit(
         shadow_window, shadow_threshold, audit_window, audit_rate,
         demote_threshold, shadow_queue_size, shadow_max_pairs,
     )
+    if adapter_timeout_s <= 0:
+        raise ValueError(f"adapter_timeout_s must be > 0, got {adapter_timeout_s}")
     # J-8: read the parameter here so `decorator` below can bind a local `task_id`
     # without shadowing it.
     explicit_task_id = task_id
@@ -538,6 +564,10 @@ def compile_on_hit(
                         demote_threshold=demote_threshold,
                         max_pairs=shadow_max_pairs,
                         queue_size=shadow_queue_size,
+                        # J-2: only meaningful for phase="shadow" (the shadow
+                        # worker's own run_adapter call), harmless to also carry
+                        # for an "audit" job where it goes unused.
+                        adapter_timeout_s=adapter_timeout_s,
                         **kwargs,
                     )
                 )
@@ -591,7 +621,13 @@ def compile_on_hit(
                 )
                 try:
                     served_start = time.perf_counter()
-                    result = run_adapter(input_payload)
+                    # J-2: run under a deadline, on the process-wide served-path
+                    # pool -- not a bare call. A backend whose infer() blocks
+                    # forever must reach this except clause after
+                    # adapter_timeout_s, not hang the caller forever. See
+                    # paw_kit.jit.deadline's module docstring for the mechanism
+                    # and why ThreadPoolExecutor is disqualified for it.
+                    result = _SERVED_DEADLINE_POOL.call(run_adapter, input_payload, adapter_timeout_s)
                     served_latency_ms = (time.perf_counter() - served_start) * 1000
                 except Exception as exc:
                     # Fail-Open Safety: transparently route to wrapped function on local failure.
@@ -599,7 +635,10 @@ def compile_on_hit(
                     # log line and a counter a developer has to go looking for, not any change
                     # to the return value or exception behavior on this path. A fail-open is an
                     # infrastructure fault, not semantic drift: it never enters the audit
-                    # window and never counts toward demotion.
+                    # window and never counts toward demotion. This also covers
+                    # `deadline.PoolExhausted`/`DeadlineExceeded` (both subclass
+                    # TimeoutError, itself an Exception) exactly like any other
+                    # adapter exception.
                     _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
                     return func(*args, **kwargs)
 
