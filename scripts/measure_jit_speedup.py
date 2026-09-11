@@ -34,6 +34,7 @@ import statistics
 import sys
 import time
 from pathlib import Path
+from typing import Any, Sequence
 
 from pydantic import BaseModel
 
@@ -86,6 +87,87 @@ class Triage(BaseModel):
 
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# --------------------------------------------------------------------------- the split
+#
+# B-2 (bug hunt 2026-09-11): the summary used to split the per-call latencies at
+# `threshold` and publish the two means as "before" and "after". With `sync_compile=True`
+# that is wrong in both directions, because two of the twenty calls are neither a teacher
+# call nor steady-state local inference:
+#
+#   * call `threshold` itself pays the full synchronous compile on top of its teacher call
+#     (5449.66 ms in the committed 2026-09-08 run), which inflated the "before" mean from
+#     987.33 ms to 1879.80 ms;
+#   * call `threshold + 1` is the first *local* call, and pays the adapter download plus
+#     the llama.cpp model load (7599.32 ms), which inflated the "after" mean from
+#     88.37 ms to 589.10 ms -- and made the old `post_threshold.note` ("no network call")
+#     untrue of that one call.
+#
+# Net effect: the artifact's own `speedup_x` read 3.19 while every published page said
+# ~11x. The split is now a pure function of `(latencies, threshold)` so it can be unit
+# tested against the recorded run, and `speedup_x` has one stated definition.
+
+#: The four phases of a `sync_compile=True` hot-swap run, in the order they occur.
+SPLIT_PHASES = ("teacher_only", "compile_call", "cold_first_local", "steady_state")
+
+#: How `speedup_x` is defined, recorded in the artifact so a reader need not guess.
+SPEEDUP_DEFINITION = "mean(teacher_only) / mean(steady_state)"
+
+
+def split_latencies(latencies: "Sequence[float]", threshold: int) -> dict[str, list[float]]:
+    """Partition per-call latencies into the four phases above. Pure; no I/O, no globals.
+
+    `latencies[i]` is call `i + 1`. With a threshold of 5 and 20 calls:
+
+        teacher_only      calls 1-4    teacher API call only
+        compile_call      call  5      teacher API call + the whole synchronous compile
+        cold_first_local  call  6      first local call: adapter download + model load
+        steady_state      calls 7-20   warm local llama.cpp inference
+
+    Phases that the run was too short to reach come back empty rather than raising, so a
+    `--total-calls 6` run still produces a well-formed (if uninteresting) summary.
+    """
+    if threshold < 1:
+        raise ValueError(f"threshold must be >= 1, got {threshold}")
+    lat = list(latencies)
+    return {
+        "teacher_only": lat[: threshold - 1],
+        "compile_call": lat[threshold - 1 : threshold],
+        "cold_first_local": lat[threshold : threshold + 1],
+        "steady_state": lat[threshold + 1 :],
+    }
+
+
+def phase_stats(latencies: "Sequence[float]", threshold: int) -> dict[str, Any]:
+    """`split_latencies` plus the per-phase arithmetic and `speedup_x`. Also pure.
+
+    Verified against `measurements/jit-speedup-3080-20260908-165914.json`'s `calls[]`:
+    teacher_only 987.33 ms, compile_call 5449.66 ms, cold_first_local 7599.32 ms,
+    steady_state 88.37 ms, speedup_x 11.17.
+    """
+    split = split_latencies(latencies, threshold)
+    first_call_of = {
+        "teacher_only": 1,
+        "compile_call": threshold,
+        "cold_first_local": threshold + 1,
+        "steady_state": threshold + 2,
+    }
+    phases = {
+        name: {
+            "n": len(split[name]),
+            "first_call": first_call_of[name] if split[name] else None,
+            "mean_ms": statistics.fmean(split[name]) if split[name] else None,
+            "ms": list(split[name]),
+        }
+        for name in SPLIT_PHASES
+    }
+    teacher_mean = phases["teacher_only"]["mean_ms"]
+    steady_mean = phases["steady_state"]["mean_ms"]
+    return {
+        "phases": phases,
+        "speedup_definition": SPEEDUP_DEFINITION,
+        "speedup_x": (teacher_mean / steady_mean) if teacher_mean and steady_mean else None,
+    }
 
 
 def call_teacher(client: "anthropic.Anthropic", ticket_body: str) -> Triage:
@@ -157,33 +239,53 @@ def main() -> int:
     calls: list[dict] = []
     for i in range(args.total_calls):
         ticket = TICKETS[i % len(TICKETS)]
+        billed_before = len(teacher_usage)
         t0 = time.perf_counter()
         out = decorated(ticket)
         dt_ms = (time.perf_counter() - t0) * 1000
-        served_by = "teacher_or_compile" if i < args.threshold else "adapter_or_fallback"
-        calls.append({"call": i + 1, "ms": dt_ms, "phase": served_by, "output": out.model_dump()})
-        print(f"call {i + 1:2d} [{served_by:18s}] {dt_ms:8.1f}ms -> {out.model_dump()}")
+        # B-8h: `phase` is what the call *index* says should have happened; `served_by` is
+        # what actually did. `teacher_fn` appends to `teacher_usage` on every real teacher
+        # call, so a post-threshold fail-open fallback -- which would otherwise be averaged
+        # into the "local inference" mean while the script printed "they never left the
+        # machine" -- is visible per call instead of being assumed away.
+        phase = "teacher_or_compile" if i < args.threshold else "adapter_or_fallback"
+        served_by = "teacher" if len(teacher_usage) > billed_before else "adapter"
+        calls.append({"call": i + 1, "ms": dt_ms, "phase": phase,
+                      "served_by": served_by, "output": out.model_dump()})
+        print(f"call {i + 1:2d} [{phase:18s}] served_by={served_by:7s} {dt_ms:8.1f}ms -> {out.model_dump()}")
 
     pre = [c["ms"] for c in calls[: args.threshold]]
     post = [c["ms"] for c in calls[args.threshold :]]
+    teacher_served_after_threshold = sum(
+        1 for c in calls[args.threshold :] if c["served_by"] == "teacher"
+    )
 
     summary = {
         "label": args.label,
         "teacher_model": TEACHER_MODEL,
         "threshold": args.threshold,
         "total_calls": args.total_calls,
+        # Kept for continuity with the 2026-09-08 artifacts, and superseded: a bare split
+        # at `threshold` puts the synchronous compile in "pre" and the adapter download in
+        # "post". Read `phases` instead. (B-2.)
         "pre_threshold": {
             "n": len(pre),
             "mean_ms": statistics.fmean(pre) if pre else None,
-            "note": "includes the real Claude API call latency each time; the threshold-th "
-            "call additionally includes the full synchronous compile step",
+            "note": "index split only: the real Claude API call latency each time, and the "
+            "threshold-th call additionally includes the full synchronous compile step, so "
+            "this mean is not the cost of a teacher call. Superseded by phases.teacher_only.",
         },
         "post_threshold": {
             "n": len(post),
             "mean_ms": statistics.fmean(post) if post else None,
-            "note": "local llama.cpp inference via ProgramAsWeightsBackend, no network call",
+            "note": "index split only: local llama.cpp inference via "
+            "ProgramAsWeightsBackend, except that the first post-threshold call downloads "
+            "the adapter and loads the model (so it DOES make a network call), and a "
+            "fail-open fallback would appear here too -- see served_by per call. "
+            "Superseded by phases.steady_state.",
         },
-        "speedup_x": (statistics.fmean(pre) / statistics.fmean(post)) if pre and post else None,
+        "teacher_served_after_threshold": teacher_served_after_threshold,
+        **phase_stats([c["ms"] for c in calls], args.threshold),
         "teacher_tokens_total": {
             "input": sum(u["input_tokens"] for u in teacher_usage),
             "output": sum(u["output_tokens"] for u in teacher_usage),
@@ -192,14 +294,22 @@ def main() -> int:
         "calls": calls,
     }
 
-    print(f"\npre-threshold  ({len(pre)} calls) mean: {summary['pre_threshold']['mean_ms']:.1f}ms")
-    print(f"post-threshold ({len(post)} calls) mean: {summary['post_threshold']['mean_ms']:.1f}ms")
+    for name in SPLIT_PHASES:
+        ph = summary["phases"][name]
+        mean = "n/a" if ph["mean_ms"] is None else f"{ph['mean_ms']:8.1f}ms"
+        print(f"{name:17s} n={ph['n']:2d} mean: {mean}")
     if summary["speedup_x"]:
-        print(f"speedup: {summary['speedup_x']:.1f}x")
+        print(f"speedup: {summary['speedup_x']:.2f}x  ({SPEEDUP_DEFINITION})")
+    tail = (
+        "they never left the machine"
+        if teacher_served_after_threshold == 0
+        else f"WARNING: {teacher_served_after_threshold} post-threshold call(s) fell back "
+             "to the teacher and DID leave the machine"
+    )
     print(
         f"teacher tokens actually billed: {summary['teacher_tokens_total']['input']} in / "
         f"{summary['teacher_tokens_total']['output']} out, over {summary['teacher_tokens_total']['calls_billed']} calls "
-        f"(post-threshold calls used 0 tokens -- they never left the machine)"
+        f"({tail})"
     )
 
     out_dir = Path(args.out_dir)
