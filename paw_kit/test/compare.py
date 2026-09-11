@@ -25,6 +25,7 @@ from paw_kit.backend.base import AbstractPAWBackend
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.test.fuzzer import AdversarialFuzzer
 from paw_kit.test.matching import values_equivalent, values_equivalent_unquoted
+from paw_kit.test.reporting import ScoredRate, scored_denominator
 from paw_kit.test.runner import evaluate_assertion
 from paw_kit.test.suite import TestSuiteConfig
 
@@ -172,6 +173,21 @@ class CompareRow(BaseModel):
     latency_b_ms: float = 0.0
     execution_error_a: str | None = None
     execution_error_b: str | None = None
+    # H-5: `compare` read `suite.standard_cases` only for `.input` and had no expected
+    # field at all, so two adapters of *known different correctness* were
+    # indistinguishable: ten cases with `expected`, A 10/10 right and B 0/10, reported
+    # `identical=0 equivalent=0 A pass=10/10 B pass=10/10 only_a_pass=0 only_b_pass=0`,
+    # exit 0. This is the defect that had already been fixed in `runner.py` and left
+    # unfixed in the sibling command.
+    #
+    # `None` on either `*_expected_match` means "no verdict", exactly as in
+    # `TestCaseResult.expected_match`: the case carries no `expected`, or that side
+    # abstained, or that side's backend raised. Same precedence rule as `runner.py` --
+    # errored beats abstained, decided on the error field, never on the output string,
+    # because `_infer_safely` writes the identical "[EXECUTION_ERROR]" placeholder.
+    expected: str | None = None
+    a_expected_match: bool | None = None
+    b_expected_match: bool | None = None
 
 
 class CompareReport(BaseModel):
@@ -216,20 +232,77 @@ class CompareReport(BaseModel):
     # "[EXECUTION_ERROR]" placeholder for both, so they're `identical=True` and agree on
     # `pass_a == pass_b`, and never show up in `differing_rows` at all (finding 1).
     errored_count: int = 0
+    # H-5: answer-key agreement per adapter. `expected_total` counts every case that
+    # carries an `expected` value; the `*_matched` counts are over the cases that side
+    # actually got a verdict on, and the `*_abstained`/`*_errored` buckets are the rest
+    # (see `a_expected_denominator`). A run where `expected_total` is 0 leaves all of
+    # these 0 and prints nothing, exactly as before this field existed.
+    expected_total: int = 0
+    a_expected_matched: int = 0
+    b_expected_matched: int = 0
+    a_expected_abstained: int = 0
+    b_expected_abstained: int = 0
+    a_expected_errored: int = 0
+    b_expected_errored: int = 0
     rows: List[CompareRow] = Field(default_factory=list)
+
+    def _expected_denominator(self, side: str) -> ScoredRate:
+        abstained = self.a_expected_abstained if side == "a" else self.b_expected_abstained
+        errored = self.a_expected_errored if side == "a" else self.b_expected_errored
+        return scored_denominator(
+            total=self.expected_total,
+            scored=self.expected_total - abstained - errored,
+            excluded={"abstained": abstained, "errored": errored},
+            label=f"{side} correct against expected",
+        )
+
+    @property
+    def a_expected_denominator(self) -> ScoredRate:
+        """Adapter A's answer-key rate denominator, with the note naming what it
+        excluded. A genuine partition of `expected_total`, so the helper's arithmetic
+        check is on."""
+        return self._expected_denominator("a")
+
+    @property
+    def b_expected_denominator(self) -> ScoredRate:
+        """Adapter B's answer-key rate denominator -- see `a_expected_denominator`."""
+        return self._expected_denominator("b")
+
+    @property
+    def expected_disagreeing_rows(self) -> List[CompareRow]:
+        """H-5: rows where exactly one adapter matched the case's own `expected`.
+
+        This is the comparison the command existed to make and could not: it is what
+        distinguishes "A is right and B is wrong" from "the two produce different
+        text". `measurements/README.md:1633` prints `compare`'s summary line for the
+        lookup arms, where one adapter is ~33% correct and another 97.7%.
+        """
+        return [
+            r
+            for r in self.rows
+            if r.expected is not None and r.a_expected_match != r.b_expected_match
+        ]
 
     @property
     def differing_rows(self) -> List[CompareRow]:
-        """Rows where the two adapters disagree -- different output, or different pass
-        status. This is deliberately the headline view: a per-case diff is what actually
-        decided the finetune-compiler comparison, not the aggregate counts below it.
+        """Rows where the two adapters disagree -- different output, different pass
+        status, or (H-5) different agreement with the case's own `expected`. This is
+        deliberately the headline view: a per-case diff is what actually decided the
+        finetune-compiler comparison, not the aggregate counts below it.
 
-        Unchanged by finding 2: what counts as a "difference" here is still byte-level
-        (`not r.identical`), same as before normalization-aware matching existed --
-        `equivalent_only_rows` below is the new, separately-reported split of this same
-        set, not a redefinition of it.
+        Unchanged by finding 2: what counts as an *output* difference here is still
+        byte-level (`not r.identical`), same as before normalization-aware matching
+        existed. H-5 adds a third disjunct rather than redefining the first:
+        byte-identical outputs cannot disagree on `expected`, so in practice this only
+        promotes rows that were already differing.
         """
-        return [r for r in self.rows if not r.identical or r.pass_a != r.pass_b]
+        return [
+            r
+            for r in self.rows
+            if not r.identical
+            or r.pass_a != r.pass_b
+            or (r.expected is not None and r.a_expected_match != r.b_expected_match)
+        ]
 
     @property
     def equivalent_only_rows(self) -> List[CompareRow]:
@@ -237,17 +310,29 @@ class CompareReport(BaseModel):
         difference: not byte-identical, but `match_kind` is `"equivalent"` (same JSON
         value, or the same text after whitespace normalization) or
         `"equivalent_unquoted"` (same value once a JSON-string-quoted side is
-        unwrapped), and the two adapters agree on pass/fail.
+        unwrapped).
 
         This is the "whitespace- or quoting-only" list finding 2 (and its quoted-scalar
         follow-up) asks to report separately: `paw-test compare`'s CLI lists these
         under their own, collapsed heading instead of folding them into (or silently
         dropping them from) the main differences listing.
+
+        **G-4:** this used to additionally require `pass_a == pass_b`, so a quoted
+        output that *flipped* pass status never reached the collapsed heading -- and
+        `compare` contradicted itself five lines apart, listing three rows as full
+        `Differences` while summarising them as "3 equivalent output once unwrapped".
+        That condition is gone; the CLI annotates the flip inside the collapsed listing
+        instead of exiling the row from it.
+
+        The condition that replaces it is H-5's, and it is a different claim: a row
+        where the two adapters disagree about the *answer key* is not a formatting
+        difference at any level, so it stays in the headline diff.
         """
         return [
             r
             for r in self.differing_rows
-            if r.match_kind in (_MATCH_EQUIVALENT, _MATCH_EQUIVALENT_UNQUOTED) and r.pass_a == r.pass_b
+            if r.match_kind in (_MATCH_EQUIVALENT, _MATCH_EQUIVALENT_UNQUOTED)
+            and not (r.expected is not None and r.a_expected_match != r.b_expected_match)
         ]
 
     @property
@@ -300,15 +385,25 @@ def compare_adapters(
     there.
     """
     inputs: List[str] = [c.input for c in suite.standard_cases]
+    # H-5: parallel to `inputs` -- the case's own answer key, or None for a standard
+    # case that doesn't set one and for every fuzz case. Same shape `TestRunner.run`
+    # builds, so the two commands grade against the same thing.
+    expected_values: List[Optional[str]] = [c.expected for c in suite.standard_cases]
     if include_fuzz:
         seed_inputs = [c.input for c in suite.standard_cases]
-        inputs.extend(AdversarialFuzzer.generate(suite.fuzzing, base_inputs=seed_inputs))
+        fuzzed = AdversarialFuzzer.generate(suite.fuzzing, base_inputs=seed_inputs)
+        inputs.extend(fuzzed)
+        expected_values.extend([None] * len(fuzzed))
 
     rows: List[CompareRow] = []
     identical_count = equivalent_count = equivalent_unquoted_count = 0
     a_pass_count = b_pass_count = only_a = only_b = errored_count = 0
+    expected_total = 0
+    a_expected_matched = b_expected_matched = 0
+    a_expected_abstained = b_expected_abstained = 0
+    a_expected_errored = b_expected_errored = 0
 
-    for inp in inputs:
+    for inp, expected in zip(inputs, expected_values):
         out_a, lat_a, err_a = _infer_safely(backend, adapter_a, inp)
         out_b, lat_b, err_b = _infer_safely(backend, adapter_b, inp)
 
@@ -342,9 +437,46 @@ def compare_adapters(
         if err_a or err_b:
             errored_count += 1
 
+        # H-5, with `runner.py`'s precedence rule applied per side: errored beats
+        # abstained, decided on the error field and never on the output string, because
+        # `_infer_safely` writes the same "[EXECUTION_ERROR]" placeholder the runner
+        # does and a suite is free to name that string as its `abstain_value`.
+        a_expected_match: Optional[bool] = None
+        b_expected_match: Optional[bool] = None
+        if expected is not None:
+            expected_total += 1
+            for out, err, side in ((out_a, err_a, "a"), (out_b, err_b, "b")):
+                errored = err is not None
+                abstained = (
+                    not errored
+                    and suite.abstain_value is not None
+                    and out == suite.abstain_value
+                )
+                if errored:
+                    if side == "a":
+                        a_expected_errored += 1
+                    else:
+                        b_expected_errored += 1
+                elif abstained:
+                    if side == "a":
+                        a_expected_abstained += 1
+                    else:
+                        b_expected_abstained += 1
+                else:
+                    matched = values_equivalent(out, expected)
+                    if side == "a":
+                        a_expected_match = matched
+                        a_expected_matched += int(matched)
+                    else:
+                        b_expected_match = matched
+                        b_expected_matched += int(matched)
+
         rows.append(
             CompareRow(
                 input=inp,
+                expected=expected,
+                a_expected_match=a_expected_match,
+                b_expected_match=b_expected_match,
                 output_a=out_a,
                 output_b=out_b,
                 identical=identical,
@@ -378,5 +510,12 @@ def compare_adapters(
         only_a_pass_count=only_a,
         only_b_pass_count=only_b,
         errored_count=errored_count,
+        expected_total=expected_total,
+        a_expected_matched=a_expected_matched,
+        b_expected_matched=b_expected_matched,
+        a_expected_abstained=a_expected_abstained,
+        b_expected_abstained=b_expected_abstained,
+        a_expected_errored=a_expected_errored,
+        b_expected_errored=b_expected_errored,
         rows=rows,
     )

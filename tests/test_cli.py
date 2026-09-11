@@ -226,8 +226,17 @@ def test_cli_check_shows_unquoted_line_when_adapter_quotes_correct_answers(
 ) -> None:
     """An adapter that answers every case correctly, but JSON-string-quoted, must
     still score 0 against the strict "Correct against expected" line (a quoted output
-    is a real defect) but also print the new unquoted line showing the underlying
-    lookup was actually right."""
+    is a real defect) but also report that the underlying lookup was actually right.
+
+    REWRITTEN by G-5 (bug-hunt-remediation Track B; see "Justified assertion changes").
+    The behaviour asserted here is unchanged -- 0/2 strict, 2 recoverable by unquoting.
+    What changed is how those two numbers are *presented*. This test previously pinned
+    the exact old wording, `"Correct after unquoting a JSON string: 2/2 (100.0%)"`, a
+    second headline printed with equal weight directly above `Pass rate: 0.0%` with
+    nothing saying which of the two a reader should believe -- G-5's finding verbatim.
+    The scored number is now the headline and the unquoted count is subordinate to it,
+    so the assertion had to move with the text.
+    """
     monkeypatch.chdir(tmp_path)
     adapter_path = tmp_path / "quoted_sku.paw"
     adapter_path.write_text(
@@ -272,9 +281,12 @@ def test_cli_check_shows_unquoted_line_when_adapter_quotes_correct_answers(
     # whitespace-collapsed output rather than the exact line.
     collapsed = " ".join(out.split())
     assert (
-        "Correct after unquoting a JSON string: 2/2 (100.0%) -- "
-        "the adapter wraps its answers in quotes" in collapsed
+        "Of the ones not counted correct, 2 would match if a JSON string quote were "
+        "stripped -- the adapter wraps its answers in quotes" in collapsed
     )
+    # G-5: the scored number is stated again inside the subordinate clause, so the two
+    # figures cannot be read as two competing headlines.
+    assert "the scored number above stays 0/2" in collapsed
 
 
 def test_cli_check_omits_unquoted_line_when_it_would_add_nothing(
@@ -1536,3 +1548,169 @@ def test_cli_report_task_filter_selects_one_task(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert [entry["task_id"] for entry in payload["tasks"]] == [task_id]
+
+
+# =====================================================================================
+# Report section 6, H-1 (bug-hunt-remediation, Track B, Phase B2)
+# =====================================================================================
+
+
+def test_h1_check_exits_one_and_prints_the_error_when_the_backend_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H-1 at the CLI: a backend raising on every case printed `[PASS]` for each one,
+    `Pass rate: 100.0%`, and exited **0** -- and never printed the error text, because
+    `res.execution_error` was only shown in the FAIL branch.
+
+    Not reachable from the golden-snapshot suite: `MockPAWBackend.infer` never raises
+    (a missing adapter returns its `[mock:...]` fallback string), and `--backend real`
+    is out of scope there by construction. So the raising backend is injected here.
+    """
+    import paw_kit.cli as cli_module
+    from paw_kit.backend.mock import MockPAWBackend
+
+    class _RaisingBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str) -> str:  # type: ignore[override]
+            raise RuntimeError("model file is corrupt")
+
+    monkeypatch.chdir(tmp_path)
+    adapter = tmp_path / "broken.paw"
+    MockPAWBackend().compile(spec="s", examples=[{"input": "today", "output": "x"}],
+                             output_path=str(adapter))
+    # Deliberately no `not_contains: ERROR` rule: every published suite carries one,
+    # and "[EXECUTION_ERROR]" contains "ERROR", which is the *only* thing that was
+    # protecting the committed runs from this finding.
+    (tmp_path / "suite.yaml").write_text(
+        'task_name: h1\nspec: s\nadapter_path: "broken.paw"\n'
+        'standard_cases:\n  - input: "today"\n    expected: "2026-09-11"\n'
+        "assertions:\n  - rule: min_length\n    value: 1\n"
+        "active_learning:\n  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_module, "_resolve_cli_backend", lambda _bt: _RaisingBackend())
+
+    result = runner.invoke(paw_test_app, ["check", "suite.yaml"])
+    out = strip_ansi(result.stdout)
+
+    assert result.exit_code == 1, out
+    assert "Pass rate: 0.0%" in out
+    assert "Errored: 1/1" in out
+    assert "[PASS]" not in out
+    # The error text is printed regardless of which branch the case took.
+    assert "model file is corrupt" in out
+    # And the answer-key line does not claim a verdict it never got.
+    assert "Correct against expected: 0/0" in out
+
+
+def test_h1_check_refuses_a_missing_adapter_on_the_read_only_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H-1's adapter-existence gate, matching `compare`'s. Scoped to the path where
+    recompilation is already off -- whether `check` may *create* an adapter is M-1, an
+    open policy decision that belongs to Track H's `cli.py` guard."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "suite.yaml").write_text(
+        'task_name: h1g\nspec: s\nadapter_path: "absent.paw"\n'
+        'standard_cases:\n  - input: "today"\n'
+        "active_learning:\n  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(paw_test_app, ["check", "suite.yaml"])
+    out = strip_ansi(result.stdout)
+    assert result.exit_code == 1, out
+    assert "does not exist" in out
+    # The normal first-compile case is untouched: with auto-recompile on, an absent
+    # adapter is still allowed through.
+    (tmp_path / "suite2.yaml").write_text(
+        'task_name: h1g\nspec: s\nadapter_path: "absent.paw"\n'
+        'standard_cases:\n  - input: "today"\n'
+        "active_learning:\n  auto_recompile: true\n",
+        encoding="utf-8",
+    )
+    result2 = runner.invoke(paw_test_app, ["check", "suite2.yaml"])
+    assert "does not exist, and recompilation is off" not in strip_ansi(result2.stdout)
+
+
+# =====================================================================================
+# Report section 6, H-16 (bug-hunt-remediation, Track B, Phase B6)
+# =====================================================================================
+
+
+def test_h16_lint_spec_errors_when_examples_file_yields_nothing(tmp_path: Path) -> None:
+    """H-16: unparseable `--examples` lines were skipped individually, so a JSONL file
+    written as a JSON array yielded zero examples and `lint-spec` printed
+    "No issues found." at exit 0 -- having silently run one fewer rule than asked for."""
+    examples = tmp_path / "examples.jsonl"
+    # The exact mistake: a JSON array instead of one object per line. Every line is
+    # unparseable as a standalone object -- the array brackets and the trailing commas.
+    examples.write_text(
+        '[\n  {"input": "a", "output": "(555) 123-4567"},\n'
+        '  {"input": "b", "output": "(555) 765-4321"},\n]\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["lint-spec", "Extract the phone number.", "--examples", str(examples)],
+    )
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 1, out
+    assert "No issues found" not in out
+    assert "yielded no usable examples" in " ".join(out.split())
+
+
+def test_h16_partially_usable_examples_file_warns(tmp_path: Path) -> None:
+    """The partial case, same shape as H-16: a *pretty-printed* JSON array has exactly
+    one line that parses (the last element, which carries no trailing comma), so it
+    slips past the zero-usable check with 1 of 4 examples -- and rule 5, which needs
+    two, quietly does not run."""
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text(
+        '[\n  {"input": "a", "output": "(555) 123-4567"},\n'
+        '  {"input": "b", "output": "(555) 765-4321"}\n]\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    collapsed = " ".join(strip_ansi(result.output).split())
+
+    assert "3 of 4 non-blank line(s)" in collapsed
+    assert "were not usable JSON objects and were skipped" in collapsed
+
+
+def test_h16_single_line_json_array_also_errors(tmp_path: Path) -> None:
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text('[{"input": "a", "output": "b"}]\n', encoding="utf-8")
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    assert result.exit_code == 1
+    assert "yielded no usable examples" in " ".join(strip_ansi(result.output).split())
+
+
+def test_h16_valid_jsonl_is_unaffected(tmp_path: Path) -> None:
+    """The guard must not fire on a file that does work."""
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text(
+        '{"input": "a", "output": "(555) 123-4567"}\n'
+        '{"input": "b", "output": "(555) 765-4321"}\n',
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    assert "yielded no usable examples" not in strip_ansi(result.output)
+
+
+def test_h16_an_empty_examples_file_is_not_an_error(tmp_path: Path) -> None:
+    """An empty file supplies no examples and claims none -- distinct from a file full
+    of content that produced nothing, which is the finding."""
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text("\n\n", encoding="utf-8")
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    assert "yielded no usable examples" not in strip_ansi(result.output)

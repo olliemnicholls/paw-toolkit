@@ -24,8 +24,10 @@ from paw_kit.speclint import Finding, lint_spec
 from paw_kit.test.active import run_active_learning_loop
 from paw_kit.test.compare import CompareReport, adapter_label_pair, compare_adapters, read_adapter_manifest
 from paw_kit.test.judge import (
+    MIN_DIFF_COVERAGE,
     JudgeInputRow,
     JudgeReport,
+    JudgeVerdict,
     anthropic_judge,
     diff_verdicts,
     judge_disagreements,
@@ -375,26 +377,89 @@ def _print_expected_match_line(report: TestRunReport) -> None:
     since the assertion pass rate alone is exactly the number that read 100% for an
     adapter that was 10% correct (measurements/README.md, "Tool feedback" point 1).
 
-    A second line follows, only when unquoting a JSON string scalar would have matched
-    more cases than the strict count above (`expected_matched_unquoted >
-    expected_matched`): the strict rule stays the scored number (a quoted output is a
-    real defect for any consumer of the adapter), but a run where every wrong answer
-    was actually just quoted deserves to say so, rather than reading identically to a
-    run that was simply wrong (measurements/README.md, "Tool feedback": the fast
-    compiler's lookup adapter scored 0/300 this way while its unquoted answers were
-    right a third of the time).
+    Three findings from report section 6 shaped what this prints:
+
+    * **H-2** -- the rate's denominator is `expected_scored`, not `expected_total`: an
+      abstained or errored case gets no verdict, so it is named and removed rather than
+      counted as correct. `report.expected_denominator.render(...)` carries that note.
+    * **H-3** -- `k of N standard cases carry an answer key`, with a warning when some
+      do not. A 10-case suite where 5 were authored as `expected:` with nothing after
+      the colon (valid YAML, key looks present) reported `5/5 (100.0%)` while true
+      correctness was 5/10, and nothing on stdout said so.
+    * **G-5** -- the "after unquoting" number is printed *subordinate to* the scored
+      one, indented and explicitly labelled as not-counted, instead of as a second
+      headline with equal weight. `check` printed "Correct after unquoting: 2/2
+      (100.0%)" directly above "Pass rate: 0.0%" with nothing saying which to believe.
     """
+    # A suite with no `expected` anywhere still prints nothing -- H-3 is about a rate
+    # that is printed while silently excluding cases, not about a suite that declines
+    # to carry an answer key at all. Deliberately unchanged; there is an existing
+    # regression test pinning this silence (`test_cli_check_omits_expected_line_...`).
     if report.expected_total <= 0:
         return
+
     console.print(
-        f"[bold]Correct against expected:[/bold] {_e(report.expected_matched)}/"
-        f"{_e(report.expected_total)} ({_e(round(report.expected_match_rate, 1))}%)"
+        f"[bold]Correct against expected:[/bold] "
+        f"{_e(report.expected_denominator.render(report.expected_matched))}"
     )
-    if report.expected_matched_unquoted > report.expected_matched:
+    console.print(
+        f"  [dim]{_e(report.expected_total)} of {_e(report.standard_cases_count)} standard "
+        f"cases carry an answer key.[/dim]"
+    )
+    if report.expected_keyless_standard_cases > 0:
         console.print(
-            f"[bold]Correct after unquoting a JSON string:[/bold] {_e(report.expected_matched_unquoted)}/"
-            f"{_e(report.expected_total)} ({_e(round(report.expected_match_rate_unquoted, 1))}%) -- "
-            "the adapter wraps its answers in quotes"
+            f"  [yellow]Warning:[/yellow] {_e(report.expected_keyless_standard_cases)} standard "
+            "case(s) carry no `expected` value and are absent from the number above. A "
+            "mis-indented or empty `expected:` is valid YAML and looks present."
+        )
+    if report.expected_matched_unquoted > report.expected_matched:
+        extra = report.expected_matched_unquoted - report.expected_matched
+        console.print(
+            f"  [dim]Of the ones not counted correct, {_e(extra)} would match if a JSON "
+            "string quote were stripped -- the adapter wraps its answers in quotes. "
+            "Reporting only: a quoted output is a real defect for any consumer of the "
+            f"adapter, so the scored number above stays {_e(report.expected_matched)}/"
+            f"{_e(report.expected_scored)}.[/dim]"
+        )
+
+
+def _print_run_headline(report: TestRunReport, actual_backend: str) -> None:
+    """Print `paw-test check`'s pass-rate headline plus the errored/abstained lines.
+
+    **H-1.** `execution_error` was recorded per case and read by nothing: a backend
+    raising on every case printed ten `[PASS]` lines, `Pass rate: 100.0% (10/10)` and
+    exited 0. The errored count is now printed unconditionally -- not only inside the
+    FAIL branch -- so a run that proved nothing cannot look like a clean one.
+
+    **H-2.** Abstentions get their own line for the same reason: an adapter answering
+    "I don't know" to everything satisfies every assertion by design, and that is worth
+    saying out loud next to a 100% pass rate.
+    """
+    console.print(
+        f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
+        f"({report.passed_cases}/{report.total_cases}) -- {_e(report.pass_denominator.note)} "
+        f"[dim](backend: {_e(actual_backend)})[/dim]"
+    )
+    if report.errored_cases:
+        console.print(
+            f"[bold red]Errored:[/bold red] {_e(report.errored_cases)}/{_e(report.total_cases)} "
+            "-- the backend raised on these cases, so the adapter never actually ran on "
+            "them. Every errored case counts as a failure."
+        )
+    if report.fuzz_cases_dropped:
+        # H-12: the cap cut cases this suite asked for. Silent truncation meant a whole
+        # enabled mutation category could run zero cases while the suite said it was on.
+        console.print(
+            f"[bold yellow]Warning:[/bold yellow] {_e(report.fuzz_cases_dropped)} generated "
+            "fuzz case(s) were dropped by the fuzzer's total cap and never run. This suite "
+            "asked for more cases than the cap allows; reduce `fuzzing.adversarial_probes` "
+            "or the number of standard_cases seeding the generators."
+        )
+    if report.abstained_cases:
+        console.print(
+            f"[bold]Abstained:[/bold] {_e(report.abstained_cases)}/{_e(report.total_cases)} "
+            "-- output was exactly the suite's `abstain_value`, which passes every "
+            "assertion by design and is scored against no answer key."
         )
 
 
@@ -520,6 +585,25 @@ def check(
                 "produced it, from code."
             )
 
+    # H-1: an adapter-existence gate matching `compare`'s existing one -- but only on
+    # the read-only path. `compare` can refuse outright because it never compiles;
+    # `check` cannot, because an *absent* adapter with auto-recompile on is the normal
+    # first-compile case, and whether `paw-test check` may create an adapter at all is
+    # an open policy decision (M-1, parent track's DECISION bucket, Track H's `cli.py`
+    # guard). Deliberately not pre-empted here.
+    #
+    # What this closes is the half that is unambiguous: with recompilation already
+    # disabled, a missing adapter means every case will raise, and the run can only
+    # report on a placeholder. Saying so costs one line and beats N identical backend
+    # errors.
+    if not config.active_learning.auto_recompile and not Path(config.adapter_path).exists():
+        console.print(
+            f"[bold red]Error:[/bold red] Adapter '{escape(config.adapter_path)}' does not "
+            "exist, and recompilation is off -- there is nothing to run this suite "
+            "against. Compile it first, or re-run with --auto-recompile."
+        )
+        raise typer.Exit(code=1)
+
     console.print(
         f"[bold cyan]Running paw.test check on:[/bold cyan] {_e(config.task_name)} "
         f"([dim]{escape(config.adapter_path)}[/dim]) [dim](backend: {_e(actual_backend)})[/dim]"
@@ -554,10 +638,7 @@ def check(
                     console.print(f"         [dim red]backend error: {escape(res.execution_error)}[/dim red]")
 
         _print_expected_match_line(report)
-        console.print(
-            f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
-            f"({report.passed_cases}/{report.total_cases}) [dim](backend: {_e(actual_backend)})[/dim]"
-        )
+        _print_run_headline(report, actual_backend)
         _write_json_report(json_out, report.model_dump())
         if not report.is_success:
             raise typer.Exit(code=1)
@@ -568,25 +649,45 @@ def check(
     # labels away from a paid compile (real backends never reach here) and away from any
     # adapter that was not produced by the mock. They do NOT make it harmless: reaching
     # here still rewrites a mock adapter file on disk with these labels folded in.
-    def cli_teacher(inp: str) -> str:
-        console.print(
-            f"  [yellow][ACTION][/yellow] Active learning: Querying frontier teacher "
-            f"for '{escape(inp[:40])}'..."
-        )
+    def cli_teacher(prompt: str) -> str:
+        # G-1: this callable receives the *framed prompt*, not the case input. It used
+        # to print `Querying frontier teacher for '<prompt[:40]>'` here, which is the
+        # same 40 characters of prompt template for every case -- and that is the one
+        # line telling a user which case triggered a (potentially paid) teacher query.
+        # The announcement moved to `announce_teacher_query` below, which
+        # `run_active_learning_loop` calls with the raw input.
+        #
         # If input was an invalid date, return canonical gold label
-        if "February 30" in inp or "32" in inp:
+        if "February 30" in prompt or "32" in prompt:
             return "INVALID"
         return "2026-01-01"
+
+    def announce_teacher_query(case_input: str) -> None:
+        console.print(
+            f"  [yellow][ACTION][/yellow] Active learning: Querying frontier teacher "
+            f"for '{escape(case_input[:40])}'..."
+        )
 
     al_report = run_active_learning_loop(
         config=config,
         backend=backend,
         teacher_provider=cli_teacher,
+        teacher_query_hook=announce_teacher_query,
     )
 
     for i, rep in enumerate(al_report.iteration_reports, 1):
         console.print(f"\n[bold]Iteration {i}:[/bold] {rep.passed_cases}/{rep.total_cases} passed ({rep.pass_rate:.1f}%)")
-        if not rep.is_success and i < len(al_report.iteration_reports):
+        # Gated on a recompile having actually happened. This line used to print
+        # whenever an iteration failed and another followed, regardless of whether the
+        # loop recompiled -- so a run that skipped every recompile (no new examples,
+        # H-9; or no falsifiable failures, H-8(b)) announced work it did not do. That
+        # is the campaign report's Pattern 4, and it became newly reachable once H-8(b)
+        # made "queried nothing this iteration" a normal outcome.
+        if (
+            not rep.is_success
+            and i < len(al_report.iteration_reports)
+            and al_report.recompiles_performed > 0
+        ):
             console.print("  [cyan][ACTION][/cyan] Recompiling adapter with augmented edge-case pairs...")
 
     # PAW-CLI-09: `--json` always writes the *last* iteration's plain `TestRunReport`
@@ -595,7 +696,41 @@ def check(
     # regardless of whether auto-recompile ran.
     _write_json_report(json_out, al_report.iteration_reports[-1].model_dump())
 
+    # M-1 (reporting half): a run whose adapter was (re)compiled during the run must
+    # never present `expected` agreement as a correctness result. The answer key was in
+    # the training set for that compile -- report M-1's own artifact shows a 2-case
+    # suite reporting `Correct against expected: 2/2 (100.0%)` and `[SUCCESS]` at exit 0
+    # against an adapter created from its own answer key seconds earlier. The grading is
+    # circular, and the number is not evidence of anything.
+    #
+    # Distinct from H-8 (poisoned labels) and H-9 (wasted recompiles), and dependent on
+    # neither: this is true even when every label was correct. The other half of M-1 --
+    # whether `paw-test check` may create an adapter at all -- is an open policy
+    # decision on `cli.py`'s existence gate and belongs to Track H.
+    if al_report.recompiled:
+        console.print(
+            "[bold yellow]Note:[/bold yellow] the adapter was recompiled during this "
+            "run, and the suite's own `expected` values are in the training set it was "
+            "compiled from. Any agreement with `expected` below is circular and is not "
+            "a correctness result -- re-run against the compiled adapter, without "
+            "recompiling, to measure it."
+        )
     _print_expected_match_line(al_report.iteration_reports[-1])
+    # H-1/H-2: the active-learning path printed neither the errored count nor the
+    # abstained count, so an all-raising backend here read exactly like a clean run.
+    _print_run_headline(al_report.iteration_reports[-1], actual_backend)
+    # H-8(b) / H-9: say why the loop stopped short, rather than leaving the user to
+    # infer it from a bare `[FAIL]`.
+    if al_report.skipped_unfalsifiable_inputs:
+        console.print(
+            f"[dim]{_e(al_report.skipped_unfalsifiable_inputs)} failing case(s) were not "
+            "sent to the teacher: they carry no `expected` answer key (fuzz-generated "
+            "cases and adversarial probes), so a returned label could not be checked "
+            "against anything. Promote a case to standard_cases with an `expected` to "
+            "make it repairable.[/dim]"
+        )
+    if al_report.stuck_reason:
+        console.print(f"[dim]Stopped because: {_e(al_report.stuck_reason)}.[/dim]")
 
     if al_report.is_success:
         console.print(f"\n[bold green][SUCCESS][/bold green] All assertions passed! (Iterations: {al_report.iterations_run})")
@@ -705,6 +840,14 @@ def compare_cmd(
                     f"    [yellow]pass differs:[/yellow] {_e(label_a)}={_e(row.pass_a)} "
                     f"{_e(label_b)}={_e(row.pass_b)}"
                 )
+            # H-5: the line that distinguishes "A is right and B is wrong" from "the
+            # two produce different text" -- the comparison this command was supposed
+            # to make and could not, because `CompareReport` had no expected field.
+            if row.expected is not None and row.a_expected_match != row.b_expected_match:
+                console.print(
+                    f"    [yellow]expected differs:[/yellow] want {_e(row.expected[:60])} -- "
+                    f"{_e(label_a)}={_e(row.a_expected_match)} {_e(label_b)}={_e(row.b_expected_match)}"
+                )
     elif not errored_rows and not whitespace_only:
         # Suppressed whenever any case errored, or any case is a whitespace-only
         # difference -- both would make "identical output ... on every case" false.
@@ -720,7 +863,21 @@ def compare_cmd(
             "either. Collapsed to input only:\n"
         )
         for row in whitespace_only:
-            console.print(f"  {_e(row.input[:80])}")
+            # G-4: a quoting difference that *flips* pass status used to be excluded
+            # from this list entirely (`equivalent_only_rows` required `pass_a ==
+            # pass_b`), so `compare` listed such a row under full `Differences` and
+            # simultaneously summarised it as "equivalent output once unwrapped" five
+            # lines below -- contradicting itself. The row belongs here; the flip is
+            # annotated rather than being grounds for exile.
+            if row.pass_a != row.pass_b:
+                console.print(
+                    f"  {_e(row.input[:80])} "
+                    f"[yellow](pass differs: {_e(label_a)}={_e(row.pass_a)} "
+                    f"{_e(label_b)}={_e(row.pass_b)} -- same value, but only one side "
+                    f"satisfies the suite's assertions)[/yellow]"
+                )
+            else:
+                console.print(f"  {_e(row.input[:80])}")
 
     # Quoted-scalar follow-up: only printed when unquoting widened the equivalent count
     # -- otherwise it would just repeat equivalent_count with no new information.
@@ -730,6 +887,23 @@ def compare_cmd(
         if report.equivalent_unquoted_count > report.equivalent_count
         else ""
     )
+    # H-5: answer-key agreement, printed above the aggregate summary for the same
+    # reason `check` prints it above the pass rate -- two adapters with identical pass
+    # rates and no byte differences can still be 10/10 and 0/10 against ground truth,
+    # and before this the command had no way to say so.
+    if report.expected_total > 0:
+        console.print(
+            f"\n[bold]Correct against expected:[/bold] "
+            f"{_e(label_a)} {_e(report.a_expected_denominator.render(report.a_expected_matched))}; "
+            f"{_e(label_b)} {_e(report.b_expected_denominator.render(report.b_expected_matched))}"
+        )
+        only_one_right = report.expected_disagreeing_rows
+        if only_one_right:
+            console.print(
+                f"  [yellow]{_e(len(only_one_right))} case(s) where exactly one adapter "
+                "matched the answer key[/yellow] -- listed under Differences above."
+            )
+
     console.print(
         f"\n[bold]Summary:[/bold] {_e(report.total_cases)} cases, {_e(report.identical_count)} identical output "
         f"(byte-for-byte), {_e(report.equivalent_count)} equivalent output "
@@ -770,6 +944,42 @@ def _load_judge_verdicts_file(path: Path) -> Dict[str, JudgeReport]:
 # judge/prompt, not a genuinely bad pass rate, and the plain pass-rate number alone
 # reads identically to both.
 _UNPARSEABLE_WARN_THRESHOLD = 0.2
+
+
+def _print_judge_disagreement(verdict: JudgeVerdict) -> None:
+    """One line-group of `judge disagrees with assertions` (G-2).
+
+    That block -- which `judge.py`'s own docstring calls the case that matters most --
+    identified its cases by a 64-character `case_id` hash while every other listing in
+    the same command prints the input and the output. The id stays available in the
+    `--out` artifact; what a human reads is the text.
+    """
+    console.print(f"  [bold]Input:[/bold] {_e(verdict.input[:80])}")
+    console.print(f"    Output: {_e(verdict.output[:80])}")
+    console.print(
+        f"    rule_passed={_e(verdict.rule_passed)} judge={_e(verdict.verdict)} "
+        f"({_e(verdict.reason)})"
+    )
+
+
+def _print_judged_pass_rate(report: JudgeReport, side: Optional[str] = None) -> None:
+    """Print H-6's `judged_pass_rate` -- the pass rate over the cases the judge was
+    actually consulted on -- whenever it differs from the headline `pass_rate`.
+
+    Only printed when some case errored, because otherwise the two are the same number
+    and a second identical line is noise. 60 cases with 30 judge calls raising and the
+    other 30 all YES reported `pass_rate 50.0% (30/60)` with no warning at exit 0; the
+    true judged pass rate was 100%.
+    """
+    if not report.error_count:
+        return
+    label = f" ({side})" if side else ""
+    console.print(
+        f"[bold]Judged pass rate{_e(label)}:[/bold] "
+        f"{_e(report.judged_denominator.render(report.pass_count))} -- the judge was "
+        "never consulted on the errored cases, so they are not evidence about the "
+        "adapter either way. The headline pass rate above counts them as failures."
+    )
 
 
 def _warn_on_unparseable(report: JudgeReport, side: Optional[str] = None) -> None:
@@ -886,6 +1096,11 @@ def judge_cmd(
             )
             raise typer.Exit(code=1)
 
+        # H-7: a `--diff` that could not actually compare the two runs must not read as
+        # a clean reproducibility result. Set by the loop below, checked after it, so
+        # every side is still printed before the command exits.
+        diff_unusable = False
+
         # "" alone for a bare JudgeReport; "A" then "B" for a compare-report wrapper --
         # diffs A against A and B against B, and prints both (finding 4).
         for i, side in enumerate(sorted(old_reports)):
@@ -907,12 +1122,51 @@ def judge_cmd(
                         f"    {_e(old_report.judge_id)}: {_e(flip.old_verdict)} ({_e(flip.old_reason)})  ->  "
                         f"{_e(new_report.judge_id)}: {_e(flip.new_verdict)} ({_e(flip.new_reason)})"
                     )
-            else:
+            elif diff_report.compared_cases:
                 console.print(f"[bold green]No flips{_e(suffix)}[/bold green] -- every comparable verdict matched.")
             console.print(
-                f"\n[bold]Flip rate{_e(suffix)}:[/bold] {_e(round(diff_report.flip_rate, 1))}% "
-                f"({_e(diff_report.flipped_count)}/{_e(diff_report.compared_cases)})"
+                f"\n[bold]Flip rate{_e(suffix)}:[/bold] "
+                f"{_e(diff_report.comparison_denominator.render(diff_report.flipped_count))}"
             )
+            # H-7: two 60-case verdict files with disjoint `case_id` sets printed
+            # `No flips -- every comparable verdict matched. Flip rate: 0.0% (0/0)` at
+            # exit 0. And `case_id` hashes input AND output, so any adapter change
+            # re-hashes every id and produces exactly that -- while docs/results.md
+            # offers this command as the check that temperature-0 pinning held.
+            if diff_report.old_only_count or diff_report.new_only_count:
+                console.print(
+                    f"  [yellow]Not comparable{_e(suffix)}:[/yellow] "
+                    f"{_e(diff_report.old_only_count)} case(s) only in "
+                    f"{_e(old_report.judge_id)} ({_e(diff_report.old_total)} total), "
+                    f"{_e(diff_report.new_only_count)} only in "
+                    f"{_e(new_report.judge_id)} ({_e(diff_report.new_total)} total). "
+                    "A `case_id` hashes the input *and* the output, so any change to "
+                    "the adapter re-hashes every id."
+                )
+                for sample_label, sample in (
+                    (old_report.judge_id, diff_report.old_only_ids),
+                    (new_report.judge_id, diff_report.new_only_ids),
+                ):
+                    for cid in sample:
+                        console.print(f"    [dim]only in {_e(sample_label)}: {_e(cid)}[/dim]")
+            if diff_report.compared_cases == 0:
+                diff_unusable = True
+                console.print(
+                    f"[bold red]Error{_e(suffix)}:[/bold red] the two runs share no "
+                    "comparable case. This is not a 0% flip rate; it is no measurement "
+                    "at all."
+                )
+            elif diff_report.coverage < MIN_DIFF_COVERAGE:
+                diff_unusable = True
+                console.print(
+                    f"[bold red]Error{_e(suffix)}:[/bold red] only "
+                    f"{_e(round(diff_report.coverage * 100, 1))}% of the larger run's "
+                    f"cases were comparable, below the {_e(round(MIN_DIFF_COVERAGE * 100))}% "
+                    "minimum. The flip rate above is drawn from too small a slice to "
+                    "say anything about reproducibility."
+                )
+        if diff_unusable:
+            raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
     if report is None:
@@ -1011,10 +1265,7 @@ def judge_cmd(
                     f"({_e(len(disagreements))}/{_e(side_report.total_cases)}):[/bold yellow]"
                 )
                 for v in disagreements:
-                    console.print(
-                        f"  {_e(v.case_id)}: rule_passed={_e(v.rule_passed)} "
-                        f"judge={_e(v.verdict)} ({_e(v.reason)})"
-                    )
+                    _print_judge_disagreement(v)
         console.print(
             f"\n[bold]Summary:[/bold] A pass rate {_e(round(report_a.pass_rate, 1))}% "
             f"({_e(report_a.pass_count)}/{_e(report_a.total_cases)}), "
@@ -1023,6 +1274,8 @@ def judge_cmd(
             f"({_e(report_b.pass_count)}/{_e(report_b.total_cases)}), "
             f"unparseable B {_e(report_b.unparseable_count)}, errored B {_e(report_b.error_count)}"
         )
+        _print_judged_pass_rate(report_a, side="A")
+        _print_judged_pass_rate(report_b, side="B")
         _warn_on_unparseable(report_a, side="A")
         _warn_on_unparseable(report_b, side="B")
         all_errored_a = _warn_on_judge_errors(report_a, side="A")
@@ -1033,10 +1286,14 @@ def judge_cmd(
                 encoding="utf-8",
             )
             console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
-        # Every case on a side erroring means the judge was never actually consulted on
-        # that side -- a 0.0% pass rate next to exit 0 used to read as "the adapter
-        # failed every case" when the true story was "the judge itself never ran".
-        if all_errored_a or all_errored_b:
+        # H-6: ANY errored case exits non-zero, not only every case erroring. 30 of 60
+        # judge calls raising reported `pass_rate 50.0% (30/60), errored 30`, no
+        # warning (the threshold was strictly `> 0.5`), exit 0 -- while the true judged
+        # pass rate was 100%. `all_errored_a`/`all_errored_b` are still computed,
+        # because `_warn_on_judge_errors` prints the majority-errored warning as a side
+        # effect and that message is worth keeping distinct.
+        del all_errored_a, all_errored_b
+        if report_a.error_count or report_b.error_count:
             raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
@@ -1067,22 +1324,22 @@ def judge_cmd(
                 f"({_e(len(disagreements))}/{_e(jreport.total_cases)}):[/bold yellow]"
             )
             for v in disagreements:
-                console.print(
-                    f"  {_e(v.case_id)}: rule_passed={_e(v.rule_passed)} judge={_e(v.verdict)} ({_e(v.reason)})"
-                )
+                _print_judge_disagreement(v)
         console.print(
             f"\n[bold]Pass rate:[/bold] {_e(round(jreport.pass_rate, 1))}% "
             f"({_e(jreport.pass_count)}/{_e(jreport.total_cases)}), "
             f"unparseable {_e(jreport.unparseable_count)}, errored {_e(jreport.error_count)}"
         )
+        _print_judged_pass_rate(jreport)
         _warn_on_unparseable(jreport)
         all_errored = _warn_on_judge_errors(jreport)
         if out is not None:
             out.write_text(jreport.model_dump_json(indent=2), encoding="utf-8")
             console.print(f"[dim]Wrote verdicts to {_e(out)}[/dim]")
-        # See the compare-report branch above: every case erroring means the judge was
-        # never actually consulted, and that must not exit 0.
-        if all_errored:
+        # H-6: see the compare-report branch above -- any errored case, not only all of
+        # them, means part of this run measured nothing and must not exit 0.
+        del all_errored
+        if jreport.error_count:
             raise typer.Exit(code=1)
         raise typer.Exit(code=0)
 
@@ -1342,16 +1599,45 @@ def lint_spec_cmd(
             )
             raise typer.Exit(code=1)
         examples_list = []
+        nonblank_lines = 0
         for line in examples_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
+            nonblank_lines += 1
             try:
                 parsed = json.loads(line)
             except ValueError:
                 continue
             if isinstance(parsed, dict):
                 examples_list.append(parsed)
+        # H-16: unparseable lines are skipped individually, so a JSONL file written as a
+        # JSON array (one long `[{...}, {...}]` line, or pretty-printed across many)
+        # yielded zero examples -- and `lint-spec` then printed "No issues found." at
+        # exit 0, having silently run one fewer rule than the user asked for. A supplied
+        # file that produces nothing usable is an error, not a clean result.
+        if nonblank_lines and not examples_list:
+            console.print(
+                f"[bold red]Error:[/bold red] examples file '{_e(examples_file)}' yielded no "
+                f"usable examples from {_e(nonblank_lines)} non-blank line(s). Expected JSONL "
+                "-- one JSON object per line, e.g. "
+                '[cyan]{"input": "...", "output": "..."}[/cyan]. A JSON array (a single '
+                "`[ ... ]` value, or one pretty-printed across several lines) is not JSONL."
+            )
+            raise typer.Exit(code=1)
+        # The partial case, same shape: a *pretty-printed* JSON array has exactly one
+        # line that happens to parse (the last element, which carries no trailing
+        # comma), so it slips past the zero-usable check above with 1 of N examples and
+        # rule 5 -- which needs two -- quietly does not run. Warn rather than error:
+        # unlike zero, a partial read might be a deliberately mixed file.
+        skipped = nonblank_lines - len(examples_list)
+        if skipped:
+            console.print(
+                f"[bold yellow]Warning:[/bold yellow] {_e(skipped)} of {_e(nonblank_lines)} "
+                f"non-blank line(s) in '{_e(examples_file)}' were not usable JSON objects and "
+                f"were skipped; linting {_e(len(examples_list))} example(s). If this file is a "
+                "JSON array rather than JSONL, convert it -- one object per line."
+            )
 
     findings = lint_spec(spec_content, examples=examples_list, schema=schema_model)
 

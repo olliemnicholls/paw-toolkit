@@ -21,6 +21,13 @@
   "only_a_pass_count": 1,
   "only_b_pass_count": 0,
   "errored_count": 0,
+  "expected_total": 2,
+  "a_expected_matched": 2,
+  "b_expected_matched": 1,
+  "a_expected_abstained": 0,
+  "b_expected_abstained": 0,
+  "a_expected_errored": 0,
+  "b_expected_errored": 0,
   "rows": [
     {
       "input": "today",
@@ -37,7 +44,10 @@
       "latency_a_ms": "<DURATION>",
       "latency_b_ms": "<DURATION>",
       "execution_error_a": null,
-      "execution_error_b": null
+      "execution_error_b": null,
+      "expected": "2026-09-11",
+      "a_expected_match": true,
+      "b_expected_match": false
     },
     {
       "input": "new year",
@@ -52,7 +62,10 @@
       "latency_a_ms": "<DURATION>",
       "latency_b_ms": "<DURATION>",
       "execution_error_a": null,
-      "execution_error_b": null
+      "execution_error_b": null,
+      "expected": "2026-01-01",
+      "a_expected_match": true,
+      "b_expected_match": true
     },
     {
       "input": "February 30th",
@@ -67,7 +80,10 @@
       "latency_a_ms": "<DURATION>",
       "latency_b_ms": "<DURATION>",
       "execution_error_a": null,
-      "execution_error_b": null
+      "execution_error_b": null,
+      "expected": null,
+      "a_expected_match": null,
+      "b_expected_match": null
     }
   ]
 }

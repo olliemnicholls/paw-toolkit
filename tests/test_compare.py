@@ -848,3 +848,257 @@ def test_no_unescaped_console_interpolations_in_compare_and_judge_commands():
         if isinstance(node, ast.FunctionDef) and node.name in ("compare_cmd", "judge_cmd"):
             command_names.add(node.name)
     assert command_names == {"compare_cmd", "judge_cmd"}, "expected both new commands to be present in cli.py"
+
+
+# =====================================================================================
+# Report section 6, H-5 and G-4 (bug-hunt-remediation, Track B, Phase B3)
+# =====================================================================================
+
+_H5_SUITE = """
+task_name: h5_lookup
+spec: "Look up the region code."
+adapter_path: "a.paw"
+
+standard_cases:
+  - input: "case-0"
+    expected: "RG-0"
+  - input: "case-1"
+    expected: "RG-1"
+  - input: "case-2"
+    expected: "RG-2"
+
+assertions:
+  - rule: max_length
+    value: 100
+
+active_learning:
+  auto_recompile: false
+"""
+
+
+def _write_lookup_adapter(path: Path, rules: dict) -> None:
+    MockPAWBackend().compile(
+        spec="Look up the region code.",
+        examples=[{"input": k, "output": v} for k, v in rules.items()],
+        output_path=str(path),
+    )
+
+
+def test_h5_two_adapters_of_known_different_correctness_are_distinguishable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H-5: `compare` read `suite.standard_cases` only for `.input`, and `CompareReport`
+    had no expected field at all. Adapter A 3/3 correct and adapter B 0/3 reported
+    `identical=0 equivalent=0 A pass=3/3 B pass=3/3 only_a_pass=0 only_b_pass=0`,
+    exit 0 -- the exact defect fixed in `runner.py` and left unfixed in the sibling
+    command. `measurements/README.md:1633` prints this line for the lookup arms, where
+    one adapter is ~33% correct and another 97.7%.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": f"WRONG-{i}" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE, encoding="utf-8")
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    report = compare_adapters("a.paw", "b.paw", suite, MockPAWBackend(), include_fuzz=False)
+
+    # Both adapters pass every assertion -- that is the point: pass rate cannot tell
+    # them apart, and before H-5 nothing else could either.
+    assert report.a_pass_count == report.b_pass_count == 3
+    assert report.only_a_pass_count == report.only_b_pass_count == 0
+
+    assert report.expected_total == 3
+    assert report.a_expected_matched == 3
+    assert report.b_expected_matched == 0
+    assert len(report.expected_disagreeing_rows) == 3
+    # And every such row reaches the headline diff.
+    for row in report.expected_disagreeing_rows:
+        assert row in report.differing_rows
+        assert row not in report.equivalent_only_rows
+
+
+def test_h5_expected_precedence_errored_beats_abstained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_infer_safely` writes the same "[EXECUTION_ERROR]" placeholder `runner.py`
+    does, so `compare` has the identical H-1/H-2 collision and needs the identical
+    precedence rule: errored is decided on the error field, never on the output."""
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": "IDK" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE + 'abstain_value: "IDK"\n', encoding="utf-8")
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    class _BRaises(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str) -> str:  # type: ignore[override]
+            if adapter_path.endswith("b.paw"):
+                raise RuntimeError("b is broken")
+            return super().infer(adapter_path, input_text)
+
+    report = compare_adapters("a.paw", "b.paw", suite, _BRaises(), include_fuzz=False)
+
+    assert report.a_expected_matched == 3
+    assert report.a_expected_errored == 0
+    assert report.a_expected_abstained == 0
+    # B raised: errored, never abstained, even though its configured output was the
+    # abstain value.
+    assert report.b_expected_errored == 3
+    assert report.b_expected_abstained == 0
+    assert report.b_expected_matched == 0
+    assert "3 errored" in report.b_expected_denominator.note
+    assert report.errored_count == 3
+
+
+def test_h5_abstaining_adapter_is_not_scored_as_correct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": "IDK" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE + 'abstain_value: "IDK"\n', encoding="utf-8")
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    report = compare_adapters("a.paw", "b.paw", suite, MockPAWBackend(), include_fuzz=False)
+
+    assert report.b_expected_abstained == 3
+    assert report.b_expected_matched == 0
+    assert report.b_expected_denominator.rate(report.b_expected_matched) == 0.0
+    assert "3 abstained" in report.b_expected_denominator.note
+
+
+def test_g4_quoting_difference_that_flips_pass_reaches_the_collapsed_heading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G-4: `equivalent_only_rows` required `pass_a == pass_b`, so quoted output that
+    flipped pass status never reached the "equivalent once unwrapped" summary it was
+    added to provide -- and `compare` contradicted itself five lines apart, listing
+    three rows as full `Differences` while also summarising them as "3 equivalent
+    output once unwrapped"."""
+    monkeypatch.chdir(tmp_path)
+    # Same values, one side JSON-string-quoted. A max_length rule the quoted side
+    # fails makes the pass status flip.
+    _write_lookup_adapter(tmp_path / "a.paw", {"case-0": "RG-0"})
+    _write_lookup_adapter(tmp_path / "b.paw", {"case-0": '"RG-0"'})
+    (tmp_path / "suite.yaml").write_text(
+        "task_name: g4\nspec: s\nadapter_path: \"a.paw\"\n"
+        'standard_cases:\n  - input: "case-0"\n'
+        "assertions:\n  - rule: max_length\n    value: 4\n"
+        "active_learning:\n  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    report = compare_adapters("a.paw", "b.paw", suite, MockPAWBackend(), include_fuzz=False)
+    row = report.rows[0]
+
+    assert row.match_kind == "equivalent_unquoted"
+    assert row.pass_a != row.pass_b, "the fixture must actually flip pass status"
+    assert row in report.differing_rows
+    # The finding: this row used to be absent from here while being counted in
+    # `equivalent_unquoted_count` -- listed as a real difference and summarised as not
+    # one, at the same time.
+    assert row in report.equivalent_only_rows
+    assert row not in report.genuinely_differing_rows
+    assert report.equivalent_unquoted_count == 1
+
+
+def test_g4_expected_disagreement_is_not_collapsed_as_a_quoting_difference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The condition that replaced `pass_a == pass_b` is a different claim, and it
+    must hold: a row where the two adapters disagree about the *answer key* is not a
+    formatting difference at any level."""
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {"case-0": "RG-0"})
+    _write_lookup_adapter(tmp_path / "b.paw", {"case-0": '"RG-0"'})
+    (tmp_path / "suite.yaml").write_text(
+        "task_name: g4b\nspec: s\nadapter_path: \"a.paw\"\n"
+        'standard_cases:\n  - input: "case-0"\n    expected: "RG-0"\n'
+        "assertions:\n  - rule: max_length\n    value: 100\n"
+        "active_learning:\n  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    report = compare_adapters("a.paw", "b.paw", suite, MockPAWBackend(), include_fuzz=False)
+    row = report.rows[0]
+
+    assert row.a_expected_match is True
+    assert row.b_expected_match is False  # quoted output is a real defect, strictly
+    assert row.pass_a == row.pass_b       # assertions cannot tell them apart
+    assert row in report.differing_rows
+    assert row not in report.equivalent_only_rows
+    assert row in report.genuinely_differing_rows
+
+
+def test_expected_disagreement_promotes_a_byte_identical_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`differing_rows`'s H-5 disjunct must actually be reachable.
+
+    Mutation-found: weakening `r.expected is not None` to `is None` in that disjunct
+    changed nothing any test noticed, because in every other fixture the two adapters
+    already differ byte-for-byte. This is the case where they do not: adapter A raises
+    (so `_infer_safely` writes the "[EXECUTION_ERROR]" placeholder and A gets no
+    verdict) while adapter B legitimately returns that same literal string and is
+    graded against the key. Identical output, identical pass status, opposite answers
+    about whether the case was scored at all.
+    """
+    monkeypatch.chdir(tmp_path)
+    from paw_kit.test.suite import EXECUTION_ERROR_PLACEHOLDER
+
+    _write_lookup_adapter(tmp_path / "a.paw", {"case-0": "RG-0"})
+    _write_lookup_adapter(tmp_path / "b.paw", {"case-0": EXECUTION_ERROR_PLACEHOLDER})
+    (tmp_path / "suite.yaml").write_text(
+        "task_name: promote\nspec: s\nadapter_path: \"a.paw\"\n"
+        'standard_cases:\n  - input: "case-0"\n    expected: "RG-0"\n'
+        "assertions:\n  - rule: max_length\n    value: 100\n"
+        "active_learning:\n  auto_recompile: false\n",
+        encoding="utf-8",
+    )
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    class _ARaises(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str) -> str:  # type: ignore[override]
+            if adapter_path.endswith("a.paw"):
+                raise RuntimeError("a is broken")
+            return super().infer(adapter_path, input_text)
+
+    report = compare_adapters("a.paw", "b.paw", suite, _ARaises(), include_fuzz=False)
+    row = report.rows[0]
+
+    # The premise: nothing about the outputs or the assertions tells these two apart.
+    assert row.identical is True
+    assert row.pass_a == row.pass_b
+    # But only one of them was actually scored against the answer key.
+    assert row.a_expected_match is None   # errored -- no verdict
+    assert row.b_expected_match is False  # answered, and wrong
+    assert row in report.differing_rows
+    assert row in report.expected_disagreeing_rows
+
+
+def test_h5_both_sides_abstain_counters_are_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A and B keep separate abstain/error tallies, and each counts by one.
+
+    `tools/mutate.py` found `a_expected_abstained += 1` could become `+= 2`
+    unnoticed: every existing fixture had adapter *B* abstaining, so the A-side
+    increment was never executed by any assertion.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": "IDK" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE + 'abstain_value: "IDK"\n', encoding="utf-8")
+    suite = load_suite(str(tmp_path / "suite.yaml"))
+
+    report = compare_adapters("a.paw", "b.paw", suite, MockPAWBackend(), include_fuzz=False)
+
+    assert report.expected_total == 3
+    assert report.a_expected_abstained == 3
+    assert report.a_expected_matched == 0
+    assert report.a_expected_errored == 0
+    assert report.b_expected_abstained == 0
+    assert report.b_expected_matched == 3
+    assert report.a_expected_denominator.scored == 0
+    assert report.b_expected_denominator.scored == 3

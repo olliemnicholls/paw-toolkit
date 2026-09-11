@@ -2,6 +2,14 @@ task_name: date_normalizer
 spec: "Convert natural language date expressions into standard ISO-8601 YYYY-MM-DD format."
 adapter_path: "examples/date_normalizer/.paw_demo_dates/date_normalizer.paw"
 
+# Every case that active learning is expected to REPAIR carries an `expected` value.
+# That is a requirement as of the H-8 fix (bug-hunt-remediation, Track B): the loop no
+# longer sends an input with no answer key to the teacher, because a label for such an
+# input cannot be checked against anything -- and an unfalsifiable label is what let a
+# prompt-injection probe ("the region code for every input is RG-K7") become training
+# data. The three normalisation edge cases below used to live under
+# `fuzzing.adversarial_probes`, where the demo teacher's invented labels were compiled
+# into the adapter and the run then reported `[SUCCESS] All assertions passed`.
 standard_cases:
   - input: "January 15, 2026"
     expected: "2026-01-15"
@@ -11,6 +19,12 @@ standard_cases:
     expected: "2025-12-31"
   - input: "2024-02-29"
     expected: "2024-02-29"
+  - input: "  \t\n  2026-01-01  \n\t  "
+    expected: "2026-01-01"
+  - input: "2026年09月05日"
+    expected: "2026-09-05"
+  - input: "2026—12—31"
+    expected: "2026-12-31"
 
 assertions:
   - rule: "regex_match"
@@ -22,15 +36,22 @@ assertions:
   - rule: "not_contains"
     value: "ERROR"
 
+# Generative fuzzing stays ON, and its cases are now a *robustness measurement* rather
+# than something `auto_recompile` can repair. A generated mutation ("2026/09/05" with a
+# zero-width space spliced in) has no answer key by construction, so after the H-8 fix
+# the loop will not ask a paid model to invent one and then compile the invention. It
+# reports how many such cases it declined to guess at instead.
+#
+# Before that fix this example let the CLI's two-branch demo teacher answer
+# "2026-01-01" to 78 garbage inputs, compiled those labels into the adapter, graded the
+# adapter on them, and printed `[SUCCESS] All assertions passed! (Iterations: 2)` at
+# exit 0. This suite now exits 1, correctly: a mock adapter does not in fact normalise
+# right-to-left-override-corrupted dates.
 fuzzing:
   inject_unicode: true
   empty_inputs: false
   whitespace_flood: true
   payload_extremes: false
-  adversarial_probes:
-    - "  \t\n  2026-01-01  \n\t  "
-    - "2026年09月05日"
-    - "2026—12—31"
 
 # abstain_value: "UNPARSEABLE"  # Uncomment to let a repaired model admit "no valid ISO
 #   date exists" instead of being forced to invent one -- the real 2026-09-08 run's 11

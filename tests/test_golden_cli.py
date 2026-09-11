@@ -400,6 +400,9 @@ BAD_RULES = {"today": "tomorrow", "new year": "2026-01-01", "February 30th": "IN
 #: Every answer is right, but wrapped in JSON string quotes -- the shape that scored
 #: 0/300 on the fast compiler's lookup adapter (measurements/README.md).
 QUOTED_RULES = {"today": '"2026-09-11"', "new year": '"2026-01-01"', "February 30th": '"INVALID"'}
+#: Every answer is the suite's `abstain_value` -- H-2's reproduction. True correctness
+#: is 0/2; before the fix this reported "Correct against expected: 2/2 (100.0%)".
+ABSTAIN_RULES = {"today": "UNPARSEABLE", "new year": "UNPARSEABLE", "February 30th": "UNPARSEABLE"}
 
 
 def _verdicts(judge_id: str, pairs: List[tuple]) -> Dict[str, Any]:
@@ -579,6 +582,41 @@ def _cases() -> List[Case]:
         write_adapter(wd / "al.paw", BAD_RULES)
         write_suite(wd, "al.paw", auto_recompile=True)
 
+    # bug-hunt-remediation Track B, Phase B5 (M-1, reporting half).
+    def setup_al_recompiled(wd: Path) -> None:
+        """A suite whose answer key matches what the CLI's demo teacher returns, so the
+        teacher's label survives H-8(a)'s check and a recompile actually happens -- the
+        one situation in which M-1's circularity warning must fire."""
+        write_adapter(wd / "al2.paw", {"today": "tomorrow", "new year": "2026-01-01",
+                                       "February 30th": "INVALID"})
+        (wd / "suite.yaml").write_text(
+            SUITE_YAML.format(adapter="al2.paw", auto_recompile="true").replace(
+                '    expected: "2026-09-11"', '    expected: "2026-01-01"'
+            ),
+            encoding="utf-8",
+        )
+
+    # bug-hunt-remediation Track B, Phase B2.
+    def setup_abstain(wd: Path) -> None:
+        """H-2: an adapter that answers `abstain_value` to every case."""
+        write_adapter(wd / "abstain.paw", ABSTAIN_RULES)
+        (wd / "suite.yaml").write_text(
+            SUITE_YAML.format(adapter="abstain.paw", auto_recompile="false")
+            + 'abstain_value: "UNPARSEABLE"\n',
+            encoding="utf-8",
+        )
+
+    def setup_keyless(wd: Path) -> None:
+        """H-3: `expected:` present but empty on one of the two standard cases."""
+        write_adapter(wd / "good.paw", GOOD_RULES)
+        (wd / "suite.yaml").write_text(
+            SUITE_YAML.format(adapter="good.paw", auto_recompile="false").replace(
+                '  - input: "new year"\n    expected: "2026-01-01"\n',
+                '  - input: "new year"\n    expected:\n',
+            ),
+            encoding="utf-8",
+        )
+
     cases += [
         Case(
             "check_pass", "paw-test", ["check", "suite.yaml", "--json", "report.json"],
@@ -619,24 +657,75 @@ def _cases() -> List[Case]:
             "check_active_learning_fail", "paw-test", ["check", "suite.yaml"],
             setup=setup_al,
             note=(
-                "The active-learning path: the CLI's demo-stub teacher runs, the mock adapter "
-                "on disk is rewritten with its fabricated labels, and the run still fails. "
-                "Pins the per-iteration lines and the [FAIL] summary.\n"
-                "LOOKS WRONG, NOT FIXED HERE: the [ACTION] line reads \"Querying frontier "
-                "teacher for 'You are an authoritative labeling teache'...\" -- it prints the "
-                "first 40 characters of the *teacher prompt*, not of the input it claims to "
-                "be quoting, so the one line that tells a user which case triggered a "
-                "(potentially paid) teacher query is identical for every case.\n"
-                "ALSO: 'Correct against expected: 2/2 (100.0%)' prints directly above "
-                "'[FAIL] Assertions failed'. Both are true (the failing case is the fuzz "
-                "probe, which carries no `expected`) but the juxtaposition reads as a "
-                "contradiction."
+                "The active-learning path: the CLI's demo-stub teacher runs and the run "
+                "still fails. Pins the per-iteration lines and the [FAIL] summary.\n"
+                "Both 'LOOKS WRONG' notes this case carried are now FIXED, and the diff "
+                "that fixed them is in bug-hunt-remediation Track B:\n"
+                "  * G-1 -- the [ACTION] line read \"Querying frontier teacher for 'You "
+                "are an authoritative labeling teache'...\", the first 40 characters of "
+                "the *teacher prompt*, identical for every case. It now quotes the case "
+                "input ('today').\n"
+                "  * H-8(a)/M-1 -- 'Correct against expected: 2/2 (100.0%)' printed "
+                "directly above '[FAIL] Assertions failed'. That 2/2 was circular: the "
+                "demo teacher's fabricated '2026-01-01' was accepted as gold, the adapter "
+                "was recompiled from a dataset seeded with the suite's own answer key, "
+                "and it then scored full marks against that key. The label now fails the "
+                "answer-key check, no recompile happens, and the honest 1/2 shows."
+            ),
+        ),
+        Case(
+            "check_active_learning_recompiled", "paw-test", ["check", "suite.yaml"],
+            setup=setup_al_recompiled,
+            note=(
+                "M-1's reporting half: the adapter was recompiled during this run from a "
+                "dataset seeded with the suite's own `expected` values, so any agreement "
+                "with `expected` afterwards is circular. Report M-1 filed exactly this "
+                "as a High finding -- a 2-case suite reporting 'Correct against expected: "
+                "2/2 (100.0%)' and [SUCCESS] at exit 0 against an adapter built from its "
+                "own answer key seconds earlier. The number is still printed (suppressing "
+                "it would hide a real signal from a reader who knows what it means); what "
+                "is new is the line above it saying it is not a correctness result."
             ),
         ),
         Case(
             "check_adapter_override", "paw-test", ["check", "suite.yaml", "--adapter", "bad.paw"],
             setup=lambda wd: (setup_good(wd), write_adapter(wd / "bad.paw", BAD_RULES)),
             note="--adapter overrides the suite's own adapter_path.",
+        ),
+        # -- bug-hunt-remediation Track B, Phase B2 (H-1, H-2, H-3, G-5) ------------
+        Case(
+            "check_missing_adapter", "paw-test", ["check", "suite.yaml"],
+            setup=lambda wd: write_suite(wd, "absent.paw"),
+            note=(
+                "H-1: the adapter-existence gate `compare` already had. With "
+                "recompilation off there is nothing to run the suite against, so this "
+                "exits 1 instead of running every case against MockPAWBackend's "
+                "fallback string and reporting on a placeholder. Scoped to the "
+                "read-only path on purpose: whether `check` may *create* an adapter is "
+                "M-1, an open policy decision belonging to Track H."
+            ),
+        ),
+        Case(
+            "check_abstain_all", "paw-test", ["check", "suite.yaml"],
+            setup=setup_abstain,
+            note=(
+                "H-2: an adapter abstaining on every case. Before the fix this printed "
+                "'Correct against expected: 2/2 (100.0%)' at a true correctness of 0/2, "
+                "because an output equal to `abstain_value` was scored as a *match*. It "
+                "now reports 0/0 with the denominator naming the two abstentions, plus "
+                "an 'Abstained:' line of its own. The assertions still pass -- that "
+                "escape hatch is deliberate and unchanged."
+            ),
+        ),
+        Case(
+            "check_keyless_expected", "paw-test", ["check", "suite.yaml"],
+            setup=setup_keyless,
+            note=(
+                "H-3: one of the two standard cases was authored as `expected:` with "
+                "nothing after the colon -- valid YAML, and the key looks present. The "
+                "old output was 'Correct against expected: 1/1 (100.0%)' with nothing "
+                "saying a case had silently left the only correctness number printed."
+            ),
         ),
         Case("check_missing_suite", "paw-test", ["check", "nope.yaml"]),
         Case(
@@ -781,6 +870,22 @@ def _cases() -> List[Case]:
         (wd / "old.json").write_text(json.dumps(old, indent=2), encoding="utf-8")
         (wd / "new.json").write_text(json.dumps(new, indent=2), encoding="utf-8")
 
+    # bug-hunt-remediation Track B, Phase B4 (H-7).
+    def setup_diff_disjoint(wd: Path) -> None:
+        """Two runs that share no `case_id`. A `case_id` hashes input AND output, so
+        this is what an ordinary adapter change produces -- and it used to read as a
+        perfect reproducibility result."""
+        old = _verdicts(
+            "anthropic/claude-haiku-4-5/temperature=0.0",
+            [("today", "2026-09-11", True, "correct"), ("new year", "2026-01-01", True, "correct")],
+        )
+        new = _verdicts(
+            "anthropic/claude-haiku-4-5/temperature=0.0",
+            [("today", "11/09/2026", True, "correct"), ("new year", "01/01/2026", True, "correct")],
+        )
+        (wd / "old.json").write_text(json.dumps(old, indent=2), encoding="utf-8")
+        (wd / "new.json").write_text(json.dumps(new, indent=2), encoding="utf-8")
+
     cases += [
         Case(
             "judge_check_report", "paw-test",
@@ -811,6 +916,17 @@ def _cases() -> List[Case]:
             "judge_diff_flips", "paw-test", ["judge", "--diff", "old.json", "new.json"],
             setup=lambda wd: setup_diff_files(wd, flipped=True),
             note="The reproducibility check the judge docstring points at.",
+        ),
+        Case(
+            "judge_diff_disjoint", "paw-test", ["judge", "--diff", "old.json", "new.json"],
+            setup=setup_diff_disjoint,
+            note=(
+                "H-7: two runs sharing no comparable case. This printed 'No flips -- "
+                "every comparable verdict matched. Flip rate: 0.0% (0/0)' and exited 0 "
+                "-- and since a `case_id` hashes the input *and* the output, any change "
+                "to the adapter produces exactly this, while docs/results.md offers the "
+                "command as the check that temperature-0 pinning held."
+            ),
         ),
         Case(
             "judge_diff_missing_file", "paw-test", ["judge", "--diff", "old.json", "gone.json"],

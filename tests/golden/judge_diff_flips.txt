@@ -8,4 +8,4 @@ Flipped verdicts (1/2):
     anthropic/claude-haiku-4-5/temperature=0.0: True (correct)  ->  anthropic/claude-haiku-4-5/temperature=0.0: False
 (flipped)
 
-Flip rate: 50.0% (1/2)
+Flip rate: 1/2 (50.0%) -- all 2 scored

@@ -29,6 +29,14 @@ _KNOWN_RULES = _REQUIRED_VALUE_RULES | {"regex_match"}
 _MAX_YAML_ALIASES = 50
 _MAX_YAML_BYTES = 1_000_000  # 1 MB
 
+# H-1/H-2: the placeholder `paw_kit.test.runner.TestRunner.run` and
+# `paw_kit.test.compare._infer_safely` substitute for a case whose `backend.infer`
+# call raised. It lives here, in the leaf module both of those import from, so there
+# is exactly one definition -- `TestSuiteConfig` below has to know it in order to
+# refuse a suite that claims it as `abstain_value`, and `suite.py` cannot import from
+# `runner.py` (runner imports suite; the reverse would be circular).
+EXECUTION_ERROR_PLACEHOLDER = "[EXECUTION_ERROR]"
+
 
 class _BoundedSafeLoader(yaml.SafeLoader):
     """A SafeLoader that aborts once too many alias-expansion events have occurred.
@@ -52,6 +60,37 @@ class _BoundedSafeLoader(yaml.SafeLoader):
                     "refusing to parse a suite that looks like a YAML bomb."
                 )
         return super().compose_node(parent, index)
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        """Reject a mapping with a duplicate key (H-13).
+
+        PyYAML inherits last-key-wins from the YAML spec's "recommended" handling, so a
+        suite.yaml with two `standard_cases:` blocks parses cleanly and silently runs
+        only the second -- the cases in the first are never executed and nothing says
+        so. That is the same "no signal until you go read the per-case output" shape as
+        `_validate_value`'s unknown-rule check, and it is worse here because the
+        *count* looks plausible either way.
+
+        Overridden on this existing subclass rather than registered as a new
+        constructor: this loader already exists for the alias-bomb cap, and a second
+        loader class would be one more thing to keep in sync with `load_suite`.
+        """
+        mapping = set()
+        for key_node, _value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                hashable = key in mapping
+            except TypeError:  # an unhashable key -- let the base class report it
+                continue
+            if hashable:
+                raise ValueError(
+                    f"Duplicate key {key!r} in the suite YAML (line "
+                    f"{key_node.start_mark.line + 1}). YAML silently keeps only the last "
+                    "one, so the earlier block would never run -- two `standard_cases:` "
+                    "blocks means half the suite is dead. Merge them."
+                )
+            mapping.add(key)
+        return super().construct_mapping(node, deep=deep)
 
 
 class AssertionRule(BaseModel):
@@ -155,6 +194,36 @@ class TestSuiteConfig(BaseModel):
     # so a model can be trained to abstain on genuinely unanswerable input instead of
     # being forced to hallucinate a plausible-looking answer just to satisfy the suite.
     abstain_value: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _reject_reserved_abstain_value(self) -> "TestSuiteConfig":
+        """H-1/H-2 defence in depth: `abstain_value` may not claim the placeholder the
+        runner substitutes for a case whose backend call raised.
+
+        `TestRunner.run` and `compare._infer_safely` both write the literal
+        `"[EXECUTION_ERROR]"` into `output` when `backend.infer` raises. A suite
+        declaring that same string as its abstain value makes every crashed case look
+        like a deliberate "I don't know" -- and it is reachable from an ordinary
+        suite.yaml. Executed against pre-fix source: an all-raising backend with this
+        abstain_value reported `Pass rate: 100.0% (10/10)` at exit 0.
+
+        The run loop's precedence rule (errored beats abstained, decided on
+        `execution_error is not None` rather than on the output string) is the actual
+        fix and holds without this. This makes the placeholder un-claimable anyway, so
+        the collision cannot be re-opened by a later refactor of that loop.
+
+        Declared on the model rather than in `load_suite` so a directly-constructed
+        `TestSuiteConfig` gets the same guarantee -- `run_active_learning_loop` and
+        `compare_adapters` both accept configs that never went through the loader.
+        """
+        if self.abstain_value is not None and self.abstain_value == EXECUTION_ERROR_PLACEHOLDER:
+            raise ValueError(
+                f"abstain_value must not be {EXECUTION_ERROR_PLACEHOLDER!r}: that is the "
+                "placeholder the test runner substitutes for a case whose backend call "
+                "raised, and claiming it would make every crashed case read as a "
+                "deliberate abstention. Choose any other string."
+            )
+        return self
 
 
 def load_suite(path_or_yaml: Union[str, Path]) -> TestSuiteConfig:
