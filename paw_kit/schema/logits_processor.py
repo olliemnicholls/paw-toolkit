@@ -1,8 +1,8 @@
 """Token-level logit masking for grammar and regex constrained autoregressive decoding."""
 
 from collections import OrderedDict
-import concurrent.futures
 import math
+import threading
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 import interegular
 from interegular.fsm import FSM
@@ -13,10 +13,37 @@ from paw_kit.schema.exceptions import PAWSchemaError
 # PAW-SCHEMA-03: interegular's NFA-to-DFA (Powerset) construction has worst-case
 # exponential state complexity -- a pathological pattern (e.g. overlapping repeated
 # subexpressions) can pin a CPU core at 100% for many seconds with no way to interrupt
-# it, since Python cannot forcibly cancel a running thread. _MAX_PATTERN_LENGTH is the
-# *primary* defense (it bounds the work before it starts, for free); the timeout below
-# is only a secondary backstop for patterns that are short but still pathological.
-_MAX_PATTERN_LENGTH = 1000
+# it, since Python cannot forcibly cancel a running thread.
+#
+# S-16: the previous comment here called _MAX_PATTERN_LENGTH the *primary* defense,
+# on the grounds that it "bounds the work before it starts, for free". It does not,
+# and saying so is how S-16 came to be filed against a cap that turned out to be load
+# bearing. What is true, and what the ordering below actually buys:
+#
+#   * _MAX_PATTERN_LENGTH is the only check that happens BEFORE any compilation, so
+#     it is the only one that can refuse a pattern for free. That makes it the first
+#     line, not the primary one.
+#   * It does not bound the work. Executed: `(?:a|b)*a(?:a|b){30}` is TWENTY
+#     characters, walks straight past any sane character cap, and its 2**30-state
+#     powerset construction does not finish in 3 s. Pattern length and DFA cost are
+#     only loosely related.
+#   * _MAX_FSM_STATES is checked INSIDE _compile(), i.e. after `to_fsm()` has already
+#     returned. It is a post-hoc assertion about a construction that terminated, not a
+#     budget on one that might not.
+#   * The timeout is what actually bounds *caller latency* for the pathological case.
+#     It cannot bound CPU or memory: Python offers no way to cancel a running thread,
+#     so the abandoned compile keeps going (see _compile_fsm_safe for what that costs
+#     and why the thread must be a daemon).
+#
+# So: for a pattern whose DFA construction blows up, nothing bounds CPU or memory, and
+# the character cap is the only pre-work bound there is. It stays for that reason --
+# but at 50,000 rather than 1,000, because at 1,000 it was rejecting ordinary schemas.
+# A realistic five-field nested invoice schema compiles to ~1,000 characters (and grew
+# past the old cap outright once Field(pattern=...) constraints began being translated
+# rather than spliced), while _MAX_FSM_STATES binds at roughly 55 fields. 50,000 is the
+# same order as where the state cap binds, so the length cap stops producing false
+# positives while still refusing absurd input for free.
+_MAX_PATTERN_LENGTH = 50_000
 _FSM_TIMEOUT_SECONDS = 3.0
 _MAX_FSM_STATES = 10000
 
@@ -36,21 +63,31 @@ _UNSET = object()  # cache-miss sentinel; a legitimate cached value can be None.
 def _compile_fsm_safe(pattern: str) -> FSM:
     """Compile `pattern` into a DFA, bounded against ReDoS / FSM state explosion.
 
-    Two independent defenses, applied in priority order:
+    Two checks, applied in that order (see the module comment on _MAX_PATTERN_LENGTH
+    for what each one does and does not bound):
 
-    1. A pattern-length cap, checked before any compilation is attempted. This is the
-       primary defense: it rejects known-pathological input sizes for free rather than
-       trying to detect blowup after the fact.
-    2. A timeout on a background thread, as a secondary backstop. Crucially, the thread
-       is *not* joined on timeout: this deliberately avoids the mistake in the audit's
-       own illustrative fix, which ran the compile inside a `with
-       ThreadPoolExecutor(...)` block -- `Executor.__exit__` calls `shutdown(wait=True)`
-       unconditionally, so even after `future.result()` raises `TimeoutError` the
-       `with` block still blocks the caller until the runaway compile finishes anyway,
-       which defeats the timeout entirely. Calling `executor.shutdown(wait=False)`
-       explicitly instead lets the caller return immediately; the abandoned thread
-       keeps running in the background (Python has no way to cancel it) until it
-       eventually finishes or the process exits.
+    1. A pattern-length cap, checked before any compilation is attempted. The only
+       check that can refuse a pattern for free -- but it bounds input size, not work.
+    2. A timeout on a background thread, which bounds *caller latency* only. The thread
+       is deliberately not joined on timeout: doing so would defeat the timeout
+       entirely, which is the mistake in the audit's own illustrative fix (it ran the
+       compile inside a `with ThreadPoolExecutor(...)` block, and `Executor.__exit__`
+       calls `shutdown(wait=True)` unconditionally, so even after `future.result()`
+       raised `TimeoutError` the `with` block blocked the caller until the runaway
+       compile finished anyway).
+
+    S-17: the thread is a bare `threading.Thread(daemon=True)` rather than a
+    `ThreadPoolExecutor` worker with `shutdown(wait=False)`, and the daemon flag is the
+    whole point. `concurrent.futures` registers its worker threads with
+    `threading._register_atexit`, so abandoning one does not actually abandon it: the
+    caller returns promptly, but *interpreter shutdown* then joins the runaway compile.
+    Executed against the executor version: `_compile_fsm_safe("(?:a|b)*a(?:a|b){30}")`
+    raised the timeout PAWSchemaError at 3.02 s and the process never exited (killed
+    externally at 40 s). That is reachable from the served path -- a `paw-serve` worker
+    that compiles one pathological grammar raises correctly, keeps serving, and then
+    cannot shut down, turning a graceful restart into a forced one. A daemon thread is
+    not joined at exit, so the process leaves promptly and the abandoned compile dies
+    with it.
     """
     if len(pattern) > _MAX_PATTERN_LENGTH:
         raise PAWSchemaError(
@@ -83,18 +120,28 @@ def _compile_fsm_safe(pattern: str) -> FSM:
             )
         return fsm
 
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    try:
-        future = executor.submit(_compile)
+    outcome: List[Any] = []
+
+    def _run() -> None:
         try:
-            return future.result(timeout=_FSM_TIMEOUT_SECONDS)
-        except concurrent.futures.TimeoutError:
-            raise PAWSchemaError(
-                f"FSM compilation timed out after {_FSM_TIMEOUT_SECONDS}s -- the "
-                "pattern is likely pathological (exponential DFA state blowup)."
-            )
-    finally:
-        executor.shutdown(wait=False)
+            outcome.append(("ok", _compile()))
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread
+            outcome.append(("raised", exc))
+
+    # S-17: daemon=True is load bearing -- see the docstring. Without it the process
+    # cannot exit while this thread runs.
+    worker = threading.Thread(target=_run, name="paw-kit-fsm-compile", daemon=True)
+    worker.start()
+    worker.join(_FSM_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        raise PAWSchemaError(
+            f"FSM compilation timed out after {_FSM_TIMEOUT_SECONDS}s -- the "
+            "pattern is likely pathological (exponential DFA state blowup)."
+        )
+    kind, payload = outcome[0]
+    if kind == "raised":
+        raise payload
+    return payload
 
 
 class RegexLogitsProcessor:

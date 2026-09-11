@@ -721,6 +721,97 @@ def test_compile_fsm_safe_timeout_does_not_block_on_runaway_thread_PAW_SCHEMA_03
     assert elapsed < 1.0, "compile_fsm_safe blocked on the runaway thread instead of returning promptly"
 
 
+class InvoiceLine(BaseModel):
+    """One line of the realistic five-field invoice schema S-16 was filed about."""
+
+    sku: str = Field(pattern=r"[A-Z]{3}-[0-9]{4}")
+    description: str
+    quantity: int
+    unit_price: float
+
+
+class InvoiceModel(BaseModel):
+    invoice_id: str = Field(pattern=r"INV-[0-9]{6}")
+    issued: dt.date
+    customer: DetailModel
+    lines: List[InvoiceLine]
+    total: float
+
+
+def test_ordinary_invoice_schema_is_not_refused_by_the_length_cap_S_16() -> None:
+    """An ordinary nested invoice schema must compile, not be refused as pathological.
+
+    S-16: `_MAX_PATTERN_LENGTH` was 1,000 *characters*, which a realistic five-field
+    nested schema exceeds -- and the refusal blamed the schema for pathology. The cap
+    itself is kept (it is the only check that runs before any compilation at all; see
+    the module comment), but at 50,000, the same order as where `_MAX_FSM_STATES`
+    actually binds.
+    """
+    import paw_kit.schema.logits_processor as lp
+
+    regex = pydantic_to_regex(InvoiceModel, anchors=False)
+    assert len(regex) > 1000, (
+        "the S-16 corpus model no longer exceeds the old 1,000-character cap, so this "
+        f"test no longer pins the finding (got {len(regex)} characters)"
+    )
+    fsm = lp._compile_fsm_safe(regex)
+    assert fsm.states, "the invoice schema compiled to an empty FSM"
+
+
+def test_compile_fsm_safe_timeout_does_not_hang_interpreter_exit_S_17() -> None:
+    """After a compile timeout the process must still be able to exit (S-17).
+
+    `shutdown(wait=False)` returns to the caller promptly, which is all the existing
+    PAW-SCHEMA-03 timeout test checks -- but `concurrent.futures` registers its worker
+    threads with `threading._register_atexit`, so interpreter shutdown then *joins* the
+    abandoned compile. Executed against that version: the timeout raised at 3.02 s and
+    the process never exited (killed externally at 40 s). This is reachable from the
+    served path: a `paw-serve` worker that compiles one pathological grammar keeps
+    serving and then cannot shut down.
+
+    In-process assertions cannot see this -- the hang is at interpreter exit -- so the
+    check has to be a subprocess that is required to terminate.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import time
+        import paw_kit.schema.logits_processor as lp
+
+        class _Runaway:
+            def to_fsm(self):
+                time.sleep(60)
+
+        lp.interegular.parse_pattern = lambda pattern: _Runaway()
+        lp._FSM_TIMEOUT_SECONDS = 0.05
+        try:
+            lp._compile_fsm_safe("dummy")
+        except Exception as exc:
+            print("RAISED", type(exc).__name__)
+        print("EXITING", flush=True)
+        """
+    )
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            "the interpreter did not exit within 20s after a compile timeout: the "
+            "abandoned FSM-compile thread is being joined at shutdown (S-17)"
+        )
+    elapsed = time.monotonic() - start
+    assert "EXITING" in proc.stdout, proc.stderr
+    assert "RAISED PAWSchemaError" in proc.stdout, proc.stdout
+    assert elapsed < 20, f"process took {elapsed:.1f}s to exit after a 0.05s timeout"
+
 
 # --- PAW-SCHEMA-04: bounded per-processor caches, avoid full-vocab scan per state ---
 
