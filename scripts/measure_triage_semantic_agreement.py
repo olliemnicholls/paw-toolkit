@@ -7,12 +7,33 @@ schema-shaped?
 `measurements/jit-speedup-3080-*.json` already showed calls 7-20 returning
 medium/technical/3 nine times out of fourteen -- worth checking isn't near-degenerate output
 before quoting the JIT speedup as a like-for-like win. This script checks it directly: compile
-a fresh adapter for the exact same spec (folding in the same 5 traced examples
-`measure_jit_speedup.py` would have used), then for all 20 tickets, compare the adapter's
-classification against a FRESH, independent teacher call on the same ticket (not the original
-traced response -- a live second opinion). Exact agreement on priority/department and
+a fresh adapter for the exact same spec, folding in 5 traced examples drawn from a folding
+pool that is **disjoint from the 20 evaluation tickets**, then for all 20 tickets compare the
+adapter's classification against a FRESH, independent teacher call on the same ticket (not the
+original traced response -- a live second opinion). Exact agreement on priority/department and
 urgency_score within 1 is the pass criterion; every disagreement is printed in full so a human
 (or a follow-up judge call) can decide which side, if either, is actually right.
+
+B-1 (bug hunt 2026-09-11): the 2026-09-09 run folded `TICKETS[:5]` and then scored all 20,
+so five of the twenty tickets carried their own answer inside the adapter's prompt. Those
+five agreed 5/5 = 100.0%; the fifteen held out agreed 7/15 = 46.7%; the published figure was
+the mixture, 12/20 = 60.0%. Recomputed from the committed
+`measurements/triage-semantic-agreement-3080-20260909-002033.json`, whose `cases[]` is
+untouched. A fresh teacher call answers teacher label drift -- which is what the old note
+claimed -- but not the adapter having both the question and the answer in its context.
+
+Two things follow, and both are now enforced here rather than remembered:
+
+  * the folding pool is a separate constant (`FOLDING_TICKETS`), and `main()` refuses to
+    run if it intersects `TICKETS`;
+  * the summary reports the folded slice, the held-out slice and a held-out denominator
+    separately, so a mixture can never again be quoted as a single rate.
+
+The adapter also writes to a **new** path. The old
+`measurements/triage_semantic_agreement-paw-4b-qwen3-0.6b.paw` is pinned by
+`scripts/measure_shadow_mode.py` as `ADAPTER` and is embedded in
+`measurements/shadow-mode-3080-20260910-124735.json` as `adapter_manifest`, so overwriting it
+would destroy that measurement's reproducibility.
 
 Prerequisites:
     export PAW_API_KEY=paw_sk_...
@@ -70,6 +91,71 @@ TICKETS = [
 ]
 
 
+# Five folding-only tickets. They are deliberately *not* members of `TICKETS`: the whole
+# point of B-1's fix is that nothing the adapter was shown is also scored. They cover the
+# same four departments and the same priority span as the evaluation set, so the folded
+# examples still demonstrate the output format and the judgement range.
+FOLDING_TICKETS = [
+    "Our invoice shows a duplicate line item for last month's overage charges.",
+    "All background jobs have been stuck in the queue for the past 90 minutes.",
+    "We would like a quote for adding a second workspace to our current plan.",
+    "Where in the admin console do I change the default timezone for reports?",
+    "Production checkout is down and customers cannot complete any purchase.",
+]
+
+#: The adapter path. Deliberately different from the 2026-09-09 run's
+#: `triage_semantic_agreement-paw-4b-qwen3-0.6b.paw`, which `measure_shadow_mode.py` pins
+#: as `ADAPTER` and which is embedded in the committed shadow-mode artifact as
+#: `adapter_manifest`. Overwriting that path would make the shadow-mode measurement
+#: irreproducible. (B-1, Phase 0 edit 11.)
+ADAPTER_FILENAME = "triage_semantic_agreement_heldout-paw-4b-qwen3-0.6b.paw"
+
+
+def assert_folding_pool_disjoint(folding: list, evaluation: list) -> None:
+    """Refuse to run if anything folded into the spec is also scored.
+
+    This is B-1 in one line. Called from `main()` before any money is spent, and unit
+    tested against the module's own constants.
+    """
+    overlap = sorted(set(folding) & set(evaluation))
+    if overlap:
+        raise RuntimeError(
+            "folding pool overlaps the evaluation set, which is exactly the leak B-1 "
+            f"recorded: {overlap}. Fold from FOLDING_TICKETS only."
+        )
+
+
+def score_rows(rows: list, folded_inputs: set) -> dict:
+    """Split scored rows into folded and held-out slices and report both. Pure.
+
+    `rows` are this script's own `cases[]` entries (or a recorded run's -- the shape has
+    not changed), `folded_inputs` the ticket bodies that were folded into the spec text.
+
+    Verified against `measurements/triage-semantic-agreement-3080-20260909-002033.json`
+    with `folded_inputs = set(TICKETS[:5])`: folded 5/5 = 100.0%, held out 7/15 = 46.7%,
+    all 20 = 12/20 = 60.0%.
+    """
+    def block(subset: list) -> dict:
+        n = len(subset)
+        full = sum(1 for r in subset if r["full_agreement"])
+        urg = sum(1 for r in subset if r["agree_urgency_within_1"])
+        return {
+            "n": n,
+            "full_agreement": full,
+            "full_agreement_rate": (full / n * 100.0) if n else None,
+            "urgency_within_1": urg,
+            "urgency_within_1_rate": (urg / n * 100.0) if n else None,
+        }
+
+    folded = [r for r in rows if r["ticket"] in folded_inputs]
+    heldout = [r for r in rows if r["ticket"] not in folded_inputs]
+    return {
+        "all_scored": block(rows),
+        "folded_into_spec": block(folded),
+        "heldout": block(heldout),
+    }
+
+
 class Triage(BaseModel):
     priority: str
     department: str
@@ -100,22 +186,88 @@ def call_teacher(client: "anthropic.Anthropic", ticket_body: str) -> Triage:
     return Triage(**json.loads(match.group(0)))
 
 
+def build_summary(label: str, adapter_path: str, manifest: dict, rows: list,
+                  folded_inputs: set) -> dict:
+    """Assemble the artifact. Pure: every field is derived from its arguments.
+
+    Extracted from `main()` so the summary-completeness properties B-1 asks for -- a
+    held-out denominator, a held-out rate, and a leak flag counting scored rows that were
+    folded into the spec -- are unit testable without an API key.
+    """
+    slices = score_rows(rows, folded_inputs)
+    leaked_rows = [r["ticket"] for r in rows if r["folded_into_spec"]]
+    all_scored = slices["all_scored"]
+    return {
+        "label": label,
+        "teacher_model": TEACHER_MODEL,
+        "adapter_path": adapter_path,
+        "program_id": manifest.get("program_id"),
+        "public": manifest.get("public"),
+        "examples_folded_into_spec": manifest.get("examples_folded_into_spec"),
+        "folded_example_ids": manifest.get("folded_example_ids"),
+        "n": all_scored["n"],
+        "n_folding_pool": len(FOLDING_TICKETS),
+        "full_agreement_rate": all_scored["full_agreement_rate"],
+        "urgency_within_1_rate": all_scored["urgency_within_1_rate"],
+        # The held-out denominator, reported separately and unconditionally. This is the
+        # number to publish; `full_agreement_rate` above is over every scored row and is
+        # only equal to it while no scored row was folded.
+        "n_heldout": slices["heldout"]["n"],
+        "full_agreement_rate_heldout": slices["heldout"]["full_agreement_rate"],
+        "urgency_within_1_rate_heldout": slices["heldout"]["urgency_within_1_rate"],
+        "slices": slices,
+        "leak_flags": {
+            "folding_pool_disjoint_from_eval": not (set(FOLDING_TICKETS) & set(TICKETS)),
+            "scored_rows_folded_into_spec": len(leaked_rows),
+            "leaked_tickets": leaked_rows,
+            "note": (
+                "scored_rows_folded_into_spec must be 0. The 2026-09-09 run folded "
+                "TICKETS[:5] and scored all 20, which inflated the headline from 46.7% "
+                "(7/15 held out) to 60.0% (12/20). See report B-1."
+            ),
+        },
+        "note": (
+            "Compares the compiled adapter's output against a FRESH independent teacher call on the "
+            "same ticket, not the originally-traced response -- this is a true second opinion, not a "
+            "training-label check. Disagreement does not necessarily mean the adapter is wrong (the "
+            "teacher itself is not perfectly consistent call to call); it means the two disagree and "
+            "a human should look at the specific case. A fresh teacher call does NOT address "
+            "train/eval overlap: that is what the disjoint folding pool and the held-out "
+            "denominator are for."
+        ),
+        "cases": rows,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--label", default="unknown")
     ap.add_argument("--out-dir", default="measurements")
     args = ap.parse_args()
 
+    # B-1: refuse to spend anything if the folding pool and the evaluation set intersect.
+    assert_folding_pool_disjoint(FOLDING_TICKETS, TICKETS)
+
     client = anthropic.Anthropic()
-    backend = ProgramAsWeightsBackend(compiler="paw-4b-qwen3-0.6b", max_spec_examples=16)
+    backend = ProgramAsWeightsBackend(
+        compiler="paw-4b-qwen3-0.6b",
+        max_spec_examples=16,
+        # Stated, not inherited. `ProgramAsWeightsBackend` defaults `public` to False, but
+        # this script relied on that default silently while the artifact recorded nothing
+        # about the visibility it got -- and a public compile publishes the folded example
+        # bodies verbatim. `public` is mirrored into the summary below from the manifest
+        # the compile actually wrote.
+        public=False,
+    )
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    adapter_path = str(out_dir / "triage_semantic_agreement-paw-4b-qwen3-0.6b.paw")
+    adapter_path = str(out_dir / ADAPTER_FILENAME)
 
-    print("[fold-in] getting 5 traced examples from the teacher, same as measure_jit_speedup.py's threshold")
+    print(f"[fold-in] tracing {len(FOLDING_TICKETS)} folding-only tickets "
+          f"(disjoint from the {len(TICKETS)} scored tickets)")
     examples = []
-    for t in TICKETS[:5]:
+    for t in FOLDING_TICKETS:
         out = call_teacher(client, t)
         examples.append({"input": t, "output": json.dumps(out.model_dump())})
         print(f"  traced: {t[:50]!r} -> {out.model_dump()}")
@@ -124,7 +276,12 @@ def main() -> int:
     t0 = time.perf_counter()
     backend.compile(SPEC, examples, adapter_path)
     print(f"[compile] done in {time.perf_counter() - t0:.1f}s -> {adapter_path}")
+    manifest = json.loads(Path(adapter_path).read_text())
+    print(f"[compile] program_id={manifest.get('program_id')} "
+          f"public={manifest.get('public')} "
+          f"folded={manifest.get('examples_folded_into_spec')}")
 
+    folded_inputs = {ex["input"] for ex in examples}
     rows = []
     exact_agree = 0
     urgency_close = 0
@@ -149,6 +306,10 @@ def main() -> int:
 
         row = {
             "ticket": ticket,
+            # Always False now that the folding pool is disjoint, and recorded anyway: it
+            # is the field that makes the leak visible in the artifact rather than only in
+            # the source. (B-1.)
+            "folded_into_spec": ticket in folded_inputs,
             "adapter_raw": adapter_raw,
             "adapter_parsed": adapter_out.model_dump() if adapter_out else None,
             "teacher_fresh": teacher_out.model_dump(),
@@ -161,23 +322,13 @@ def main() -> int:
         marker = "AGREE" if exact else "DIFFER"
         print(f"  [{marker:6s}] {ticket[:45]!r:47s} adapter={row['adapter_parsed']} teacher={row['teacher_fresh']}")
 
-    summary = {
-        "label": args.label,
-        "teacher_model": TEACHER_MODEL,
-        "n": len(TICKETS),
-        "full_agreement_rate": exact_agree / len(TICKETS) * 100.0,
-        "urgency_within_1_rate": urgency_close / len(TICKETS) * 100.0,
-        "note": (
-            "Compares the compiled adapter's output against a FRESH independent teacher call on the "
-            "same ticket, not the originally-traced response -- this is a true second opinion, not a "
-            "training-label check. Disagreement does not necessarily mean the adapter is wrong (the "
-            "teacher itself is not perfectly consistent call to call); it means the two disagree and "
-            "a human should look at the specific case."
-        ),
-        "cases": rows,
-    }
-    print(f"\nfull agreement (priority + department + urgency within 1): {summary['full_agreement_rate']:.0f}%")
-    print(f"urgency_score within 1 alone: {summary['urgency_within_1_rate']:.0f}%")
+    summary = build_summary(args.label, adapter_path, manifest, rows, folded_inputs)
+    print(f"\nfull agreement over all {summary['n']} scored tickets: {summary['full_agreement_rate']:.1f}%")
+    print(f"full agreement held out ({summary['n_heldout']} tickets): "
+          f"{summary['full_agreement_rate_heldout']:.1f}%")
+    print(f"urgency_score within 1 alone: {summary['urgency_within_1_rate']:.1f}%")
+    print(f"scored rows that were folded into the spec: "
+          f"{summary['leak_flags']['scored_rows_folded_into_spec']} (must be 0)")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out_path = out_dir / f"triage-semantic-agreement-{args.label}-{stamp}.json"

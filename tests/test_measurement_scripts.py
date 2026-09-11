@@ -133,3 +133,141 @@ def test_jit_run_records_what_served_each_call(jit_run: dict) -> None:
     assert mjs.SPLIT_PHASES == (
         "teacher_only", "compile_call", "cold_first_local", "steady_state",
     )
+
+
+# ================================================================================  B-1
+#
+# The published 60% triage agreement folded 5 of the 20 tickets it scored. Those five
+# carried their own answer inside the adapter's prompt, and agreed 5/5; the fifteen held
+# out agreed 7/15 = 46.7%.
+
+TRIAGE_ARTIFACT = _MEASUREMENTS / "triage-semantic-agreement-3080-20260909-002033.json"
+
+
+@pytest.fixture(scope="module")
+def triage_run() -> dict:
+    return json.loads(TRIAGE_ARTIFACT.read_text())
+
+
+def test_triage_folding_pool_is_disjoint_from_the_scored_set() -> None:
+    """`set(folding_inputs) & set(eval_inputs) == set()` over the script's constants.
+
+    This is the assertion report §5 asked for by name.
+    """
+    mts = _load("measure_triage_semantic_agreement")
+    assert set(mts.FOLDING_TICKETS) & set(mts.TICKETS) == set()
+    assert len(mts.FOLDING_TICKETS) == 5
+    assert len(mts.TICKETS) == 20
+    # And the runtime guard agrees, rather than the constants merely happening to be fine.
+    mts.assert_folding_pool_disjoint(mts.FOLDING_TICKETS, mts.TICKETS)
+
+
+def test_triage_disjointness_guard_actually_raises() -> None:
+    """The guard must be falsifiable: re-creating B-1's exact arrangement must stop."""
+    mts = _load("measure_triage_semantic_agreement")
+    with pytest.raises(RuntimeError, match="overlaps the evaluation set"):
+        mts.assert_folding_pool_disjoint(mts.TICKETS[:5], mts.TICKETS)
+
+
+def test_triage_adapter_path_does_not_collide_with_the_shadow_mode_adapter() -> None:
+    """The folded-pool change alters `full_spec`, hence the compile, hence the adapter.
+
+    `measure_shadow_mode.py` pins the 2026-09-09 adapter path as `ADAPTER` and the
+    committed shadow-mode artifact embeds that manifest as `adapter_manifest`, so a
+    re-run writing to the same path would make that measurement irreproducible.
+    """
+    mts = _load("measure_triage_semantic_agreement")
+    msm_src = (_SCRIPTS / "measure_shadow_mode.py").read_text()
+    assert 'ADAPTER = "measurements/triage_semantic_agreement-paw-4b-qwen3-0.6b.paw"' in msm_src
+    assert mts.ADAPTER_FILENAME == "triage_semantic_agreement_heldout-paw-4b-qwen3-0.6b.paw"
+    assert mts.ADAPTER_FILENAME not in msm_src
+    shadow_artifact = json.loads(
+        (_MEASUREMENTS / "shadow-mode-3080-20260910-124735.json").read_text()
+    )
+    assert shadow_artifact["adapter_manifest"]["program_id"]
+
+
+def test_triage_score_rows_reproduces_the_recorded_leak(triage_run: dict) -> None:
+    """The split, against the untouched `cases[]` of the 2026-09-09 artifact.
+
+    A named recomputation: `measure_triage_semantic_agreement.score_rows` over
+    `measurements/triage-semantic-agreement-3080-20260909-002033.json`'s `cases[]`, with
+    `folded_inputs = set(TICKETS[:5])` -- the tickets that run folded.
+    """
+    mts = _load("measure_triage_semantic_agreement")
+    rows = triage_run["cases"]
+    assert len(rows) == 20
+    assert triage_run["full_agreement_rate"] == 60.0
+
+    slices = mts.score_rows(rows, set(mts.TICKETS[:5]))
+
+    assert slices["folded_into_spec"]["n"] == 5
+    assert slices["folded_into_spec"]["full_agreement"] == 5
+    assert slices["folded_into_spec"]["full_agreement_rate"] == 100.0
+
+    assert slices["heldout"]["n"] == 15
+    assert slices["heldout"]["full_agreement"] == 7
+    assert round(slices["heldout"]["full_agreement_rate"], 1) == 46.7
+    assert round(slices["heldout"]["urgency_within_1_rate"], 1) == 86.7
+
+    assert slices["all_scored"]["n"] == 20
+    assert slices["all_scored"]["full_agreement_rate"] == 60.0
+    assert slices["all_scored"]["urgency_within_1_rate"] == 90.0
+
+
+def test_triage_summary_carries_a_heldout_denominator(triage_run: dict) -> None:
+    """Regression assert from report §5: a held-out denominator in the artifact itself.
+
+    The defect was not only the folding: the summary reported one mixed rate with no way
+    for a reader to separate the slices. `build_summary` is pure, so the shape of what
+    would be written is checkable without an API key.
+    """
+    mts = _load("measure_triage_semantic_agreement")
+    rows = [dict(r, folded_into_spec=False) for r in triage_run["cases"]]
+    summary = mts.build_summary(
+        label="test",
+        adapter_path="measurements/" + mts.ADAPTER_FILENAME,
+        manifest={"program_id": "deadbeef", "public": False,
+                  "examples_folded_into_spec": 5, "folded_example_ids": ["a"]},
+        rows=rows,
+        folded_inputs=set(mts.FOLDING_TICKETS),
+    )
+
+    assert summary["n_heldout"] == 20
+    assert summary["full_agreement_rate_heldout"] == 60.0
+    assert summary["urgency_within_1_rate_heldout"] == 90.0
+    assert summary["slices"]["heldout"]["n"] == 20
+    assert summary["slices"]["folded_into_spec"]["n"] == 0
+    assert summary["leak_flags"]["folding_pool_disjoint_from_eval"] is True
+    assert summary["leak_flags"]["scored_rows_folded_into_spec"] == 0
+    # Visibility and identity of the adapter are recorded, not assumed (A-2 / Phase 0 #9).
+    assert summary["public"] is False
+    assert summary["program_id"] == "deadbeef"
+
+    # And the same summariser over B-1's arrangement reports the leak instead of hiding it.
+    leaked_rows = [
+        dict(r, folded_into_spec=r["ticket"] in set(mts.TICKETS[:5]))
+        for r in triage_run["cases"]
+    ]
+    leaked = mts.build_summary(
+        label="test", adapter_path="x.paw", manifest={}, rows=leaked_rows,
+        folded_inputs=set(mts.TICKETS[:5]),
+    )
+    assert leaked["n_heldout"] == 15
+    assert round(leaked["full_agreement_rate_heldout"], 1) == 46.7
+    assert leaked["full_agreement_rate"] == 60.0
+    assert leaked["leak_flags"]["scored_rows_folded_into_spec"] == 5
+
+
+def test_triage_requests_a_private_compile_explicitly() -> None:
+    """`public=False` is passed, not inherited from the backend default.
+
+    The backend already defaults to `public=False`
+    (`paw_kit/backend/programasweights.py`), but this script relied on that silently while
+    a public compile would have published all five folded ticket bodies verbatim.
+    """
+    mts_src = (_SCRIPTS / "measure_triage_semantic_agreement.py").read_text()
+    assert "public=False," in mts_src
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+    import inspect
+    assert inspect.signature(ProgramAsWeightsBackend).parameters["public"].default is False
