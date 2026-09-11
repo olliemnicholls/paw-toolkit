@@ -582,6 +582,20 @@ def _cases() -> List[Case]:
         write_adapter(wd / "al.paw", BAD_RULES)
         write_suite(wd, "al.paw", auto_recompile=True)
 
+    # bug-hunt-remediation Track B, Phase B5 (M-1, reporting half).
+    def setup_al_recompiled(wd: Path) -> None:
+        """A suite whose answer key matches what the CLI's demo teacher returns, so the
+        teacher's label survives H-8(a)'s check and a recompile actually happens -- the
+        one situation in which M-1's circularity warning must fire."""
+        write_adapter(wd / "al2.paw", {"today": "tomorrow", "new year": "2026-01-01",
+                                       "February 30th": "INVALID"})
+        (wd / "suite.yaml").write_text(
+            SUITE_YAML.format(adapter="al2.paw", auto_recompile="true").replace(
+                '    expected: "2026-09-11"', '    expected: "2026-01-01"'
+            ),
+            encoding="utf-8",
+        )
+
     # bug-hunt-remediation Track B, Phase B2.
     def setup_abstain(wd: Path) -> None:
         """H-2: an adapter that answers `abstain_value` to every case."""
@@ -643,18 +657,34 @@ def _cases() -> List[Case]:
             "check_active_learning_fail", "paw-test", ["check", "suite.yaml"],
             setup=setup_al,
             note=(
-                "The active-learning path: the CLI's demo-stub teacher runs, the mock adapter "
-                "on disk is rewritten with its fabricated labels, and the run still fails. "
-                "Pins the per-iteration lines and the [FAIL] summary.\n"
-                "LOOKS WRONG, NOT FIXED HERE: the [ACTION] line reads \"Querying frontier "
-                "teacher for 'You are an authoritative labeling teache'...\" -- it prints the "
-                "first 40 characters of the *teacher prompt*, not of the input it claims to "
-                "be quoting, so the one line that tells a user which case triggered a "
-                "(potentially paid) teacher query is identical for every case.\n"
-                "ALSO: 'Correct against expected: 2/2 (100.0%)' prints directly above "
-                "'[FAIL] Assertions failed'. Both are true (the failing case is the fuzz "
-                "probe, which carries no `expected`) but the juxtaposition reads as a "
-                "contradiction."
+                "The active-learning path: the CLI's demo-stub teacher runs and the run "
+                "still fails. Pins the per-iteration lines and the [FAIL] summary.\n"
+                "Both 'LOOKS WRONG' notes this case carried are now FIXED, and the diff "
+                "that fixed them is in bug-hunt-remediation Track B:\n"
+                "  * G-1 -- the [ACTION] line read \"Querying frontier teacher for 'You "
+                "are an authoritative labeling teache'...\", the first 40 characters of "
+                "the *teacher prompt*, identical for every case. It now quotes the case "
+                "input ('today').\n"
+                "  * H-8(a)/M-1 -- 'Correct against expected: 2/2 (100.0%)' printed "
+                "directly above '[FAIL] Assertions failed'. That 2/2 was circular: the "
+                "demo teacher's fabricated '2026-01-01' was accepted as gold, the adapter "
+                "was recompiled from a dataset seeded with the suite's own answer key, "
+                "and it then scored full marks against that key. The label now fails the "
+                "answer-key check, no recompile happens, and the honest 1/2 shows."
+            ),
+        ),
+        Case(
+            "check_active_learning_recompiled", "paw-test", ["check", "suite.yaml"],
+            setup=setup_al_recompiled,
+            note=(
+                "M-1's reporting half: the adapter was recompiled during this run from a "
+                "dataset seeded with the suite's own `expected` values, so any agreement "
+                "with `expected` afterwards is circular. Report M-1 filed exactly this "
+                "as a High finding -- a 2-case suite reporting 'Correct against expected: "
+                "2/2 (100.0%)' and [SUCCESS] at exit 0 against an adapter built from its "
+                "own answer key seconds earlier. The number is still printed (suppressing "
+                "it would hide a real signal from a reader who knows what it means); what "
+                "is new is the line above it saying it is not a correctness result."
             ),
         ),
         Case(

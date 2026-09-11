@@ -2,15 +2,15 @@ $ paw-test check suite.yaml
 exit code: 1
 --- stdout ---
 Running paw.test check on: golden_date_normalizer (al.paw) (backend: MockPAWBackend)
-  [ACTION] Active learning: Querying frontier teacher for 'You are an authoritative labeling teache'...
+  [ACTION] Active learning: Querying frontier teacher for 'today'...
 
 Iteration 1: 2/3 passed (66.7%)
-  [ACTION] Recompiling adapter with augmented edge-case pairs...
 
 Iteration 2: 2/3 passed (66.7%)
-Correct against expected: 2/2 (100.0%) -- all 2 scored
+Correct against expected: 1/2 (50.0%) -- all 2 scored
   2 of 2 standard cases carry an answer key.
 
 Pass rate: 66.7% (2/3) -- all 3 scored (backend: MockPAWBackend)
+Stopped because: all_labels_rejected.
 
 [FAIL] Assertions failed after 2 iteration(s).

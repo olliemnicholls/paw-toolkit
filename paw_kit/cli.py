@@ -640,25 +640,45 @@ def check(
     # labels away from a paid compile (real backends never reach here) and away from any
     # adapter that was not produced by the mock. They do NOT make it harmless: reaching
     # here still rewrites a mock adapter file on disk with these labels folded in.
-    def cli_teacher(inp: str) -> str:
-        console.print(
-            f"  [yellow][ACTION][/yellow] Active learning: Querying frontier teacher "
-            f"for '{escape(inp[:40])}'..."
-        )
+    def cli_teacher(prompt: str) -> str:
+        # G-1: this callable receives the *framed prompt*, not the case input. It used
+        # to print `Querying frontier teacher for '<prompt[:40]>'` here, which is the
+        # same 40 characters of prompt template for every case -- and that is the one
+        # line telling a user which case triggered a (potentially paid) teacher query.
+        # The announcement moved to `announce_teacher_query` below, which
+        # `run_active_learning_loop` calls with the raw input.
+        #
         # If input was an invalid date, return canonical gold label
-        if "February 30" in inp or "32" in inp:
+        if "February 30" in prompt or "32" in prompt:
             return "INVALID"
         return "2026-01-01"
+
+    def announce_teacher_query(case_input: str) -> None:
+        console.print(
+            f"  [yellow][ACTION][/yellow] Active learning: Querying frontier teacher "
+            f"for '{escape(case_input[:40])}'..."
+        )
 
     al_report = run_active_learning_loop(
         config=config,
         backend=backend,
         teacher_provider=cli_teacher,
+        teacher_query_hook=announce_teacher_query,
     )
 
     for i, rep in enumerate(al_report.iteration_reports, 1):
         console.print(f"\n[bold]Iteration {i}:[/bold] {rep.passed_cases}/{rep.total_cases} passed ({rep.pass_rate:.1f}%)")
-        if not rep.is_success and i < len(al_report.iteration_reports):
+        # Gated on a recompile having actually happened. This line used to print
+        # whenever an iteration failed and another followed, regardless of whether the
+        # loop recompiled -- so a run that skipped every recompile (no new examples,
+        # H-9; or no falsifiable failures, H-8(b)) announced work it did not do. That
+        # is the campaign report's Pattern 4, and it became newly reachable once H-8(b)
+        # made "queried nothing this iteration" a normal outcome.
+        if (
+            not rep.is_success
+            and i < len(al_report.iteration_reports)
+            and al_report.recompiles_performed > 0
+        ):
             console.print("  [cyan][ACTION][/cyan] Recompiling adapter with augmented edge-case pairs...")
 
     # PAW-CLI-09: `--json` always writes the *last* iteration's plain `TestRunReport`
@@ -667,10 +687,41 @@ def check(
     # regardless of whether auto-recompile ran.
     _write_json_report(json_out, al_report.iteration_reports[-1].model_dump())
 
+    # M-1 (reporting half): a run whose adapter was (re)compiled during the run must
+    # never present `expected` agreement as a correctness result. The answer key was in
+    # the training set for that compile -- report M-1's own artifact shows a 2-case
+    # suite reporting `Correct against expected: 2/2 (100.0%)` and `[SUCCESS]` at exit 0
+    # against an adapter created from its own answer key seconds earlier. The grading is
+    # circular, and the number is not evidence of anything.
+    #
+    # Distinct from H-8 (poisoned labels) and H-9 (wasted recompiles), and dependent on
+    # neither: this is true even when every label was correct. The other half of M-1 --
+    # whether `paw-test check` may create an adapter at all -- is an open policy
+    # decision on `cli.py`'s existence gate and belongs to Track H.
+    if al_report.recompiled:
+        console.print(
+            "[bold yellow]Note:[/bold yellow] the adapter was recompiled during this "
+            "run, and the suite's own `expected` values are in the training set it was "
+            "compiled from. Any agreement with `expected` below is circular and is not "
+            "a correctness result -- re-run against the compiled adapter, without "
+            "recompiling, to measure it."
+        )
     _print_expected_match_line(al_report.iteration_reports[-1])
     # H-1/H-2: the active-learning path printed neither the errored count nor the
     # abstained count, so an all-raising backend here read exactly like a clean run.
     _print_run_headline(al_report.iteration_reports[-1], actual_backend)
+    # H-8(b) / H-9: say why the loop stopped short, rather than leaving the user to
+    # infer it from a bare `[FAIL]`.
+    if al_report.skipped_unfalsifiable_inputs:
+        console.print(
+            f"[dim]{_e(al_report.skipped_unfalsifiable_inputs)} failing case(s) were not "
+            "sent to the teacher: they carry no `expected` answer key (fuzz-generated "
+            "cases and adversarial probes), so a returned label could not be checked "
+            "against anything. Promote a case to standard_cases with an `expected` to "
+            "make it repairable.[/dim]"
+        )
+    if al_report.stuck_reason:
+        console.print(f"[dim]Stopped because: {_e(al_report.stuck_reason)}.[/dim]")
 
     if al_report.is_success:
         console.print(f"\n[bold green][SUCCESS][/bold green] All assertions passed! (Iterations: {al_report.iterations_run})")
