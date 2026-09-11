@@ -126,9 +126,10 @@ TARGETS: dict[str, Target] = {
     "paw_kit/jit/decorator.py": Target(
         "tests/test_jit.py tests/test_jit_shadow.py",
         default=False,
-        note="KNOWN: the control gate fails here -- test_jit_shadow.py has a ~1-in-12 "
-        "flake (campaign finding M-4), so the unparse control run sometimes fails and "
-        "aborts. Not a mutation-harness bug; fix M-4 before adding this to the baseline.",
+        note="M-4 (the ~1-in-12 test_jit_shadow flake that made this module's control gate "
+        "intermittent) was fixed on track-instruments. Left out of the default set and "
+        "the baseline until a clean multi-run measurement is recorded; re-enable with "
+        "--modules paw_kit/jit/decorator.py.",
     ),
     "paw_kit/jit/db.py": Target(
         "tests/test_jit.py tests/test_jit_shadow.py",
@@ -370,7 +371,11 @@ def confirm_kill(wd: pathlib.Path, path: pathlib.Path, mutant_src: str, orig_src
     """
     ids = list(dict.fromkeys(FAILED_RE.findall((out.stdout or "") + (out.stderr or ""))))[:5]
     if not ids:
-        return "KILLED", "killing test not named in output; kill not verified"
+        # Unattributable: the suite failed but no test name could be parsed out, so the
+        # two confirmation runs below cannot be performed. Scoring this KILLED would be
+        # exactly the unverified kill this function exists to prevent, so it is a survivor
+        # with a loud note. (Phase F review, 2026-09-11.)
+        return "SURVIVED", "killing test not named in output; kill NOT verified, counted as survived"
     sel = " ".join(ids)
     mutated = runner.run(wd, sel)
     if mutated.rc == 0:
@@ -388,12 +393,30 @@ def confirm_kill(wd: pathlib.Path, path: pathlib.Path, mutant_src: str, orig_src
                         f"this kill is not attributable to the mutant")
 
 
+def is_survivor(status: str) -> bool:
+    """True for every status that must be counted as a survivor.
+
+    A single predicate on purpose: there is more than one way to fail to kill a mutant
+    (the suite passed; the kill could not be attributed; the run timed out), and an
+    `== "SURVIVED"` comparison at each call site silently dropped the others from the
+    survivor list -- which under-counts survivors and lets the gate pass. Added after the
+    Wave 0 Phase F review.
+    """
+    return status.startswith("SURVIVED")
+
+
 def classify(rc: object) -> str:
     """pytest exit codes: 0 ok, 1 tests failed, 2 interrupted, 3 internal, 4 usage, 5 none
     collected. Only 0 means survived and only 1 means killed; everything else is a broken
     harness and must be visible."""
     if rc == "TIMEOUT":
-        return "KILLED_TIMEOUT"
+        # NOT a kill. A timeout says "this run did not finish", which is not evidence that
+        # the mutant was detected -- and `run_phase` never routes it through `confirm_kill`,
+        # so it would be an unattributed kill. Scoring it KILLED let one slow run erase a
+        # genuine survivor, report "kill rate 100% / improved", and exit 0 (demonstrated in
+        # the Wave 0 Phase F review with `--timeout 1`). Counted as a survivor, and tracked
+        # separately so the run says plainly that it happened.
+        return "SURVIVED_TIMEOUT"
     if rc == 0:
         return "SURVIVED"
     if rc == 1:
@@ -528,7 +551,7 @@ def run_phase(label: str, jobs: list[dict], workers: list[pathlib.Path], runner:
         for i, r in enumerate(ex.map(work, jobs)):
             results.append(r)
             if progress_every and (i + 1) % progress_every == 0:
-                surv = sum(1 for x in results if x["status"] == "SURVIVED")
+                surv = sum(1 for x in results if is_survivor(x["status"]))
                 print(f"  {label} {i + 1}/{len(jobs)}  survived={surv}  "
                       f"elapsed={time.time() - t0:.0f}s", flush=True)
     print(f"  {label} done in {time.time() - t0:.0f}s", flush=True)
@@ -733,10 +756,15 @@ def main(argv: list[str] | None = None) -> int:
 
         errors = [r for r in p1 if r["status"] == "ERROR"]
         not_applied = [r for r in p1 if r["status"] == "NOT_APPLIED"]
-        survivors = [r for r in p1 if r["status"] == "SURVIVED"]
+        survivors = [r for r in p1 if is_survivor(r["status"])]
+        # Every timeout seen in any phase. A timeout is scored SURVIVED (see `classify`), but
+        # its true status is unknown, so it is recorded here the moment it happens rather than
+        # read back off the final result set -- phase 2 can re-resolve a phase-1 timeout and
+        # erase the evidence that the run was ever indecisive. Used to refuse a baseline write.
+        timed_out = [r for r in p1 if r["status"] == "SURVIVED_TIMEOUT"]
         print(f"  phase 1: {len(p1)} mutants, {len(survivors)} survived, "
               f"{sum(1 for r in p1 if r['status'] == 'KILLED')} killed, "
-              f"{sum(1 for r in p1 if r['status'] == 'KILLED_TIMEOUT')} killed by timeout, "
+              f"{sum(1 for r in p1 if r['status'] == 'SURVIVED_TIMEOUT')} timed out (counted as survived), "
               f"{len(errors)} harness errors, {len(not_applied)} not applied")
 
         # ---- phase 2: full-suite recheck of survivors ------------------------------
@@ -751,24 +779,32 @@ def main(argv: list[str] | None = None) -> int:
                     r["status"] = "KILLED_BY_OTHER_TESTS"
                 final[r["id"]] = r
             errors += [r for r in p2 if r["status"] == "ERROR"]
-            print(f"  phase 2: {sum(1 for r in p2 if r['status'] == 'SURVIVED')} of "
+            timed_out += [r for r in p2 if r["status"] == "SURVIVED_TIMEOUT"]
+            print(f"  phase 2: {sum(1 for r in p2 if is_survivor(r['status']))} of "
                   f"{len(p2)} survive the full suite")
             for r in p2:
                 if r["status"] == "KILLED_BY_OTHER_TESTS":
                     print(f"    killed outside its own selection: {r['id']}\n"
                           f"      {r.get('note', '')}")
-            unattributable = [r for r in p2 if r["status"] == "SURVIVED" and r.get("note")]
+            unattributable = [r for r in p2 if is_survivor(r["status"]) and r.get("note")]
             if unattributable:
                 print(f"    {len(unattributable)} full-suite failures were NOT attributable "
                       f"to the mutant and are scored SURVIVED:")
                 for r in unattributable:
                     print(f"      {r['id']}\n        {r['note']}")
 
+        if timed_out:
+            print(f"\n  WARNING: {len(timed_out)} mutant run(s) timed out and were counted as "
+                  f"SURVIVED; a timeout is not evidence of detection. Raise --timeout for a "
+                  f"decisive answer. A baseline cannot be written from this run:")
+            for r in timed_out:
+                print(f"    {r['id']}")
+
         results = [final[j["id"]] for j in jobs]
 
         # ---- tally -----------------------------------------------------------------
         for r in results:
-            if r["status"] == "SURVIVED":
+            if is_survivor(r["status"]):
                 m = per_module[r["module"]]
                 m["survivors"] += 1
                 m["survivors_detail"].append(
@@ -818,6 +854,10 @@ def main(argv: list[str] | None = None) -> int:
                        "counts are inflated and not comparable to a normal run.")
             if errors or not_applied:
                 die(2, "refusing to write a baseline from a run with harness errors.")
+            if timed_out:
+                die(2, f"refusing to write a baseline from a run with {len(timed_out)} "
+                       "timeout(s): a timed-out mutant's true status is unknown, so the "
+                       "baseline would record a guess. Raise --timeout and re-run.")
             base = build_baseline(repo, modules, per_module)
             pathlib.Path(args.write_baseline).write_text(json.dumps(base, indent=2) + "\n")
             print(f"wrote baseline {args.write_baseline} "

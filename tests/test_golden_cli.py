@@ -23,7 +23,7 @@ its case below naming it. Those comments are observations, not TODOs for this fi
 
 REGENERATING
 ------------
-    PAW_GOLDEN_UPDATE=1 <campaign.sh test golden> tests/test_golden_cli.py
+    PAW_GOLDEN_UPDATE=1 <campaign.sh test <track>> tests/test_golden_cli.py
 
 See `tests/golden/README.md`.
 
@@ -251,6 +251,12 @@ def scrub_json(value: Any) -> Any:
     `_TIMESTAMP_KEYS`, and nothing else. The key itself stays, so a dropped or renamed
     field still fails. A duration key whose value changes *type* (float to null, say)
     is likewise still caught, since the placeholder is only substituted for a number.
+
+    DOES NOT HIDE, and this is the limit worth knowing: a duration *value* collapsing to
+    a constant. `latency_ms = 0.0` on every case passes here, because the value is
+    replaced either way. That is the likelier defect -- the harness quietly stopping
+    measuring -- so it is stated rather than implied away; pinning it needs an ordinary
+    assertion, not a snapshot. (Wave 0 Phase F review, 2026-09-11.)
     """
     if isinstance(value, dict):
         out: Dict[str, Any] = {}

@@ -30,7 +30,7 @@ baseline therefore is not a list of bugs, it is a **ratchet**: whatever the curr
 of unasserted behaviour is, a change must not make it worse on the modules it touches.
 
 At the baseline commit the answer is **81 of 260 mutations survive** — roughly one in
-three semantic changes to the most safety-relevant modules goes unnoticed by 546 passing
+three semantic changes to the most safety-relevant modules goes unnoticed by 627 passing
 tests. That gap is the reason this tool is checked in.
 
 (The throwaway harness this tool was ported from reported 75. The 81 are a strict
