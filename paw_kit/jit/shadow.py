@@ -183,9 +183,20 @@ class ShadowRunner:
         self._queues: Dict[_RunnerKey, "queue.Queue[ShadowJob]"] = {}
         self._threads: Dict[_RunnerKey, threading.Thread] = {}
         self._pending: Dict[_RunnerKey, int] = {}
-        self._dropped: Dict[_RunnerKey, int] = {}
+        # M-4b (C4b): dropped counts keyed on (key, job.phase) -- "shadow",
+        # "audit" or "fail_open" (a fail_open job's own `phase` is already set to
+        # exactly that string by `submit_fail_open`, so no new taxonomy is
+        # needed). Previously one bucket keyed on `key` alone conflated all
+        # three: `submit_fail_open` routes through this same `submit()`, so a
+        # dropped fail-open counted identically to a dropped comparison, and a
+        # dropped shadow-phase comparison counted identically to a dropped
+        # audit-phase one -- even though only audit-phase drops delay demotion
+        # of a drifting adapter, which is the number worth its own name.
+        self._dropped: Dict[Tuple[_RunnerKey, str], int] = {}
         self._stalled: Dict[_RunnerKey, int] = {}
-        self._drop_warned: Set[_RunnerKey] = set()
+        # M-4b: also split per (key, phase), so a task's first shadow-phase drop
+        # does not suppress its own, separate first-audit-phase-drop WARNING.
+        self._drop_warned: Set[Tuple[_RunnerKey, str]] = set()
         self._stall_warned: Set[Tuple[_RunnerKey, int]] = set()
         self._seq_cache: Dict[Tuple[_RunnerKey, int], int] = {}
         # J-12: windows actually *scored* at (key, epoch, phase). See
@@ -217,20 +228,41 @@ class ShadowRunner:
             try:
                 q.put_nowait(job)
             except queue.Full:
+                # M-4b: bucketed by (key, job.phase) -- "shadow", "audit" or
+                # "fail_open" -- so the three are never conflated, and only
+                # audit-phase drops are the ones that delay demotion of a
+                # drifting adapter.
+                drop_key = (key, job.phase)
                 with self._lock:
                     self._pending[key] = max(0, self._pending.get(key, 1) - 1)
-                    self._dropped[key] = self._dropped.get(key, 0) + 1
-                    first = key not in self._drop_warned
-                    self._drop_warned.add(key)
+                    self._dropped[drop_key] = self._dropped.get(drop_key, 0) + 1
+                    first = drop_key not in self._drop_warned
+                    self._drop_warned.add(drop_key)
                 what = "comparison" if job.kind == "compare" else "fail-open"
                 if first:
-                    logger.warning(
-                        "paw_kit.jit.shadow: task_id=%s shadow queue is full (size=%d); "
-                        "dropping this %s. A dropped comparison is not counted as a "
-                        "disagreement -- it is simply not sampled; a dropped fail-open is "
-                        "simply not counted. Further drops for this task log at DEBUG.",
-                        job.task_id, job.queue_size, what,
-                    )
+                    if job.phase == "audit":
+                        # M-4b: named specifically -- an audit-phase drop is the
+                        # one that delays demotion of a drifting adapter by an
+                        # amount that depends on traffic shape, unlike a
+                        # dropped shadow-phase comparison.
+                        logger.warning(
+                            "paw_kit.jit.shadow: task_id=%s shadow queue is full "
+                            "(size=%d); dropping this audit-phase %s. Audit-phase "
+                            "drops specifically delay demotion of a drifting "
+                            "adapter -- if these accumulate, raise "
+                            "shadow_queue_size. A dropped comparison is not "
+                            "counted as a disagreement, it is simply not sampled. "
+                            "Further drops for this task log at DEBUG.",
+                            job.task_id, job.queue_size, what,
+                        )
+                    else:
+                        logger.warning(
+                            "paw_kit.jit.shadow: task_id=%s shadow queue is full (size=%d); "
+                            "dropping this %s. A dropped comparison is not counted as a "
+                            "disagreement -- it is simply not sampled; a dropped fail-open is "
+                            "simply not counted. Further drops for this task log at DEBUG.",
+                            job.task_id, job.queue_size, what,
+                        )
                 else:
                     logger.debug(
                         "paw_kit.jit.shadow: task_id=%s shadow queue full, %s dropped.",
@@ -653,12 +685,26 @@ class ShadowRunner:
             ]
 
     def stats(self, task_id: str, db_path: Optional[str] = None) -> Dict[str, int]:
-        """In-process counters for this task since process start (never persisted)."""
+        """In-process counters for this task since process start (never persisted).
+
+        M-4b (C4b): `dropped` is kept as the pre-existing total (every caller
+        that already asserts on it is unaffected), and
+        `dropped_shadow`/`dropped_audit`/`dropped_fail_open` break it down by
+        which of the three routes through `submit()` a drop came from -- they
+        used to be conflated in one bucket, which hid that only audit-phase
+        drops delay demotion of a drifting adapter.
+        """
         keys = self._keys_for(task_id, db_path)
         with self._lock:
+            dropped_shadow = sum(self._dropped.get((k, "shadow"), 0) for k in keys)
+            dropped_audit = sum(self._dropped.get((k, "audit"), 0) for k in keys)
+            dropped_fail_open = sum(self._dropped.get((k, "fail_open"), 0) for k in keys)
             return {
                 "pending": sum(self._pending.get(k, 0) for k in keys),
-                "dropped": sum(self._dropped.get(k, 0) for k in keys),
+                "dropped": dropped_shadow + dropped_audit + dropped_fail_open,
+                "dropped_shadow": dropped_shadow,
+                "dropped_audit": dropped_audit,
+                "dropped_fail_open": dropped_fail_open,
                 "stalled": sum(self._stalled.get(k, 0) for k in keys),
             }
 

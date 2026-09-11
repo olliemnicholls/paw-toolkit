@@ -1379,8 +1379,12 @@ def test_get_agreement_shape_and_last_disagreements(tmp_path: Path) -> None:
     # is exposed as `stall_subsampled` to make room for it.
     expected_keys = {
         "state", "phase", "rate", "window", "samples", "agree", "disagree", "error",
-        "teacher_error", "stalled", "dropped", "stall_subsampled", "pending",
-        "last_disagreements",
+        "teacher_error", "stalled", "dropped",
+        # M-4b (C4b, bug-hunt Track C): the same total broken down by which of
+        # shadow.py's three submission routes a drop came from -- previously
+        # conflated in `dropped` alone.
+        "dropped_shadow", "dropped_audit", "dropped_fail_open",
+        "stall_subsampled", "pending", "last_disagreements",
     }
     assert set(empty) == expected_keys
     assert empty["rate"] is None

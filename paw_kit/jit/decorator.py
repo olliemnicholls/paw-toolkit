@@ -784,6 +784,14 @@ def compile_on_hit(
                 # running the same decorated function share the database (and therefore
                 # the promotion decision) but not these.
                 "dropped": runner_stats["dropped"],
+                # M-4b: the same total, broken down by which of the three routes
+                # through ShadowRunner.submit() a drop came from. Only
+                # `dropped_audit` delays demotion of a drifting adapter; the
+                # other two are conflated with it in `dropped` above but were
+                # never separated out until now.
+                "dropped_shadow": runner_stats["dropped_shadow"],
+                "dropped_audit": runner_stats["dropped_audit"],
+                "dropped_fail_open": runner_stats["dropped_fail_open"],
                 # How many comparisons *this process* personally skipped under the
                 # stall guard's subsampling -- distinct from `stalled` above, which is
                 # the persisted, DB-derived "has this epoch passed the stall point"
