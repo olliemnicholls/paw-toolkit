@@ -8,6 +8,9 @@ Iteration 1: 2/3 passed (66.7%)
   [ACTION] Recompiling adapter with augmented edge-case pairs...
 
 Iteration 2: 2/3 passed (66.7%)
-Correct against expected: 2/2 (100.0%)
+Correct against expected: 2/2 (100.0%) -- all 2 scored
+  2 of 2 standard cases carry an answer key.
+
+Pass rate: 66.7% (2/3) -- all 3 scored (backend: MockPAWBackend)
 
 [FAIL] Assertions failed after 2 iteration(s).

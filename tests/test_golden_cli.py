@@ -400,6 +400,9 @@ BAD_RULES = {"today": "tomorrow", "new year": "2026-01-01", "February 30th": "IN
 #: Every answer is right, but wrapped in JSON string quotes -- the shape that scored
 #: 0/300 on the fast compiler's lookup adapter (measurements/README.md).
 QUOTED_RULES = {"today": '"2026-09-11"', "new year": '"2026-01-01"', "February 30th": '"INVALID"'}
+#: Every answer is the suite's `abstain_value` -- H-2's reproduction. True correctness
+#: is 0/2; before the fix this reported "Correct against expected: 2/2 (100.0%)".
+ABSTAIN_RULES = {"today": "UNPARSEABLE", "new year": "UNPARSEABLE", "February 30th": "UNPARSEABLE"}
 
 
 def _verdicts(judge_id: str, pairs: List[tuple]) -> Dict[str, Any]:
@@ -579,6 +582,27 @@ def _cases() -> List[Case]:
         write_adapter(wd / "al.paw", BAD_RULES)
         write_suite(wd, "al.paw", auto_recompile=True)
 
+    # bug-hunt-remediation Track B, Phase B2.
+    def setup_abstain(wd: Path) -> None:
+        """H-2: an adapter that answers `abstain_value` to every case."""
+        write_adapter(wd / "abstain.paw", ABSTAIN_RULES)
+        (wd / "suite.yaml").write_text(
+            SUITE_YAML.format(adapter="abstain.paw", auto_recompile="false")
+            + 'abstain_value: "UNPARSEABLE"\n',
+            encoding="utf-8",
+        )
+
+    def setup_keyless(wd: Path) -> None:
+        """H-3: `expected:` present but empty on one of the two standard cases."""
+        write_adapter(wd / "good.paw", GOOD_RULES)
+        (wd / "suite.yaml").write_text(
+            SUITE_YAML.format(adapter="good.paw", auto_recompile="false").replace(
+                '  - input: "new year"\n    expected: "2026-01-01"\n',
+                '  - input: "new year"\n    expected:\n',
+            ),
+            encoding="utf-8",
+        )
+
     cases += [
         Case(
             "check_pass", "paw-test", ["check", "suite.yaml", "--json", "report.json"],
@@ -637,6 +661,41 @@ def _cases() -> List[Case]:
             "check_adapter_override", "paw-test", ["check", "suite.yaml", "--adapter", "bad.paw"],
             setup=lambda wd: (setup_good(wd), write_adapter(wd / "bad.paw", BAD_RULES)),
             note="--adapter overrides the suite's own adapter_path.",
+        ),
+        # -- bug-hunt-remediation Track B, Phase B2 (H-1, H-2, H-3, G-5) ------------
+        Case(
+            "check_missing_adapter", "paw-test", ["check", "suite.yaml"],
+            setup=lambda wd: write_suite(wd, "absent.paw"),
+            note=(
+                "H-1: the adapter-existence gate `compare` already had. With "
+                "recompilation off there is nothing to run the suite against, so this "
+                "exits 1 instead of running every case against MockPAWBackend's "
+                "fallback string and reporting on a placeholder. Scoped to the "
+                "read-only path on purpose: whether `check` may *create* an adapter is "
+                "M-1, an open policy decision belonging to Track H."
+            ),
+        ),
+        Case(
+            "check_abstain_all", "paw-test", ["check", "suite.yaml"],
+            setup=setup_abstain,
+            note=(
+                "H-2: an adapter abstaining on every case. Before the fix this printed "
+                "'Correct against expected: 2/2 (100.0%)' at a true correctness of 0/2, "
+                "because an output equal to `abstain_value` was scored as a *match*. It "
+                "now reports 0/0 with the denominator naming the two abstentions, plus "
+                "an 'Abstained:' line of its own. The assertions still pass -- that "
+                "escape hatch is deliberate and unchanged."
+            ),
+        ),
+        Case(
+            "check_keyless_expected", "paw-test", ["check", "suite.yaml"],
+            setup=setup_keyless,
+            note=(
+                "H-3: one of the two standard cases was authored as `expected:` with "
+                "nothing after the colon -- valid YAML, and the key looks present. The "
+                "old output was 'Correct against expected: 1/1 (100.0%)' with nothing "
+                "saying a case had silently left the only correctness number printed."
+            ),
         ),
         Case("check_missing_suite", "paw-test", ["check", "nope.yaml"]),
         Case(

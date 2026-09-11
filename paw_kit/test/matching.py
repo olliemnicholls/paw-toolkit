@@ -13,6 +13,7 @@ imports `evaluate_assertion` from `runner.py`, and the reverse import would be c
 from __future__ import annotations
 
 import json
+import math
 import unicodedata
 from typing import Any, Tuple
 
@@ -33,9 +34,50 @@ def normalize_whitespace(text: str) -> str:
     return " ".join(unicodedata.normalize("NFC", text).split())
 
 
+def json_values_equal(a: Any, b: Any) -> bool:
+    """Type-aware structural equality for two `json.loads` results (H-4).
+
+    Python's `==` is the wrong comparison for JSON values in two specific ways, both
+    of which `values_equivalent` inherited and both of which flatter an adapter:
+
+    1. **`False == 0` and `True == 1`.** A hand-graded 51-pair table disagreed with the
+       old `==` on `false`/`0`, `true`/`1`, `{"admin": true}`/`{"admin": 1}` and
+       `[true, false]`/`[1, 0]` -- `paw-test compare` classified all four
+       `match_kind="equivalent"` and listed them under "not a real disagreement". A
+       JSON-emitting small model writing `1` where the schema says `true` is a classic
+       failure mode, and this is the function whose docstring claims it "decides every
+       published number".
+    2. **Overflow to infinity.** `json.loads("1e400")` and `json.loads("1e500")` both
+       return `inf`, so two different wrong numbers compared equal. Any non-finite
+       float (`inf`, `-inf`, `nan`) is treated as *not* equal to anything here;
+       `values_equivalent`'s byte-identical short-circuit still matches a token against
+       itself, so only genuinely different tokens are affected.
+
+    `int`/`float` of equal value (`1` vs `1.0`) are still equal -- that is a JSON
+    encoding difference with no semantic content, unlike a bool/number confusion.
+    """
+    # bool before int: bool IS a subclass of int in Python, which is the whole defect.
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a is b
+    if a is None or b is None:
+        return a is None and b is None
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        if not (math.isfinite(a) and math.isfinite(b)):
+            return False
+        return a == b
+    if isinstance(a, str) and isinstance(b, str):
+        return a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(json_values_equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(json_values_equal(a[k], b[k]) for k in a)
+    return False
+
+
 def values_equivalent(a: str, b: str) -> bool:
     """True if `a` and `b` are the same value: byte-identical, both parse as JSON to
-    equal values, or (when they don't both parse as JSON) equal after
+    equal values (`json_values_equal`, which is type-aware -- see H-4 in its
+    docstring), or (when they don't both parse as JSON) equal after
     `normalize_whitespace`. Mirrors `paw_kit.test.compare`'s `"equivalent"` match kind
     (byte-identical is a special case of equivalent, not a separate check)."""
     if a == b:
@@ -43,7 +85,7 @@ def values_equivalent(a: str, b: str) -> bool:
     a_is_json, parsed_a = parse_json_or_none(a)
     b_is_json, parsed_b = parse_json_or_none(b)
     if a_is_json and b_is_json:
-        return parsed_a == parsed_b
+        return json_values_equal(parsed_a, parsed_b)
     return normalize_whitespace(a) == normalize_whitespace(b)
 
 

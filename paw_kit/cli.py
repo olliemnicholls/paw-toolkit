@@ -375,26 +375,80 @@ def _print_expected_match_line(report: TestRunReport) -> None:
     since the assertion pass rate alone is exactly the number that read 100% for an
     adapter that was 10% correct (measurements/README.md, "Tool feedback" point 1).
 
-    A second line follows, only when unquoting a JSON string scalar would have matched
-    more cases than the strict count above (`expected_matched_unquoted >
-    expected_matched`): the strict rule stays the scored number (a quoted output is a
-    real defect for any consumer of the adapter), but a run where every wrong answer
-    was actually just quoted deserves to say so, rather than reading identically to a
-    run that was simply wrong (measurements/README.md, "Tool feedback": the fast
-    compiler's lookup adapter scored 0/300 this way while its unquoted answers were
-    right a third of the time).
+    Three findings from report section 6 shaped what this prints:
+
+    * **H-2** -- the rate's denominator is `expected_scored`, not `expected_total`: an
+      abstained or errored case gets no verdict, so it is named and removed rather than
+      counted as correct. `report.expected_denominator.render(...)` carries that note.
+    * **H-3** -- `k of N standard cases carry an answer key`, with a warning when some
+      do not. A 10-case suite where 5 were authored as `expected:` with nothing after
+      the colon (valid YAML, key looks present) reported `5/5 (100.0%)` while true
+      correctness was 5/10, and nothing on stdout said so.
+    * **G-5** -- the "after unquoting" number is printed *subordinate to* the scored
+      one, indented and explicitly labelled as not-counted, instead of as a second
+      headline with equal weight. `check` printed "Correct after unquoting: 2/2
+      (100.0%)" directly above "Pass rate: 0.0%" with nothing saying which to believe.
     """
+    # A suite with no `expected` anywhere still prints nothing -- H-3 is about a rate
+    # that is printed while silently excluding cases, not about a suite that declines
+    # to carry an answer key at all. Deliberately unchanged; there is an existing
+    # regression test pinning this silence (`test_cli_check_omits_expected_line_...`).
     if report.expected_total <= 0:
         return
+
     console.print(
-        f"[bold]Correct against expected:[/bold] {_e(report.expected_matched)}/"
-        f"{_e(report.expected_total)} ({_e(round(report.expected_match_rate, 1))}%)"
+        f"[bold]Correct against expected:[/bold] "
+        f"{_e(report.expected_denominator.render(report.expected_matched))}"
     )
-    if report.expected_matched_unquoted > report.expected_matched:
+    console.print(
+        f"  [dim]{_e(report.expected_total)} of {_e(report.standard_cases_count)} standard "
+        f"cases carry an answer key.[/dim]"
+    )
+    if report.expected_keyless_standard_cases > 0:
         console.print(
-            f"[bold]Correct after unquoting a JSON string:[/bold] {_e(report.expected_matched_unquoted)}/"
-            f"{_e(report.expected_total)} ({_e(round(report.expected_match_rate_unquoted, 1))}%) -- "
-            "the adapter wraps its answers in quotes"
+            f"  [yellow]Warning:[/yellow] {_e(report.expected_keyless_standard_cases)} standard "
+            "case(s) carry no `expected` value and are absent from the number above. A "
+            "mis-indented or empty `expected:` is valid YAML and looks present."
+        )
+    if report.expected_matched_unquoted > report.expected_matched:
+        extra = report.expected_matched_unquoted - report.expected_matched
+        console.print(
+            f"  [dim]Of the ones not counted correct, {_e(extra)} would match if a JSON "
+            "string quote were stripped -- the adapter wraps its answers in quotes. "
+            "Reporting only: a quoted output is a real defect for any consumer of the "
+            f"adapter, so the scored number above stays {_e(report.expected_matched)}/"
+            f"{_e(report.expected_scored)}.[/dim]"
+        )
+
+
+def _print_run_headline(report: TestRunReport, actual_backend: str) -> None:
+    """Print `paw-test check`'s pass-rate headline plus the errored/abstained lines.
+
+    **H-1.** `execution_error` was recorded per case and read by nothing: a backend
+    raising on every case printed ten `[PASS]` lines, `Pass rate: 100.0% (10/10)` and
+    exited 0. The errored count is now printed unconditionally -- not only inside the
+    FAIL branch -- so a run that proved nothing cannot look like a clean one.
+
+    **H-2.** Abstentions get their own line for the same reason: an adapter answering
+    "I don't know" to everything satisfies every assertion by design, and that is worth
+    saying out loud next to a 100% pass rate.
+    """
+    console.print(
+        f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
+        f"({report.passed_cases}/{report.total_cases}) -- {_e(report.pass_denominator.note)} "
+        f"[dim](backend: {_e(actual_backend)})[/dim]"
+    )
+    if report.errored_cases:
+        console.print(
+            f"[bold red]Errored:[/bold red] {_e(report.errored_cases)}/{_e(report.total_cases)} "
+            "-- the backend raised on these cases, so the adapter never actually ran on "
+            "them. Every errored case counts as a failure."
+        )
+    if report.abstained_cases:
+        console.print(
+            f"[bold]Abstained:[/bold] {_e(report.abstained_cases)}/{_e(report.total_cases)} "
+            "-- output was exactly the suite's `abstain_value`, which passes every "
+            "assertion by design and is scored against no answer key."
         )
 
 
@@ -520,6 +574,25 @@ def check(
                 "produced it, from code."
             )
 
+    # H-1: an adapter-existence gate matching `compare`'s existing one -- but only on
+    # the read-only path. `compare` can refuse outright because it never compiles;
+    # `check` cannot, because an *absent* adapter with auto-recompile on is the normal
+    # first-compile case, and whether `paw-test check` may create an adapter at all is
+    # an open policy decision (M-1, parent track's DECISION bucket, Track H's `cli.py`
+    # guard). Deliberately not pre-empted here.
+    #
+    # What this closes is the half that is unambiguous: with recompilation already
+    # disabled, a missing adapter means every case will raise, and the run can only
+    # report on a placeholder. Saying so costs one line and beats N identical backend
+    # errors.
+    if not config.active_learning.auto_recompile and not Path(config.adapter_path).exists():
+        console.print(
+            f"[bold red]Error:[/bold red] Adapter '{escape(config.adapter_path)}' does not "
+            "exist, and recompilation is off -- there is nothing to run this suite "
+            "against. Compile it first, or re-run with --auto-recompile."
+        )
+        raise typer.Exit(code=1)
+
     console.print(
         f"[bold cyan]Running paw.test check on:[/bold cyan] {_e(config.task_name)} "
         f"([dim]{escape(config.adapter_path)}[/dim]) [dim](backend: {_e(actual_backend)})[/dim]"
@@ -554,10 +627,7 @@ def check(
                     console.print(f"         [dim red]backend error: {escape(res.execution_error)}[/dim red]")
 
         _print_expected_match_line(report)
-        console.print(
-            f"\n[bold]Pass rate:[/bold] {report.pass_rate:.1f}% "
-            f"({report.passed_cases}/{report.total_cases}) [dim](backend: {_e(actual_backend)})[/dim]"
-        )
+        _print_run_headline(report, actual_backend)
         _write_json_report(json_out, report.model_dump())
         if not report.is_success:
             raise typer.Exit(code=1)
@@ -596,6 +666,9 @@ def check(
     _write_json_report(json_out, al_report.iteration_reports[-1].model_dump())
 
     _print_expected_match_line(al_report.iteration_reports[-1])
+    # H-1/H-2: the active-learning path printed neither the errored count nor the
+    # abstained count, so an all-raising backend here read exactly like a clean run.
+    _print_run_headline(al_report.iteration_reports[-1], actual_backend)
 
     if al_report.is_success:
         console.print(f"\n[bold green][SUCCESS][/bold green] All assertions passed! (Iterations: {al_report.iterations_run})")

@@ -1010,10 +1010,26 @@ def test_runner_no_expected_anywhere_behaves_as_before(tmp_path: Path) -> None:
     assert all(r.expected_match is None for r in report.results)
 
 
-def test_runner_expected_match_honours_abstain_value(tmp_path: Path) -> None:
-    """An output equal to `abstain_value` counts as matching `expected`, even though
-    the literal strings differ -- the same "I don't know" escape hatch
-    evaluate_assertion already gives ordinary assertions."""
+def test_runner_abstention_is_no_verdict_not_a_match(tmp_path: Path) -> None:
+    """H-2: an output equal to `abstain_value` is **not** a match against `expected`.
+
+    REWRITTEN, not supplemented (bug-hunt-remediation Track B, "Justified assertion
+    changes"). This test previously asserted `expected_match is True` /
+    `expected_matched == 1` for an abstaining adapter, and its docstring argued that as
+    a *feature* -- "the same 'I don't know' escape hatch evaluate_assertion already
+    gives ordinary assertions". That is H-2's entire finding: an adapter abstaining on
+    all ten cases of a ten-case suite reported `Correct against expected: 10/10
+    (100.0%)` at a true correctness of 0/10, and this test locked it in as correct.
+    The docstring had to change with the assertions, or a reviewer scanning the diff
+    would find surviving prose still justifying the old behaviour.
+
+    The escape hatch itself is untouched and still deliberate: an abstention passes
+    every *assertion* (`passed is True` below), because a model should not have to
+    hallucinate a shaped-but-wrong answer for an input with no legal answer. What it no
+    longer does is count as being *right about the answer key*. "No verdict" is
+    `expected_match is None`, it is named in its own bucket, and it is removed from the
+    rate's denominator rather than added to its numerator.
+    """
     adapter_path = str(tmp_path / "abstain_expected.paw")
     backend = MockPAWBackend()
     backend.compile(spec="s", examples=[{"input": "   ", "output": "UNPARSEABLE"}], output_path=adapter_path)
@@ -1029,10 +1045,60 @@ def test_runner_expected_match_honours_abstain_value(tmp_path: Path) -> None:
     )
 
     report = TestRunner(backend=backend).run(config)
-    assert report.results[0].expected_match is True
+
+    # The escape hatch survives: assertions still pass on an abstention.
     assert report.results[0].passed is True
     assert report.is_success is True
-    assert report.expected_matched == 1
+
+    # ... but it is no longer scored as correct against the answer key.
+    assert report.results[0].expected_match is None
+    assert report.expected_matched == 0
+    assert report.expected_total == 1
+    assert report.expected_abstained == 1
+    assert report.expected_errored == 0
+    assert report.expected_scored == 0
+    assert report.expected_match_rate == 0.0
+    assert report.abstained_cases == 1
+    # The denominator says what it dropped, rather than printing a bare 0/0.
+    assert "1 abstained" in report.expected_denominator.note
+
+
+def test_runner_all_abstain_does_not_report_full_marks(tmp_path: Path) -> None:
+    """H-2 at the scale the finding was measured at: ten cases with distinct expected
+    dates, an adapter abstaining on all ten, true correctness 0/10. Reported
+    `Correct against expected: 10/10 (100.0%)`, exit 0.
+
+    docs/results.md recommends uncommenting `abstain_value: "UNPARSEABLE"` in the
+    shipped `examples/date_normalizer/suite.yaml`, after which an always-abstaining
+    adapter reported 82/82 -- so this is a live forward risk, not a hypothetical.
+    """
+    adapter_path = str(tmp_path / "all_abstain.paw")
+    backend = MockPAWBackend()
+    backend.compile(
+        spec="s",
+        examples=[{"input": f"case-{i}", "output": "UNPARSEABLE"} for i in range(10)],
+        output_path=adapter_path,
+    )
+    config = TestSuiteConfig(
+        task_name="all_abstain",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[
+            StandardTestCase(input=f"case-{i}", expected=f"2026-01-{i + 1:02d}") for i in range(10)
+        ],
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+        abstain_value="UNPARSEABLE",
+    )
+
+    report = TestRunner(backend=backend).run(config)
+
+    assert report.expected_total == 10
+    assert report.expected_abstained == 10
+    assert report.expected_matched == 0
+    assert report.expected_match_rate == 0.0
+    assert report.expected_match_rate_unquoted == 0.0
+    assert all(r.expected_match is None for r in report.results)
 
 
 def test_runner_expected_match_uses_same_normalisation_as_compare(tmp_path: Path) -> None:
@@ -1196,3 +1262,203 @@ def test_active_learning_repairs_case_failing_only_on_expected(
     assert al_report.is_success is True
     assert al_report.repaired_edge_cases == 1
     assert al_report.rejected_labels_count == 0
+
+
+# =====================================================================================
+# Report section 6, H-1 / H-2 / H-3 / H-14 (bug-hunt-remediation, Track B, Phase B2)
+# =====================================================================================
+
+
+class _RaisingBackend(MockPAWBackend):
+    """A backend whose `infer` raises on every case -- the H-1 reproduction."""
+
+    def infer(self, adapter_path: str, input_text: str) -> str:  # type: ignore[override]
+        raise RuntimeError("model file is corrupt")
+
+
+def _errored_suite(adapter_path: str, **kwargs: object) -> TestSuiteConfig:
+    """A suite whose assertions deliberately *accept* the "[EXECUTION_ERROR]"
+    placeholder. The only thing protecting the committed runs from H-1 was accidental:
+    every published suite carries `not_contains: ERROR`, and the placeholder contains
+    "ERROR". A suite without that rule has no accidental protection at all.
+    """
+    fields: Dict[str, object] = {
+        "task_name": "errored",
+        "spec": "s",
+        "adapter_path": adapter_path,
+        "standard_cases": [StandardTestCase(input=f"case-{i}") for i in range(10)],
+        "assertions": [AssertionRule(rule="min_length", value=1)],
+        "fuzzing": FuzzingConfig(),
+    }
+    fields.update(kwargs)
+    return TestSuiteConfig(**fields)  # type: ignore[arg-type]
+
+
+def test_h1_raising_backend_is_not_a_hundred_percent_pass(tmp_path: Path) -> None:
+    """H-1: `TestCaseResult.execution_error` was recorded and read by nothing. A
+    backend raising on every case printed `[PASS]` ten times, `Pass rate: 100.0%
+    (10/10)`, and exited 0 -- and the error text was never printed, because it was
+    only shown in the FAIL branch."""
+    config = _errored_suite(str(tmp_path / "broken.paw"))
+    report = TestRunner(backend=_RaisingBackend()).run(config)
+
+    assert report.total_cases == 10
+    assert report.errored_cases == 10
+    assert report.passed_cases == 0
+    assert report.failed_cases == 10
+    assert report.pass_rate == 0.0
+    assert report.is_success is False
+    assert all(not r.passed for r in report.results)
+    assert all(r.execution_error == "model file is corrupt" for r in report.results)
+    # The reason names the backend failure first, not whatever the placeholder did to
+    # the user's assertions.
+    assert report.results[0].failed_rule_names[0] == "execution_error"
+    # PAW-TEST-08 still holds: the raw exception text stays out of the reason string.
+    assert "model file is corrupt" not in report.results[0].failed_rules[0]
+
+
+def test_h1_h2_collision_errored_beats_abstained(tmp_path: Path) -> None:
+    """The H-1/H-2 composition case, reproduced against pre-fix source in Phase 0:
+    `abstain_value` set to the literal placeholder the runner substitutes for a raised
+    case, with a backend that raises on everything, reported `pass_rate: 100.0%`,
+    exit 0. H-1 and H-2 firing on the same case at once.
+
+    Two independent things now stop it. First, `TestSuiteConfig` refuses that
+    `abstain_value` outright. Second -- and this is the actual fix, since the loader
+    guard could be removed by a refactor -- the run loop decides "errored" on
+    `execution_error is not None`, never on the output string, so the precedence holds
+    for any abstain_value a suite might pick.
+    """
+    from paw_kit.test.suite import EXECUTION_ERROR_PLACEHOLDER
+
+    # Defence in depth: the placeholder is not user-claimable.
+    with pytest.raises(Exception, match="abstain_value must not be"):
+        _errored_suite(str(tmp_path / "x.paw"), abstain_value=EXECUTION_ERROR_PLACEHOLDER)
+
+    # The precedence rule itself, on an abstain_value that IS allowed: the backend
+    # raises, so every case is errored -- never abstained -- regardless of the fact
+    # that assertions would have been short-circuited to pass.
+    config = _errored_suite(
+        str(tmp_path / "broken.paw"),
+        abstain_value="UNPARSEABLE",
+        standard_cases=[StandardTestCase(input=f"case-{i}", expected="X") for i in range(10)],
+    )
+    report = TestRunner(backend=_RaisingBackend()).run(config)
+
+    assert report.errored_cases == 10
+    assert report.abstained_cases == 0
+    assert report.expected_errored == 10
+    assert report.expected_abstained == 0
+    assert report.expected_scored == 0
+    assert report.pass_rate == 0.0
+    assert report.is_success is False
+
+
+def test_h1_errored_case_cannot_pass_even_when_assertions_accept_the_placeholder(
+    tmp_path: Path,
+) -> None:
+    """The narrow guarantee H-1's `is_success` clause exists for: assertions that
+    happily accept "[EXECUTION_ERROR]" must not make an errored case a pass."""
+    config = TestSuiteConfig(
+        task_name="accepting",
+        spec="s",
+        adapter_path=str(tmp_path / "broken.paw"),
+        standard_cases=[StandardTestCase(input="a")],
+        # An assertion that the placeholder satisfies.
+        assertions=[AssertionRule(rule="regex_match", pattern=r"EXECUTION")],
+        fuzzing=FuzzingConfig(),
+    )
+    report = TestRunner(backend=_RaisingBackend()).run(config)
+    assert report.results[0].passed is False
+    assert report.errored_cases == 1
+    assert report.is_success is False
+
+
+def test_h3_keyless_standard_cases_are_surfaced(tmp_path: Path) -> None:
+    """H-3: `expected_total` counted only the cases that *carry* an answer key, and the
+    CLI printed `matched/expected_total`, never how many cases there were. A 10-case
+    suite where 5 were authored as `expected:` with nothing after the colon (valid
+    YAML, key looks present) reported `5/5 (100.0%)` while true correctness was 5/10 --
+    in the direction that flatters the adapter."""
+    adapter_path = str(tmp_path / "keyless.paw")
+    backend = MockPAWBackend()
+    backend.compile(
+        spec="s",
+        examples=[{"input": f"c{i}", "output": "OK"} for i in range(10)],
+        output_path=adapter_path,
+    )
+    config = TestSuiteConfig(
+        task_name="keyless",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=(
+            [StandardTestCase(input=f"c{i}", expected="OK") for i in range(5)]
+            + [StandardTestCase(input=f"c{i}") for i in range(5, 10)]  # `expected:` empty
+        ),
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+    )
+
+    report = TestRunner(backend=backend).run(config)
+
+    assert report.standard_cases_count == 10
+    assert report.expected_total == 5
+    assert report.expected_matched == 5
+    assert report.expected_keyless_standard_cases == 5
+    # The rate itself is still over the cases that have a key -- that number is not
+    # wrong, it was just unqualified. What is new is that the report can say so.
+    assert report.expected_match_rate == 100.0
+
+
+def test_h3_keyless_count_is_zero_when_every_standard_case_has_a_key(tmp_path: Path) -> None:
+    adapter_path = str(tmp_path / "full_key.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="s", examples=[{"input": "c", "output": "OK"}], output_path=adapter_path)
+    config = TestSuiteConfig(
+        task_name="full_key",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[StandardTestCase(input="c", expected="OK")],
+        assertions=[],
+        fuzzing=FuzzingConfig(),
+    )
+    report = TestRunner(backend=backend).run(config)
+    assert report.expected_keyless_standard_cases == 0
+    assert report.standard_cases_count == 1
+
+
+#: H-14: `exact_match` used bare `==` while a case's own `expected` used
+#: `values_equivalent`, so the same two strings passed one and failed the other.
+_H14_EXACT_MATCH_TABLE = [
+    ('{"a": 1}', '{"a":1}', True),      # the finding's own example
+    ('{"a":1}', '{"a": 1}', True),
+    ("the   fox", "the fox", True),
+    ("RG-M2", "RG-M2", True),
+    ("RG-M2", "RG-Q9", False),
+    # H-4 must have landed first, or this row passes for the wrong reason:
+    # pre-H-4 `values_equivalent("true", "1")` was True, and `active.py`'s
+    # teacher-label gate runs every candidate label through `evaluate_assertion`.
+    ("true", "1", False),
+    ("1", "true", False),
+    ('{"admin": true}', '{"admin": 1}', False),
+    ("1e400", "1e500", False),
+]
+
+
+@pytest.mark.parametrize("output,value,expected", _H14_EXACT_MATCH_TABLE)
+def test_h14_exact_match_routes_through_values_equivalent(
+    output: str, value: str, expected: bool
+) -> None:
+    passed, _reason = evaluate_assertion(output, AssertionRule(rule="exact_match", value=value))
+    assert passed is expected
+
+
+def test_h14_and_expected_agree_on_the_same_pair(tmp_path: Path) -> None:
+    """The point of H-14: two comparisons named as though they mean the same thing must
+    not disagree. `{"a":1}` passed the `expected` check and failed the `exact_match`
+    rule on the same case."""
+    from paw_kit.test.matching import values_equivalent
+
+    for a, b in (('{"a": 1}', '{"a":1}'), ("true", "1"), ("x  y", "x y")):
+        rule_passed, _ = evaluate_assertion(a, AssertionRule(rule="exact_match", value=b))
+        assert rule_passed is values_equivalent(a, b)

@@ -1,12 +1,13 @@
-$ paw-test check suite.yaml --json report.json
+$ paw-test check suite.yaml
 exit code: 0
 --- stdout ---
 Running paw.test check on: golden_date_normalizer (good.paw) (backend: MockPAWBackend)
   [PASS] Input: 'today' -> '2026-09-11'
   [PASS] Input: 'new year' -> '2026-01-01'
   [PASS] Input: 'February 30th' -> 'INVALID'
-Correct against expected: 2/2 (100.0%) -- all 2 scored
-  2 of 2 standard cases carry an answer key.
+Correct against expected: 1/1 (100.0%) -- all 1 scored
+  1 of 2 standard cases carry an answer key.
+  Warning: 1 standard case(s) carry no `expected` value and are absent from the number above. A mis-indented or empty
+`expected:` is valid YAML and looks present.
 
 Pass rate: 100.0% (3/3) -- all 3 scored (backend: MockPAWBackend)
-Wrote JSON report to report.json

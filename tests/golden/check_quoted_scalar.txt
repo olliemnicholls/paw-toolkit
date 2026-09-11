@@ -10,7 +10,10 @@ Running paw.test check on: golden_date_normalizer (quoted.paw) (backend: MockPAW
          expected: got "2026-01-01" want 2026-01-01
   [FAIL] Input: 'February 30th' -> '"INVALID"'
          regex_match: Output '"INVALID"' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
-Correct against expected: 0/2 (0.0%)
-Correct after unquoting a JSON string: 2/2 (100.0%) -- the adapter wraps its answers in quotes
+Correct against expected: 0/2 (0.0%) -- all 2 scored
+  2 of 2 standard cases carry an answer key.
+  Of the ones not counted correct, 2 would match if a JSON string quote were stripped -- the adapter wraps its answers
+in quotes. Reporting only: a quoted output is a real defect for any consumer of the adapter, so the scored number above
+stays 0/2.
 
-Pass rate: 0.0% (0/3) (backend: MockPAWBackend)
+Pass rate: 0.0% (0/3) -- all 3 scored (backend: MockPAWBackend)
