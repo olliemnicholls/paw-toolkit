@@ -23,7 +23,7 @@ from typing import (
 )
 import uuid
 from decimal import Decimal
-from pydantic import BaseModel
+from pydantic import AliasChoices, AliasPath, BaseModel
 from pydantic.fields import FieldInfo
 
 # S-3: `Field(pattern=...)` constraints are translated through interegular's AST rather
@@ -156,6 +156,112 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
                 return pattern.pattern, pattern.flags
             return str(pattern), 0
     return None
+
+
+def _field_validation_keys(
+    model: Type[BaseModel], field_name: str, field_info: FieldInfo
+) -> Tuple[str, ...]:
+    """Return the JSON object keys pydantic will *validate* for this field (S-5).
+
+    The grammar previously always required the Python field name. With
+    `full_name: str = Field(alias="fullName")` and pydantic's default configuration,
+    pydantic accepts only `fullName` -- so output that perfectly satisfied the grammar
+    raised `ValidationError`, output pydantic accepted was forbidden by the grammar,
+    and through `paw.load` the local path failed **100% of the time** while every call
+    silently ran the fallback. Any camelCase API schema produced a compiled function
+    that was permanently all-fallback: all of the teacher cost, none of the benefit, no
+    signal. (The *silence* is S-14 and belongs to Track C; this removes the cause, not
+    the symptom.)
+
+    Executed against pydantic 2.13.5, and the reason this targets the **validation**
+    alias and never `serialization_alias`:
+
+    * `validation_alias="vName", serialization_alias="sName"` -- pydantic validates
+      `vName`, while `model_dump_json(by_alias=True)` emits `{"sName": ...}`, which
+      pydantic then **rejects**. A grammar built from the serialization alias would be
+      one the validator never accepts.
+    * `validation_alias=AliasChoices("a", "b")` -- every choice validates, and
+      `model_dump_json(by_alias=True)` emits `{"full_name": ...}`, also rejected. So
+      the alternation comes from the choices.
+    * `alias="fullName"` alone -- pydantic copies it into `validation_alias`, so
+      reading the validation alias covers the plain `alias=` spelling too; the
+      fallback to `.alias` below is belt and braces.
+    * `alias_generator` needs no handling at all: it is resolved into each `FieldInfo`
+      at class-build time, so it arrives here as an ordinary alias.
+
+    Three config flags, not one. pydantic normalises them onto `model_config` at class
+    build (executed: `populate_by_name=True` yields
+    `{'populate_by_name': True, 'validate_by_alias': True, 'validate_by_name': True}`,
+    and `validate_by_alias=False` yields `{'validate_by_alias': False,
+    'validate_by_name': True}`), but all three are read so that the older
+    `populate_by_name`-only spelling cannot be missed.
+
+    Raises:
+        PAWSchemaError: for an `AliasPath`, which addresses a value *inside* a nested
+            object and is not expressible in a flat one-key-per-field grammar; and for
+            a field with no validatable key at all.
+    """
+    config = model.model_config
+    validate_by_alias = config.get("validate_by_alias", True)
+    validate_by_name = bool(config.get("validate_by_name", False)) or bool(
+        config.get("populate_by_name", False)
+    )
+
+    raw_alias = field_info.validation_alias
+    if raw_alias is None:
+        raw_alias = field_info.alias
+
+    alias_keys: List[str] = []
+    if isinstance(raw_alias, str):
+        alias_keys.append(raw_alias)
+    elif isinstance(raw_alias, AliasChoices):
+        # A choice may itself be an AliasPath. Dropping those is the narrowing
+        # direction and keeps the useful case working: pydantic accepts ANY of the
+        # choices, so a grammar that emits only the flat ones emits something the
+        # validator takes (executed: `AliasChoices("a", AliasPath("x", "y"))` validates
+        # `{"a": "v"}`).
+        alias_keys.extend(c for c in raw_alias.choices if isinstance(c, str))
+        if not alias_keys:
+            _raise_inexpressible_alias(model, field_name, raw_alias)
+    elif isinstance(raw_alias, AliasPath):
+        _raise_inexpressible_alias(model, field_name, raw_alias)
+    elif raw_alias is not None:
+        raise PAWSchemaError(
+            f"Field {model.__name__}.{field_name} carries a validation alias of type "
+            f"{type(raw_alias).__name__}, which this compiler does not know how to "
+            "express as a JSON object key."
+        )
+
+    keys: List[str] = []
+    if not alias_keys:
+        # No alias at all: the field name is what pydantic validates, whatever
+        # `validate_by_alias` says.
+        keys.append(field_name)
+    else:
+        if validate_by_alias:
+            keys.extend(alias_keys)
+        if validate_by_name:
+            keys.append(field_name)
+    if not keys:
+        raise PAWSchemaError(
+            f"Field {model.__name__}.{field_name} has no key pydantic will validate: "
+            "its model sets validate_by_alias=False and validate_by_name=False, so "
+            "neither the alias nor the field name is accepted. There is no JSON object "
+            "this field could appear in."
+        )
+    # Order-preserving dedupe: an alias equal to the field name must not double the
+    # alternation, and the ORDER is part of the compiled artefact.
+    return tuple(dict.fromkeys(keys))
+
+
+def _raise_inexpressible_alias(model: Type[BaseModel], field_name: str, alias: Any) -> None:
+    raise PAWSchemaError(
+        f"Field {model.__name__}.{field_name} uses {alias!r}. An AliasPath addresses a "
+        "value nested inside another object, and the compiled grammar is flat -- one "
+        "key per field, at the top level -- so there is no JSON object it could emit "
+        "that pydantic would validate through this path. Use a nested BaseModel, or a "
+        "plain string alias (optionally via AliasChoices), instead."
+    )
 
 
 def _json_string_literal_regex(val: str) -> str:
@@ -1064,8 +1170,11 @@ def _fingerprint_model_fields(
     that, not a one-off). Every widening so far is routed through the two helpers this
     function already calls, precisely so the two cannot drift:
     `_extract_pattern_from_field` returns the pattern's flags as well as its source
-    (S-6), and `_fingerprint_annotation` carries each Literal/Enum value's type name
-    (S-4).
+    (S-6), `_fingerprint_annotation` carries each Literal/Enum value's type name (S-4),
+    and `_field_validation_keys` -- the same call `_pydantic_to_regex_impl` makes to
+    decide which object key to emit -- contributes the resolved alias set (S-5). The
+    alias set is NOT derivable from the field name: two models identical except for
+    `Field(alias=...)`, or for `populate_by_name`, compile to different grammars.
 
     Built from *extracted values*, never from `FieldInfo` objects directly:
     `FieldInfo` inherits `object`'s identity `__hash__`/`__eq__`, so hashing
@@ -1078,6 +1187,7 @@ def _fingerprint_model_fields(
             field_name,
             _fingerprint_annotation(field_info.annotation, seen=seen, depth=depth),
             _extract_pattern_from_field(field_info),
+            _field_validation_keys(model, field_name, field_info),
         )
         for field_name, field_info in model.model_fields.items()
     )
@@ -1108,7 +1218,16 @@ def _pydantic_to_regex_impl(
 
     field_patterns: List[str] = []
     for field_name, field_info in fields.items():
-        field_key = f'"{re.escape(field_name)}"'
+        # S-5: the key(s) pydantic will VALIDATE, which is the field name only when the
+        # field carries no alias. `_json_string_literal_regex` rather than
+        # `f'"{re.escape(name)}"'`: an alias is an arbitrary string (pydantic accepts
+        # `alias='fu"ll'`), so it needs the same PAW-SCHEMA-01 treatment as a Literal
+        # value. For an ordinary identifier the two spellings are byte-identical.
+        keys = _field_validation_keys(model, field_name, field_info)
+        rendered_keys = [_json_string_literal_regex(k) for k in keys]
+        field_key = (
+            rendered_keys[0] if len(rendered_keys) == 1 else "(?:" + "|".join(rendered_keys) + ")"
+        )
         # Check for Field(pattern=...) constraint
         pattern_override = _extract_pattern_from_field(field_info)
         if pattern_override is not None:

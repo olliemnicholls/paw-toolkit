@@ -43,7 +43,7 @@ import uuid
 
 import interegular
 from interegular.fsm import anything_else
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 import pytest
 
 from paw_kit import PAWSchemaError, pydantic_to_regex
@@ -355,6 +355,32 @@ class PatAndPlainField(BaseModel):
     name: str
 
 
+class AliasPopulateByName(BaseModel):
+    """S-5, in the one alias configuration all three spine arms can hold for.
+
+    A *strict*-alias model (pydantic's default, `AliasStrict` below) cannot go in this
+    corpus, because `test_spine_model_dump_json_matches_the_grammar` would fail on it
+    through no fault of the compiler: the grammar must require the key pydantic
+    **validates** (`fullName`), while `model_dump_json()` with its default
+    `by_alias=False` emits `full_name` -- a string pydantic itself refuses to read
+    back. That asymmetry is pydantic's, not the grammar's. With `populate_by_name` both
+    keys validate, so the round-trip arm is meaningful again, and the strict case is
+    covered in the must-accept arm instead.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    full_name: str = Field(alias="fullName")
+    count: int
+
+
+class AliasStrict(BaseModel):
+    full_name: str = Field(alias="fullName")
+
+
+class AliasChoicesModel(BaseModel):
+    full_name: str = Field(validation_alias=AliasChoices("a", "bb"))
+
+
 SPINE_CASES = [
     ("plain_scalars", PlainScalars, [PlainScalars(text="a b", count=-7, ratio=1.5, flag=True),
                                      PlainScalars(text='q"\\\n\t', count=0, ratio=0.0, flag=False),
@@ -395,6 +421,8 @@ SPINE_CASES = [
     ("pat_precompiled", PatPrecompiled, [PatPrecompiled(x="abc")]),
     ("pat_non_ascii", PatNonAscii, [PatNonAscii(x="café")]),
     ("pat_and_plain_field", PatAndPlainField, [PatAndPlainField(zip_code="90210", name="n")]),
+    ("alias_populate_by_name", AliasPopulateByName,
+     [AliasPopulateByName(fullName="v", count=1), AliasPopulateByName(full_name="w", count=2)]),
 ]
 
 SPINE_IDS = [c[0] for c in SPINE_CASES]
@@ -514,6 +542,15 @@ MUST_ACCEPT = [
     ("S-3", PatShorthandW, '{"x":"a_1"}'),
     ("S-3", PatShorthandNegS, '{"x":"xy"}'),
     ("S-3", PatAndPlainField, '{"zip_code":"90210","name":"n"}'),
+    # S-5: the grammar must require the key pydantic VALIDATES. With the default
+    # config that is the alias alone; with populate_by_name it is either. The strict
+    # model lives only here, not in SPINE_CASES -- see `AliasPopulateByName`'s
+    # docstring for why the round-trip arm cannot hold for it.
+    ("S-5", AliasStrict, '{"fullName":"v"}'),
+    ("S-5", AliasPopulateByName, '{"fullName":"v","count":1}'),
+    ("S-5", AliasPopulateByName, '{"full_name":"v","count":1}'),
+    ("S-5", AliasChoicesModel, '{"a":"v"}'),
+    ("S-5", AliasChoicesModel, '{"bb":"v"}'),
     # S-2: the escapes JSON really does permit must stay reachable after the escape
     # class is tightened.
     ("S-2", PlainScalars, '{"text":"a\\"b","count":1,"ratio":1.0,"flag":true}'),

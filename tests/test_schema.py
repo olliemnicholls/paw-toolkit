@@ -1711,3 +1711,242 @@ def test_enum_member_values_that_compare_equal_do_not_share_a_cache_entry_S_4() 
     assert regex_a != regex_b
     assert _re.fullmatch(regex_a, '{"x":1}') is not None
     assert _re.fullmatch(regex_b, '{"x":true}') is not None
+
+
+# --- S-5: the grammar must require the key pydantic will VALIDATE --------------------
+
+
+def test_field_alias_produces_the_key_pydantic_validates_S_5() -> None:
+    """`Field(alias="fullName")` must compile to `"fullName"`, not `"full_name"` (S-5).
+
+    With pydantic's default configuration the grammar required a key pydantic refuses
+    and forbade the one it accepts, so through `paw.load` the local path failed 100% of
+    the time and every call silently ran the fallback. The report's own "test needed"
+    is this: assert the grammar matches `model_dump_json(by_alias=True)`.
+    """
+    import re as _re
+
+    from pydantic import ConfigDict
+
+    class Aliased(BaseModel):
+        full_name: str = Field(alias="fullName")
+
+    pat = pydantic_to_regex(Aliased, anchors=True)
+    dumped = Aliased(fullName="v").model_dump_json(by_alias=True)
+    assert dumped == '{"fullName":"v"}'
+    assert _re.fullmatch(pat, dumped) is not None, (
+        f"the grammar rejects the only key pydantic validates: {pat!r}"
+    )
+    with pytest.raises(Exception):
+        Aliased.model_validate_json('{"full_name":"v"}')
+    assert _re.fullmatch(pat, '{"full_name":"v"}') is None, (
+        "the grammar still requires a key pydantic rejects"
+    )
+    assert ConfigDict  # keep the import used by the sibling tests honest
+
+
+ALIAS_FLAG_CASES = [
+    # (config, accepts_alias, accepts_field_name)
+    ({}, True, False),
+    ({"populate_by_name": True}, True, True),
+    ({"validate_by_name": True}, True, True),
+    ({"validate_by_alias": False}, False, True),
+]
+
+
+@pytest.mark.parametrize(
+    "config,accepts_alias,accepts_name", ALIAS_FLAG_CASES,
+    ids=["default", "populate_by_name", "validate_by_name", "validate_by_alias_false"],
+)
+def test_alias_gating_follows_all_three_config_flags_S_5(
+    config: dict, accepts_alias: bool, accepts_name: bool
+) -> None:
+    """Three flags decide which keys validate, not one (S-5, executed matrix).
+
+    `populate_by_name` is the old spelling; pydantic 2.11 added `validate_by_name` and
+    `validate_by_alias`, and `validate_by_alias=False` makes the *alias* the rejected
+    key. A one-flag reading of this model gets two of these four rows wrong.
+
+    Three of the four rows are red at `main`. The `validate_by_alias_false` row passes
+    there, because it is the one configuration in which the key pydantic validates IS
+    the field name -- i.e. the one row `main`'s unconditional "always emit the field
+    name" happens to get right. It is kept so the matrix is complete and so a future
+    change cannot make that row wrong unnoticed.
+    """
+    import json as _json
+    import re as _re
+
+    from pydantic import ConfigDict, ValidationError
+
+    class Flagged(BaseModel):
+        model_config = ConfigDict(**config)
+        full_name: str = Field(alias="fullName")
+
+    pat = pydantic_to_regex(Flagged, anchors=True)
+    for key, expected in (("fullName", accepts_alias), ("full_name", accepts_name)):
+        payload = _json.dumps({key: "v"})
+        # Precondition: pydantic's own answer. If this fails the matrix is wrong.
+        try:
+            Flagged.model_validate_json(payload)
+            pydantic_accepts = True
+        except ValidationError:
+            pydantic_accepts = False
+        assert pydantic_accepts is expected, f"{config}: pydantic's answer for {key!r} changed"
+        assert (_re.fullmatch(pat, payload) is not None) is expected, (
+            f"{config}: the grammar disagrees with pydantic about the key {key!r}"
+        )
+
+
+def test_validation_alias_is_targeted_never_serialization_alias_S_5() -> None:
+    """The grammar follows the VALIDATION alias; the serialization one is a trap.
+
+    Executed against pydantic 2.13.5: with `validation_alias="vName",
+    serialization_alias="sName"`, pydantic validates `vName` while
+    `model_dump_json(by_alias=True)` emits `{"sName": ...}` -- which pydantic then
+    **rejects**. A grammar built from the serialization alias is one the validator
+    never accepts, so `by_alias=True` output is not the target here.
+    """
+    import re as _re
+
+    from pydantic import ValidationError
+
+    class Split(BaseModel):
+        full_name: str = Field(validation_alias="vName", serialization_alias="sName")
+
+    pat = pydantic_to_regex(Split, anchors=True)
+    assert _re.fullmatch(pat, '{"vName":"v"}') is not None
+    assert _re.fullmatch(pat, '{"sName":"v"}') is None
+    # ... and the reason: pydantic itself will not read back its own by_alias dump.
+    dumped = Split.model_validate({"vName": "v"}).model_dump_json(by_alias=True)
+    assert dumped == '{"sName":"v"}'
+    with pytest.raises(ValidationError):
+        Split.model_validate_json(dumped)
+
+
+def test_alias_choices_compile_to_an_alternation_S_5() -> None:
+    """Every choice validates, so every choice is in the grammar."""
+    import re as _re
+
+    from pydantic import AliasChoices
+
+    class Choices(BaseModel):
+        full_name: str = Field(validation_alias=AliasChoices("a", "b"))
+
+    pat = pydantic_to_regex(Choices, anchors=True)
+    for key in ("a", "b"):
+        Choices.model_validate({key: "v"})  # precondition
+        assert _re.fullmatch(pat, '{"%s":"v"}' % key) is not None, key
+    assert _re.fullmatch(pat, '{"full_name":"v"}') is None
+
+
+def test_alias_choices_drop_an_alias_path_member_rather_than_refusing_S_5() -> None:
+    """A flat choice alongside an AliasPath keeps working; the path is simply not emitted.
+
+    Executed: `AliasChoices("a", AliasPath("x", "y"))` validates `{"a": "v"}`, so a
+    grammar that emits only `a` is sound. Dropping the path is the narrowing direction.
+    """
+    import re as _re
+
+    from pydantic import AliasChoices, AliasPath
+
+    class Mixed(BaseModel):
+        full_name: str = Field(validation_alias=AliasChoices("a", AliasPath("x", "y")))
+
+    pat = pydantic_to_regex(Mixed, anchors=True)
+    assert _re.fullmatch(pat, '{"a":"v"}') is not None
+
+
+def test_alias_path_raises_rather_than_compiling_a_flat_key_S_5() -> None:
+    """An AliasPath addresses a value inside a nested object; the grammar is flat."""
+    from pydantic import AliasChoices, AliasPath
+
+    class Pathed(BaseModel):
+        full_name: str = Field(validation_alias=AliasPath("outer", "inner"))
+
+    with pytest.raises(PAWSchemaError, match="AliasPath addresses a value nested"):
+        pydantic_to_regex(Pathed)
+
+    class OnlyPaths(BaseModel):
+        full_name: str = Field(validation_alias=AliasChoices(AliasPath("outer", "inner")))
+
+    with pytest.raises(PAWSchemaError, match="AliasPath addresses a value nested"):
+        pydantic_to_regex(OnlyPaths)
+
+
+def test_alias_generator_needs_no_special_handling_S_5() -> None:
+    """`alias_generator` is resolved into each FieldInfo at class build, so it just works."""
+    import re as _re
+
+    from pydantic import ConfigDict
+
+    class Generated(BaseModel):
+        model_config = ConfigDict(alias_generator=lambda s: s.upper())
+        full_name: str
+
+    assert Generated.model_fields["full_name"].alias == "FULL_NAME"
+    pat = pydantic_to_regex(Generated, anchors=True)
+    assert _re.fullmatch(pat, '{"FULL_NAME":"v"}') is not None
+    assert _re.fullmatch(pat, '{"full_name":"v"}') is None
+
+
+def test_alias_is_json_escaped_like_a_literal_value_S_5() -> None:
+    """An alias is an arbitrary string, so it gets PAW-SCHEMA-01 treatment, not re.escape.
+
+    pydantic accepts `Field(alias='fu"ll')`. Splicing that into `f'"{re.escape(name)}"'`
+    would close the JSON key's own string early -- the same break-out PAW-SCHEMA-01 is
+    about, reached through the key rather than through a Literal value.
+    """
+    import json as _json
+    import re as _re
+
+    class Quoted(BaseModel):
+        full_name: str = Field(alias='fu"ll')
+
+    payload = _json.dumps({'fu"ll': "v"})
+    Quoted.model_validate_json(payload)  # precondition
+    pat = pydantic_to_regex(Quoted, anchors=True)
+    assert _re.fullmatch(pat, payload) is not None
+    assert _re.compile(pat)
+
+
+def test_alias_joins_the_cache_fingerprint_S_5() -> None:
+    """Two models differing only in an alias -- or only in a config flag -- must not collide."""
+    from pydantic import ConfigDict
+
+    from paw_kit.schema.grammar import _fingerprint_model_fields
+
+    class Plain(BaseModel):
+        full_name: str
+
+    class Aliased(BaseModel):
+        full_name: str = Field(alias="fullName")
+
+    class AliasedBoth(BaseModel):
+        model_config = ConfigDict(populate_by_name=True)
+        full_name: str = Field(alias="fullName")
+
+    keys = [
+        _fingerprint_model_fields(m, seen=frozenset(), depth=0)
+        for m in (Plain, Aliased, AliasedBoth)
+    ]
+    assert len(set(keys)) == 3, "two of these three models share a cache fingerprint"
+
+    pydantic_to_regex.cache_clear()
+    regexes = [pydantic_to_regex(m) for m in (Plain, Aliased, AliasedBoth)]
+    assert len(set(regexes)) == 3, "a model was served another model's grammar"
+
+
+def test_alias_on_a_nested_model_is_honoured_S_5() -> None:
+    """The alias resolution runs per model, so a nested model uses its OWN config."""
+    import re as _re
+
+    class InnerAliased(BaseModel):
+        inner_name: str = Field(alias="innerName")
+
+    class OuterPlain(BaseModel):
+        detail: InnerAliased
+
+    pat = pydantic_to_regex(OuterPlain, anchors=True)
+    payload = '{"detail": {"innerName": "v"}}'
+    OuterPlain.model_validate_json(payload)  # precondition
+    assert _re.fullmatch(pat, payload) is not None
