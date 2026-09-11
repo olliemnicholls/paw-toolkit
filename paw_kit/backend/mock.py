@@ -37,6 +37,19 @@ _MAX_CACHED_ADAPTERS = 256
 _MAX_ADAPTER_FILE_BYTES = 50 * 1024 * 1024
 
 
+class MockAdapterMiss(LookupError):
+    """J-3: raised by `MockPAWBackend.infer` when `strict_misses=True` and no
+    rule, example or `default_response` matched the input.
+
+    Opt-in (default `strict_misses=False`, preserving the `[mock:...]` sentinel
+    exactly): the sentinel is a live dependency of `serve`'s warm-up liveness
+    check and Track B's CLI reporting/goldens, so it cannot change process-wide.
+    A caller who wants "an unmemorised input is a hard failure, not a plausible
+    wrong value silently served" -- the shape J-3 (bug-hunt-2026-09-11) is about
+    -- opts in explicitly instead.
+    """
+
+
 def _is_valid_adapter_shape(data: Any) -> bool:
     """PAW-BACKEND-04: shape-validate a reloaded adapter JSON file before trusting
     `examples`/`rules` have the structure `infer()` assumes -- a bare list of
@@ -64,7 +77,7 @@ class MockPAWBackend(AbstractPAWBackend):
     Enables 100% unit and integration test coverage without GPU hardware or real weights.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, strict_misses: bool = False) -> None:
         self._adapters: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         # PAW-BACKEND-03: guards every access to _adapters below. The existing test
         # suite runs entirely single-threaded against MockPAWBackend, and this lock
@@ -72,6 +85,9 @@ class MockPAWBackend(AbstractPAWBackend):
         # test_mock_backend_concurrent_compile_and_infer_PAW_BACKEND_03 for the
         # genuine multi-threaded regression coverage this finding requires.
         self._lock = threading.Lock()
+        # J-3: default False -- see MockAdapterMiss's docstring for why this must
+        # never change process-wide.
+        self.strict_misses = strict_misses
 
     def _put_adapter_locked(self, adapter_path: str, adapter_data: Dict[str, Any]) -> None:
         """Insert/replace an entry and evict the least-recently-used one past the cap.
@@ -211,7 +227,16 @@ class MockPAWBackend(AbstractPAWBackend):
             if adapter.get("default_response") is not None:
                 return adapter["default_response"]
 
-        # 4. Fallback deterministic output
+        # 4. Fallback deterministic output -- or, opt-in (J-3), a hard failure
+        # instead of a plausible-looking sentinel a caller's own validation
+        # cannot distinguish from a real answer.
+        if self.strict_misses:
+            raise MockAdapterMiss(
+                f"MockPAWBackend(strict_misses=True): no rule, example or "
+                f"default_response matched {input_text!r} for adapter "
+                f"{adapter_path!r}. The non-strict default would silently "
+                f"return the '[mock:{input_text}]' sentinel instead."
+            )
         return f"[mock:{input_text}]"
 
     def is_available(self) -> bool:
