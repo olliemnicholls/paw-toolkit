@@ -1185,6 +1185,9 @@ def test_anchor_stripping_honours_backslash_escapes_S_7() -> None:
     assert _strip_anchors(r"^\$[0-9]+\.[0-9]{2}$") == r"\$[0-9]+\.[0-9]{2}"
     assert _strip_anchors("a\\\\$") == "a\\\\", "an escaped backslash does not escape the anchor"
     assert _strip_anchors(r"[a$]") == r"[a$]", "a dollar inside a class is not a trailing anchor"
+    assert _strip_anchors(r"\$") == r"\$", "a backslash at index 0 still escapes the anchor"
+    assert _strip_anchors("^") == "", "a pattern that is nothing but anchors strips to empty"
+    assert _strip_anchors("$$") == "", "every unescaped trailing anchor goes, not just the last"
 
 
 def test_currency_pattern_keeps_its_dollar_sign_S_7() -> None:
@@ -1331,6 +1334,105 @@ def test_stacked_quantifiers_render_as_a_regex_python_re_accepts_S_3(pattern_src
     pat = pydantic_to_regex(model, anchors=False)
     _re.compile(pat)  # the failure mode is this line raising
     interegular.parse_pattern(pat).to_fsm()  # ... and the decoder must take it too
+
+
+# The exact rendering, pinned. The compiled regex is a user-facing artefact --
+# `examples/pii_scrubber/README.md` tells readers to inspect it, it is what `loader.py`
+# hands the backend, and it is embedded verbatim in `measurements/*.json` -- and its
+# length is bounded (`logits_processor._MAX_PATTERN_LENGTH`), so "same language,
+# different spelling" is not a free pass. Every entry below is a spelling the renderer
+# is required to choose, not merely one it happens to produce.
+RENDERING_CASES = [
+    (r"[abc]", "[a-c]"),               # contiguous runs collapse into a range
+    (r"[a-cx]", "[a-cx]"),             # ... and a stray member stays a member
+    (r"[0-9]{5}", "[0-9]{5}"),         # tests/test_schema.py:416 depends on this exactly
+    (r"\d", "[0-9]"),                  # shorthand -> explicit, read alike by both engines
+    (r"a*", "a*"),
+    (r"a+", "a+"),
+    (r"a?", "a?"),
+    (r"x{0,1}", "x?"),
+    (r"a{1,1}", "a{1}"),               # min == max collapses
+    (r"a{2,}", "a{2,}"),               # open-ended is NOT "+"
+    (r"a{0,3}", "a{0,3}"),             # bounded-from-zero is NOT "?"
+    (r"(cat|dog)s?", "(?:cat|dog)s?"), # exactly one group, not two
+    (r"(cat|dog)+", "(?:cat|dog)+"),   # ... and a quantified group is not re-wrapped
+    (r"(?:ab){2}", "(?:ab){2}"),
+    (r"[ a]", "[ a]"),                 # a printable space stays a space, not `\x20`
+    (r"\s", " "),                      # ... including where it is the whole class
+    (r".{3}", '[^\\x00-\\x1f"\\\\\\x7f-\\x9f]{3}'),  # no redundant (?:...) around a class
+]
+
+
+@pytest.mark.parametrize("pattern_src,expected", RENDERING_CASES,
+                         ids=[c[0] for c in RENDERING_CASES])
+def test_translator_renders_the_documented_spelling_S_3(pattern_src: str, expected: str) -> None:
+    """The renderer's output spelling is part of its contract, not an implementation detail."""
+    from paw_kit.schema.grammar import _translate_field_pattern
+
+    assert _translate_field_pattern(pattern_src) == expected
+
+
+def test_translated_regex_carries_no_raw_control_characters_S_3() -> None:
+    """Control characters are emitted as `\\xHH`, never raw.
+
+    They reach the output only in the excluded list of a negated class, where a raw
+    byte would be legal to both engines but would put unprintable characters into a
+    string users read, diff and embed in measurement artefacts.
+    """
+    from paw_kit.schema.grammar import _translate_field_pattern
+
+    for pattern_src in (r".*", r"[^a]+", r"[^\n]+"):
+        rendered = _translate_field_pattern(pattern_src)
+        assert all(ord(c) >= 0x20 and not 0x7F <= ord(c) <= 0x9F for c in rendered), (
+            f"{pattern_src!r} rendered raw control characters: {rendered!r}"
+        )
+
+
+def test_ascii_restriction_applies_only_to_shorthand_classes_S_3b() -> None:
+    """Rule 2 is scoped to `\\d \\D \\w \\W \\s \\S`, and must not leak onto other escapes.
+
+    `[^\\n]` is a negated class built from a non-shorthand escape: all three engines
+    agree it matches a non-ASCII character, so ASCII-restricting it would narrow the
+    grammar for no reason and make an ordinary accented value unreachable.
+    """
+    import re as _re
+
+    model = create_model("NotNewline", x=(str, Field(pattern=r"[^\n]+")))
+    model(x="café")  # pydantic accepts it
+    pat = pydantic_to_regex(model, anchors=False)
+    assert _re.fullmatch(pat, '{"x":"café"}') is not None, (
+        "the ASCII restriction leaked onto a non-shorthand negated class"
+    )
+
+
+def test_empty_intersection_message_names_the_offending_characters_S_3() -> None:
+    """The refusal says which characters JSON forbids, and only mentions quotes for quotes."""
+    from paw_kit.schema.grammar import _translate_field_pattern
+
+    with pytest.raises(PAWSchemaError) as quote_exc:
+        _translate_field_pattern(r'a"b')
+    assert "the literal '\"'" in str(quote_exc.value)
+    assert "double quote characters are forbidden" in str(quote_exc.value)
+
+    with pytest.raises(PAWSchemaError) as tab_exc:
+        _translate_field_pattern(r"\t+")
+    assert "double quote" not in str(tab_exc.value), (
+        "a tab-only class is refused for its own reason, not with the quote explanation"
+    )
+
+
+def test_refusal_names_the_construct_it_cannot_compile_S_3() -> None:
+    """The success criterion is "raises PAWSchemaError NAMING the construct", not just raises.
+
+    `\b` has two ways of failing: interegular refuses it as a reserved escape outside a
+    character class, and *inside* one it is a backspace, whose JSON-safe intersection is
+    empty. Both refuse, but only the first tells the author what is wrong with their
+    pattern -- so the message, not merely the exception type, is the assertion.
+    """
+    from paw_kit.schema.grammar import _translate_field_pattern
+
+    with pytest.raises(PAWSchemaError, match=r"Escape \\b is not implemented"):
+        _translate_field_pattern(r"\bfoo\b")
 
 
 def test_interegular_ast_surface_is_still_what_the_translator_expects() -> None:

@@ -432,10 +432,15 @@ def _render_node(node: Any, flags: REFlags, source: str) -> Tuple[str, bool]:
     `is_atomic` says whether a quantifier can be appended directly, which is what keeps
     the output free of gratuitous `(?:...)` wrapping.
     """
-    if node is _EMPTY or isinstance(node, type(_EMPTY)):
+    # `__DotCls` and `__EmptyCls` are name-mangled inside `interegular.patterns` and are
+    # not importable by name, so they are reached through the singletons the parser
+    # actually returns. `isinstance` rather than `is`: the singletons are the only
+    # instances the parser makes today, but a type check does not silently mistranslate
+    # if that ever stops being true.
+    if isinstance(node, type(_EMPTY)):
         return "", True
 
-    if node is _DOT or isinstance(node, type(_DOT)):
+    if isinstance(node, type(_DOT)):
         excluded: FrozenSet[str] = frozenset() if flags & REFlags.SINGLE_LINE else frozenset("\n")
         return _render_char_set(*_char_set_intersect((False, excluded), (False, _JSON_UNSAFE_CHARS))), True
 
