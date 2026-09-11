@@ -477,3 +477,112 @@ def test_schema_script_discards_a_generation_before_each_arm_and_writes_a_summar
     assert '"comparison_warm": comparison' in writer
     assert '"warmup_generations_discarded_per_arm": 1' in writer
     assert "compare_arm_means(" in src
+
+
+# ==============================================================================  B-6
+#
+# (a) `measure_semantic_correctness.py` folded `suite.standard_cases` and then scored the
+# same cases. (b) The adapter was named `{task}-{compiler}.paw`, so the 0-example and
+# 8-example runs overwrote each other -- which is how the constrained-upstream section came
+# to be measured against an 8-example adapter.
+
+_SPEC_DRAFTS = _MEASUREMENTS / "spec-drafts"
+
+
+def _suite_cases(name: str) -> list:
+    import yaml
+    return yaml.safe_load((_SPEC_DRAFTS / name).read_text())["standard_cases"]
+
+
+def test_semantic_adapter_path_carries_max_spec_examples() -> None:
+    """Report §5's named test for B-6(b): two `max_spec_examples` must not collide.
+
+    `measurements/phone_extractor-paw-4b-qwen3-0.6b.paw` has
+    `examples_folded_into_spec: 8` because the 8-example run overwrote the 0-example one at
+    the same path, and `measure_constrained_decoding_upstream.py` then read that path.
+    """
+    msc = _load("measure_semantic_correctness")
+    zero = msc.adapter_filename("phone_extractor", "paw-4b-qwen3-0.6b", 0)
+    eight = msc.adapter_filename("phone_extractor", "paw-4b-qwen3-0.6b", 8)
+    assert zero != eight
+    assert "0" in zero and "8" in eight
+    assert zero.endswith(".paw") and eight.endswith(".paw")
+    # The colliding name must be gone from the script entirely.
+    src = (_SCRIPTS / "measure_semantic_correctness.py").read_text()
+    assert '''f"{suite_dict['task_name']}-{args.compiler}.paw"''' not in src
+    assert "adapter_filename(" in src
+    # And the old colliding path is the one the committed artifact was produced at, which
+    # is why it cannot simply be reused.
+    assert msc.adapter_filename("phone_extractor", "paw-4b-qwen3-0.6b", 8) != \
+        "phone_extractor-paw-4b-qwen3-0.6b.paw"
+
+
+def test_semantic_folded_inputs_do_not_appear_in_scored_results() -> None:
+    """Report §5's named test for B-6(a), over the real committed suites.
+
+    Whatever is folded into the spec is removed from the suite before the runner sees it,
+    so it cannot be in the scored denominator.
+    """
+    msc = _load("measure_semantic_correctness")
+    for suite_file in ("spec-1-json-repair.yaml", "spec-2-phone-extractor.yaml",
+                       "spec-3-review-sentiment.yaml"):
+        cases = _suite_cases(suite_file)
+        for k in range(1, len(cases) + 1):
+            folded, scored = msc.split_fold_and_eval(cases, k)
+            folded_inputs = {c["input"] for c in folded}
+            scored_inputs = {c["input"] for c in scored}
+            assert folded_inputs & scored_inputs == set(), (suite_file, k)
+            # A partition: nothing invented, nothing lost.
+            assert len(folded) + len(scored) == len(cases), (suite_file, k)
+            assert len(folded) == min(k, sum(1 for c in cases if c.get("expected")))
+            # Drawn from the tail, so the ids recorded in the artifact are exactly what the
+            # backend folds (it takes `examples[:limit]`).
+            assert folded == [c for c in cases if c in folded]
+            assert msc.fold_case_ids(cases, folded)[0].startswith("standard_cases[")
+
+
+def test_semantic_zero_examples_folds_nothing_and_scores_everything() -> None:
+    """The committed terse-spec runs used `--max-spec-examples 0`; they must not move."""
+    msc = _load("measure_semantic_correctness")
+    cases = _suite_cases("spec-2-phone-extractor.yaml")
+    for k in (0, -1):
+        folded, scored = msc.split_fold_and_eval(cases, k)
+        assert folded == []
+        assert scored == cases
+
+
+def test_semantic_fold_split_skips_cases_with_no_expected_output() -> None:
+    """A case with no `expected` cannot be a few-shot example, so it is never folded."""
+    msc = _load("measure_semantic_correctness")
+    cases = [
+        {"input": "a", "expected": "A"},
+        {"input": "b"},
+        {"input": "c", "expected": "C"},
+    ]
+    folded, scored = msc.split_fold_and_eval(cases, 2)
+    assert [c["input"] for c in folded] == ["a", "c"]
+    assert [c["input"] for c in scored] == ["b"]
+    assert msc.fold_case_ids(cases, folded) == ["standard_cases[0]", "standard_cases[2]"]
+
+
+def test_semantic_summary_records_the_adapter_identity_and_the_held_out_ids() -> None:
+    """B-6's third clause: `program_id` and `examples_folded_into_spec` in every artifact.
+
+    The committed artifacts record neither, which is why the constrained-upstream section
+    could be attributed to the wrong adapter for two days without anything noticing.
+    """
+    src = (_SCRIPTS / "measure_semantic_correctness.py").read_text()
+    summary_block = src[src.index('summary = {\n        "label": args.label,'):]
+    for key in ("program_id", "examples_folded_into_spec", "folded_case_ids",
+                "folded_inputs", "standard_cases_total", "standard_cases_scored",
+                "scored_rows_folded_into_spec", "adapter_path"):
+        assert f'"{key}"' in summary_block, key
+    # The runtime guard that makes `scored_rows_folded_into_spec: 0` an assertion and not
+    # just a hopeful field.
+    assert "folded case(s) appear in the scored results" in src
+    assert "which is the B-6(a) leak" in src
+    committed = json.loads(
+        (_MEASUREMENTS / "semantic-phone_extractor-3080-fewshot8-20260909-005717.json").read_text()
+    )
+    assert "program_id" not in committed
+    assert "folded_case_ids" not in committed

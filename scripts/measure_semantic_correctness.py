@@ -68,6 +68,61 @@ best-effort answer both count as correct; silently returning something misleadin
 Respond with EXACTLY one line: "YES: <reason, <15 words>" or "NO: <reason, <15 words>"."""
 
 
+# --------------------------------------------------------------------- B-6: the fold split
+#
+# (a) `examples` used to be built from the whole of `suite.standard_cases`, and `TestRunner`
+#     then scored those same cases -- 8 of 134 eval cases were memorisable from the adapter's
+#     own prompt. (b) The adapter was named `{task}-{compiler}.paw` with no
+#     `max_spec_examples` in it, so the `0` and `8` runs overwrote each other. That is how
+#     the constrained-upstream section came to be measured against an 8-example adapter
+#     while its narrative describes the terse-spec one: the committed
+#     `phone_extractor-paw-4b-qwen3-0.6b.paw` has `examples_folded_into_spec: 8`.
+#
+# The folding pool is now drawn from the tail of `standard_cases`, those cases are removed
+# from what gets scored, their ids are recorded in the artifact, and `main()` refuses to
+# continue if any of them turns up in the scored results anyway.
+#
+# Note the report's suggested `few_shot_cases:` suite key is deliberately NOT the fix here:
+# that is library code (`paw_kit/test/suite.py`) and out of scope for this track.
+
+
+def split_fold_and_eval(cases: list, max_spec_examples: int) -> tuple[list, list]:
+    """Partition raw `standard_cases` dicts into (folded, scored). Pure.
+
+    The folding pool is the **tail** of the eligible cases -- eligible meaning they carry
+    an `expected`, since a case with no expected output cannot be a few-shot example. The
+    tail rather than the head because the backend folds `examples[:limit]`: passing exactly
+    the cases to be folded makes `folded_case_ids` an exact record of what went into the
+    spec rather than a prediction about how the backend will truncate.
+
+    `max_spec_examples <= 0` folds nothing and scores everything, which is the
+    2026-09-09 terse-spec configuration and stays byte-identical in behaviour.
+    """
+    if max_spec_examples <= 0:
+        return [], list(cases)
+    eligible = [i for i, c in enumerate(cases) if c.get("expected")]
+    fold_idx = set(eligible[-max_spec_examples:])
+    folded = [cases[i] for i in sorted(fold_idx)]
+    scored = [c for i, c in enumerate(cases) if i not in fold_idx]
+    return folded, scored
+
+
+def fold_case_ids(cases: list, folded: list) -> list:
+    """Stable ids for the folded cases: their index in the original `standard_cases`."""
+    by_id = {id(c): i for i, c in enumerate(cases)}
+    return [f"standard_cases[{by_id[id(c)]}]" for c in folded]
+
+
+def adapter_filename(task_name: str, compiler: str, max_spec_examples: int) -> str:
+    """B-6(b): `max_spec_examples` belongs in the path.
+
+    Without it a 0-example run and an 8-example run of the same task and compiler write to
+    the same file, the second silently replacing the first, and any later script pointed at
+    that path measures whichever ran last.
+    """
+    return f"{task_name}-{compiler}-fold{max_spec_examples}.paw"
+
+
 def judge(client: "anthropic.Anthropic", spec: str, inp: str, output: str) -> tuple[bool, str]:
     resp = client.messages.create(
         model=JUDGE_MODEL,
@@ -105,9 +160,27 @@ def main() -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    adapter_path = str(out_dir / f"{suite_dict['task_name']}-{args.compiler}.paw")
+    adapter_path = str(out_dir / adapter_filename(
+        suite_dict["task_name"], args.compiler, args.max_spec_examples))
     suite_dict["adapter_path"] = adapter_path
     suite_dict.setdefault("active_learning", {})["teacher_model"] = JUDGE_MODEL
+
+    # B-6(a): hold the folding pool out of the suite that gets scored, before the suite
+    # object is built, so the runner never sees those cases at all.
+    all_standard_cases = list(suite_dict.get("standard_cases") or [])
+    folded_cases, scored_cases = split_fold_and_eval(
+        all_standard_cases, args.max_spec_examples)
+    folded_case_ids = fold_case_ids(all_standard_cases, folded_cases)
+    folded_inputs = {c["input"] for c in folded_cases}
+    suite_dict["standard_cases"] = scored_cases
+    print(f"[fold] standard_cases={len(all_standard_cases)} "
+          f"folded={len(folded_cases)} scored={len(scored_cases)} "
+          f"folded_case_ids={folded_case_ids}")
+    if folded_inputs & {c["input"] for c in scored_cases}:
+        raise RuntimeError(
+            "a folded case is still in the scored set, which is the B-6(a) leak: "
+            f"{sorted(folded_inputs & {c['input'] for c in scored_cases})}"
+        )
 
     tmp_suite_path = out_dir / f"_tmp_{suite_dict['task_name']}_suite.yaml"
     tmp_suite_path.write_text(yaml.dump(suite_dict))
@@ -125,8 +198,11 @@ def main() -> int:
     # the terse-spec baseline it was supposed to be compared against. --max-spec-examples
     # only configured the backend's *cap*; with no examples ever passed in, there was
     # nothing for that cap to apply to. Fixed: build real examples from the suite's own
-    # standard_cases, same convention as scripts/measure_real_backend.py.
-    examples = [{"input": c.input, "output": c.expected} for c in suite.standard_cases if c.expected]
+    # standard_cases.
+    #
+    # B-6(a), 2026-09-11: and those examples now come from the held-out tail only, so no
+    # case the adapter was shown is also scored.
+    examples = [{"input": c["input"], "output": c["expected"]} for c in folded_cases]
     examples_used = min(len(examples), args.max_spec_examples)
     print(f"[compile] task={suite.task_name!r} spec={suite.spec!r} "
           f"max_spec_examples={args.max_spec_examples} examples_available={len(examples)} "
@@ -134,7 +210,11 @@ def main() -> int:
     t0 = time.perf_counter()
     backend.compile(suite.spec, examples, adapter_path)
     compile_s = time.perf_counter() - t0
-    print(f"[compile] done in {compile_s:.1f}s -> {adapter_path}")
+    manifest = json.loads(Path(adapter_path).read_text())
+    print(f"[compile] done in {compile_s:.1f}s -> {adapter_path} "
+          f"(program {manifest.get('program_id')}, "
+          f"folded={manifest.get('examples_folded_into_spec')}, "
+          f"public={manifest.get('public')})")
 
     # structural pass/fail via the real TestRunner (standard cases + fuzzer)
     runner = TestRunner(backend=backend)
@@ -168,11 +248,34 @@ def main() -> int:
         print(f"  [{('OK' if sem_ok else 'BAD'):3s} sem | {('OK' if structurally_ok else 'BAD'):3s} struct] "
               f"{r.input[:40]!r:42s} -> {r.output[:40]!r:42s} ({reason}){tag}")
 
+    leaked = [r for r in rows if r["input"] in folded_inputs]
+    if leaked:  # pragma: no cover -- held out above; asserted so it cannot come back
+        raise RuntimeError(
+            f"{len(leaked)} folded case(s) appear in the scored results: "
+            f"{[r['input'] for r in leaked]}"
+        )
+
     summary = {
         "label": args.label,
         "task_name": suite.task_name,
         "spec": suite.spec,
         "max_spec_examples": args.max_spec_examples,
+        "adapter_path": adapter_path,
+        # B-6(b): the adapter's identity, mirrored into every artifact, so which adapter
+        # produced which table is recoverable without the gitignored .paw file.
+        "program_id": manifest.get("program_id"),
+        "examples_folded_into_spec": manifest.get("examples_folded_into_spec"),
+        "public": manifest.get("public"),
+        "spec_sha256": manifest.get("spec_sha256"),
+        "full_spec_sha256": manifest.get("full_spec_sha256"),
+        "compiler": args.compiler,
+        "compile_wall_s": compile_s,
+        # B-6(a): which cases were held out of the scored denominator, and the denominator.
+        "standard_cases_total": len(all_standard_cases),
+        "standard_cases_scored": len(scored_cases),
+        "folded_case_ids": folded_case_ids,
+        "folded_inputs": sorted(folded_inputs),
+        "scored_rows_folded_into_spec": len(leaked),
         "judge_model": JUDGE_MODEL,
         "total_cases": report.total_cases,
         "structural_pass_rate": report.pass_rate,
