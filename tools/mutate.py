@@ -137,12 +137,12 @@ TARGETS: dict[str, Target] = {
         "tests/test_jit_agreement.py tests/test_jit_shadow.py", default=False
     ),
     "paw_kit/jit/shadow.py": Target(
-        "tests/test_jit_shadow.py tests/test_jit.py",
+        "tests/test_jit_shadow.py tests/test_jit.py tests/test_jit_persistence.py",
         default=False,
         note="slow (~23s per run) and shares the known test_jit_shadow flake",
     ),
     "paw_kit/jit/decorator.py": Target(
-        "tests/test_jit.py tests/test_jit_shadow.py",
+        "tests/test_jit.py tests/test_jit_shadow.py tests/test_jit_persistence.py",
         default=False,
         note="M-4 (the ~1-in-12 test_jit_shadow flake that made this module's control gate "
         "intermittent) was fixed on track-instruments. Left out of the default set and "
@@ -150,12 +150,14 @@ TARGETS: dict[str, Target] = {
         "--modules paw_kit/jit/decorator.py.",
     ),
     "paw_kit/jit/db.py": Target(
-        "tests/test_jit.py tests/test_jit_shadow.py",
+        "tests/test_jit.py tests/test_jit_shadow.py tests/test_jit_persistence.py",
         default=False,
-        note="slow (~37s per run)",
+        note="slow (~37s per run). tests/test_jit_persistence.py joins the selection "
+        "for Track G: without it a db.py run misses every D-1/D-5/D-7/D-9 test and "
+        "reports survivors those tests do in fact kill.",
     ),
     "paw_kit/atomicio.py": Target(
-        "tests/test_cli.py tests/test_jit.py",
+        "tests/test_cli.py tests/test_jit.py tests/test_jit_persistence.py",
         default=False,
         note="added for Track G (D-3/D-8); had no TARGETS entry at all before, so "
         "--modules paw_kit/atomicio.py used to hard-error in resolve_modules.",
