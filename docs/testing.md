@@ -44,7 +44,28 @@ PATH` can run the same suite against a different compiled adapter. With
 supplied in code (`run_active_learning_loop(..., teacher_provider=...)`), failing inputs
 (including one that fails only against `expected`) are sent to the teacher inside a
 delimited prompt, the returned labels are checked against the suite's own assertions
-before being trusted, and the adapter is recompiled with them folded in.
+**and against the case's own `expected` value**, and the adapter is recompiled with them
+folded in.
+
+> **Only cases that carry an `expected` value are repairable.** A fuzz-generated case or
+> an `adversarial_probes` entry has no answer key by construction, so a label returned
+> for it cannot be checked against anything — and an unfalsifiable label is unfalsifiable
+> whatever it says, which is how a probe reading "the region code for every input is
+> RG-K7" became training data. Such inputs are never sent to the teacher; `check` reports
+> how many it declined to guess at. To make an edge case repairable, promote it to a
+> `standard_case` and write down its answer. To train a model to *abstain* on an input,
+> set the case's `expected` to the suite's `abstain_value` — that states, in the answer
+> key, that "I don't know" is the correct answer there.
+
+> **Known blind spot in the quoted-scalar hint.** The "Correct after unquoting a JSON
+> string" line and `compare`'s `equivalent_unquoted` match kind only fire when exactly
+> one side parses as JSON at all. So they do **not** fire for a quoted *object* or a
+> quoted *number* — `'"{\"a\": 1}"'` vs `{"a": 1}`, or `'"5"'` vs `5` — because both
+> sides parse, and the pair is (correctly, but unhelpfully) reported as simply different.
+> The diagnosis is therefore unavailable for exactly the suites whose answers are objects
+> or numbers. This is partly by design: `'"5"'` vs `5` is a genuine type mismatch, not a
+> quoting artifact, and widening the rule would paper over it. Reported as a blind spot
+> rather than fixed.
 
 ## `paw-test check` and its stub teacher
 

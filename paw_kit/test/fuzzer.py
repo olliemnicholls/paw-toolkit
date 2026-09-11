@@ -1,5 +1,6 @@
 """Adversarial mutation fuzzer for neural adapter robustness testing."""
 
+from dataclasses import dataclass, field
 from typing import List, Optional
 from paw_kit.test.suite import FuzzingConfig
 
@@ -30,6 +31,27 @@ WHITESPACE_MUTATIONS = [
 ]
 
 
+@dataclass(frozen=True)
+class FuzzGenerationResult:
+    """What `AdversarialFuzzer.generate_detailed` produced, including what it dropped.
+
+    H-12: `generate()` returns `unique_fuzzed[:500]` and said nothing about the
+    remainder. Custom probes were appended *first*, so a suite with more than 500 of
+    them silently truncated away every generated category -- verified by the bug hunt:
+    no zero-width space appeared anywhere in the generated set while the suite reported
+    `inject_unicode: true`. A whole enabled mutation category ran zero cases and nothing
+    said so.
+    """
+
+    cases: List[str] = field(default_factory=list)
+    #: How many unique cases were generated and then cut by the total cap.
+    dropped_count: int = 0
+
+    @property
+    def generated_count(self) -> int:
+        return len(self.cases)
+
+
 class AdversarialFuzzer:
     """Generates synthetic adversarial and edge-case inputs for test harnesses."""
 
@@ -47,12 +69,21 @@ class AdversarialFuzzer:
 
         Returns:
             List of unique adversarial input strings.
+
+        Kept as the list-returning entry point every existing caller uses. Use
+        `generate_detailed` where the dropped count matters (H-12).
         """
+        return cls.generate_detailed(config, base_inputs).cases
+
+    @classmethod
+    def generate_detailed(
+        cls,
+        config: FuzzingConfig,
+        base_inputs: Optional[List[str]] = None,
+    ) -> FuzzGenerationResult:
+        """`generate`, plus how many cases the total cap dropped (H-12)."""
         seeds = base_inputs or ["example input"]
         fuzzed: List[str] = []
-
-        # 1. Custom domain probes from suite.yaml
-        fuzzed.extend(config.adversarial_probes)
 
         # 2. Empty inputs
         if config.empty_inputs:
@@ -84,6 +115,21 @@ class AdversarialFuzzer:
                 repeat_count = max(1, min(200, _MAX_PAYLOAD_EXTREME_LENGTH // max(1, len(seed))))
                 fuzzed.append(seed * repeat_count)
 
+        # 1. Custom domain probes from suite.yaml -- appended LAST (H-12).
+        #
+        # They used to come first, which interacts badly with the total cap below: a
+        # suite with more than _MAX_FUZZED_CASES custom probes consumed the entire
+        # budget, and every generated category was truncated away in full while the
+        # suite still declared it enabled. The bug hunt verified this -- not one
+        # zero-width space appeared in the generated set of a suite with
+        # `inject_unicode: true`.
+        #
+        # Ordering last means the generated categories -- which a suite cannot
+        # over-supply, since their count is bounded by the enabled flags and the seed
+        # count -- always get their turn, and it is the (unbounded, author-supplied)
+        # probe list that gets cut. The cut is now reported rather than silent.
+        fuzzed.extend(config.adversarial_probes)
+
         # Deduplicate while preserving order
         seen = set()
         unique_fuzzed: List[str] = []
@@ -96,4 +142,7 @@ class AdversarialFuzzer:
         # attacker-controlled adversarial_probes list (or a large seed count feeding
         # whitespace_flood/inject_unicode's per-seed multiplication) could otherwise
         # multiply the number of cases TestRunner.run() has to execute without limit.
-        return unique_fuzzed[:_MAX_FUZZED_CASES]
+        kept = unique_fuzzed[:_MAX_FUZZED_CASES]
+        return FuzzGenerationResult(
+            cases=kept, dropped_count=len(unique_fuzzed) - len(kept)
+        )

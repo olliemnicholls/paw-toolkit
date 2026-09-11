@@ -7,6 +7,7 @@
   "errored_cases": 0,
   "abstained_cases": 0,
   "standard_cases_count": 2,
+  "fuzz_cases_dropped": 0,
   "expected_total": 2,
   "expected_matched": 1,
   "expected_abstained": 0,

@@ -1629,3 +1629,88 @@ def test_h1_check_refuses_a_missing_adapter_on_the_read_only_path(
     )
     result2 = runner.invoke(paw_test_app, ["check", "suite2.yaml"])
     assert "does not exist, and recompilation is off" not in strip_ansi(result2.stdout)
+
+
+# =====================================================================================
+# Report section 6, H-16 (bug-hunt-remediation, Track B, Phase B6)
+# =====================================================================================
+
+
+def test_h16_lint_spec_errors_when_examples_file_yields_nothing(tmp_path: Path) -> None:
+    """H-16: unparseable `--examples` lines were skipped individually, so a JSONL file
+    written as a JSON array yielded zero examples and `lint-spec` printed
+    "No issues found." at exit 0 -- having silently run one fewer rule than asked for."""
+    examples = tmp_path / "examples.jsonl"
+    # The exact mistake: a JSON array instead of one object per line. Every line is
+    # unparseable as a standalone object -- the array brackets and the trailing commas.
+    examples.write_text(
+        '[\n  {"input": "a", "output": "(555) 123-4567"},\n'
+        '  {"input": "b", "output": "(555) 765-4321"},\n]\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["lint-spec", "Extract the phone number.", "--examples", str(examples)],
+    )
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 1, out
+    assert "No issues found" not in out
+    assert "yielded no usable examples" in " ".join(out.split())
+
+
+def test_h16_partially_usable_examples_file_warns(tmp_path: Path) -> None:
+    """The partial case, same shape as H-16: a *pretty-printed* JSON array has exactly
+    one line that parses (the last element, which carries no trailing comma), so it
+    slips past the zero-usable check with 1 of 4 examples -- and rule 5, which needs
+    two, quietly does not run."""
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text(
+        '[\n  {"input": "a", "output": "(555) 123-4567"},\n'
+        '  {"input": "b", "output": "(555) 765-4321"}\n]\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    collapsed = " ".join(strip_ansi(result.output).split())
+
+    assert "3 of 4 non-blank line(s)" in collapsed
+    assert "were not usable JSON objects and were skipped" in collapsed
+
+
+def test_h16_single_line_json_array_also_errors(tmp_path: Path) -> None:
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text('[{"input": "a", "output": "b"}]\n', encoding="utf-8")
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    assert result.exit_code == 1
+    assert "yielded no usable examples" in " ".join(strip_ansi(result.output).split())
+
+
+def test_h16_valid_jsonl_is_unaffected(tmp_path: Path) -> None:
+    """The guard must not fire on a file that does work."""
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text(
+        '{"input": "a", "output": "(555) 123-4567"}\n'
+        '{"input": "b", "output": "(555) 765-4321"}\n',
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    assert "yielded no usable examples" not in strip_ansi(result.output)
+
+
+def test_h16_an_empty_examples_file_is_not_an_error(tmp_path: Path) -> None:
+    """An empty file supplies no examples and claims none -- distinct from a file full
+    of content that produced nothing, which is the finding."""
+    examples = tmp_path / "examples.jsonl"
+    examples.write_text("\n\n", encoding="utf-8")
+    result = runner.invoke(
+        app, ["lint-spec", "Extract the phone number.", "--examples", str(examples)]
+    )
+    assert "yielded no usable examples" not in strip_ansi(result.output)

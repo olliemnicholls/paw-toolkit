@@ -61,6 +61,37 @@ class _BoundedSafeLoader(yaml.SafeLoader):
                 )
         return super().compose_node(parent, index)
 
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        """Reject a mapping with a duplicate key (H-13).
+
+        PyYAML inherits last-key-wins from the YAML spec's "recommended" handling, so a
+        suite.yaml with two `standard_cases:` blocks parses cleanly and silently runs
+        only the second -- the cases in the first are never executed and nothing says
+        so. That is the same "no signal until you go read the per-case output" shape as
+        `_validate_value`'s unknown-rule check, and it is worse here because the
+        *count* looks plausible either way.
+
+        Overridden on this existing subclass rather than registered as a new
+        constructor: this loader already exists for the alias-bomb cap, and a second
+        loader class would be one more thing to keep in sync with `load_suite`.
+        """
+        mapping = set()
+        for key_node, _value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                hashable = key in mapping
+            except TypeError:  # an unhashable key -- let the base class report it
+                continue
+            if hashable:
+                raise ValueError(
+                    f"Duplicate key {key!r} in the suite YAML (line "
+                    f"{key_node.start_mark.line + 1}). YAML silently keeps only the last "
+                    "one, so the earlier block would never run -- two `standard_cases:` "
+                    "blocks means half the suite is dead. Merge them."
+                )
+            mapping.add(key)
+        return super().construct_mapping(node, deep=deep)
+
 
 class AssertionRule(BaseModel):
     """Rule constraining adapter generation outputs."""

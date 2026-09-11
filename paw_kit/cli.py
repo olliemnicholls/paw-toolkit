@@ -446,6 +446,15 @@ def _print_run_headline(report: TestRunReport, actual_backend: str) -> None:
             "-- the backend raised on these cases, so the adapter never actually ran on "
             "them. Every errored case counts as a failure."
         )
+    if report.fuzz_cases_dropped:
+        # H-12: the cap cut cases this suite asked for. Silent truncation meant a whole
+        # enabled mutation category could run zero cases while the suite said it was on.
+        console.print(
+            f"[bold yellow]Warning:[/bold yellow] {_e(report.fuzz_cases_dropped)} generated "
+            "fuzz case(s) were dropped by the fuzzer's total cap and never run. This suite "
+            "asked for more cases than the cap allows; reduce `fuzzing.adversarial_probes` "
+            "or the number of standard_cases seeding the generators."
+        )
     if report.abstained_cases:
         console.print(
             f"[bold]Abstained:[/bold] {_e(report.abstained_cases)}/{_e(report.total_cases)} "
@@ -1590,16 +1599,45 @@ def lint_spec_cmd(
             )
             raise typer.Exit(code=1)
         examples_list = []
+        nonblank_lines = 0
         for line in examples_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
+            nonblank_lines += 1
             try:
                 parsed = json.loads(line)
             except ValueError:
                 continue
             if isinstance(parsed, dict):
                 examples_list.append(parsed)
+        # H-16: unparseable lines are skipped individually, so a JSONL file written as a
+        # JSON array (one long `[{...}, {...}]` line, or pretty-printed across many)
+        # yielded zero examples -- and `lint-spec` then printed "No issues found." at
+        # exit 0, having silently run one fewer rule than the user asked for. A supplied
+        # file that produces nothing usable is an error, not a clean result.
+        if nonblank_lines and not examples_list:
+            console.print(
+                f"[bold red]Error:[/bold red] examples file '{_e(examples_file)}' yielded no "
+                f"usable examples from {_e(nonblank_lines)} non-blank line(s). Expected JSONL "
+                "-- one JSON object per line, e.g. "
+                '[cyan]{"input": "...", "output": "..."}[/cyan]. A JSON array (a single '
+                "`[ ... ]` value, or one pretty-printed across several lines) is not JSONL."
+            )
+            raise typer.Exit(code=1)
+        # The partial case, same shape: a *pretty-printed* JSON array has exactly one
+        # line that happens to parse (the last element, which carries no trailing
+        # comma), so it slips past the zero-usable check above with 1 of N examples and
+        # rule 5 -- which needs two -- quietly does not run. Warn rather than error:
+        # unlike zero, a partial read might be a deliberately mixed file.
+        skipped = nonblank_lines - len(examples_list)
+        if skipped:
+            console.print(
+                f"[bold yellow]Warning:[/bold yellow] {_e(skipped)} of {_e(nonblank_lines)} "
+                f"non-blank line(s) in '{_e(examples_file)}' were not usable JSON objects and "
+                f"were skipped; linting {_e(len(examples_list))} example(s). If this file is a "
+                "JSON array rather than JSONL, convert it -- one object per line."
+            )
 
     findings = lint_spec(spec_content, examples=examples_list, schema=schema_model)
 

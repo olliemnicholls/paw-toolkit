@@ -44,7 +44,24 @@ class Finding:
 # ---------------------------------------------------------------------- rule 1
 
 _FORMAT_WORDS = ("format", "consistently", "normalize", "standard")
-_EXAMPLE_MARKERS = ("example", "input:", "output:")
+
+
+def _has_concrete_example(spec: str) -> bool:
+    """Whether `spec` contains an actual demonstration, not just the word "example".
+
+    H-10: the marker list used to include the bare substring `"example"`, so any spec
+    *mentioning* examples ("no examples were given", "for example, dates vary")
+    suppressed `output-format-unpinned` entirely -- the rule that exists because a spec
+    saying "format it consistently" with nothing showing the format scored 0.0%
+    structural pass. A promise of an example is not an example.
+
+    What counts: an `Input:`/`Output:` **pair** (both, not either), an arrow, or a code
+    fence. `Output:` alone is a format instruction, not a demonstration.
+    """
+    lower = spec.lower()
+    if "input:" in lower and "output:" in lower:
+        return True
+    return "->" in spec or "=>" in spec or "```" in spec
 
 
 def check_output_format_unpinned(spec: str) -> List[Finding]:
@@ -63,13 +80,7 @@ def check_output_format_unpinned(spec: str) -> List[Finding]:
     lower = spec.lower()
     if not any(word in lower for word in _FORMAT_WORDS):
         return []
-    has_example = (
-        any(marker in lower for marker in _EXAMPLE_MARKERS)
-        or "->" in spec
-        or "=>" in spec
-        or "```" in spec
-    )
-    if has_example:
+    if _has_concrete_example(spec):  # H-10: an actual demonstration, not the word
         return []
     return [
         Finding(
@@ -97,7 +108,53 @@ _CLOSED_SET_PATTERNS = [
 # A quoted, comma-separated list of two or more labels, e.g. "billing", "technical",
 # "sales" -- either quote style, at least one comma between quoted items.
 _QUOTED_LIST_RE = re.compile(r"""(["'])[^"'\n]+\1\s*,\s*(["'])[^"'\n]+\2""")
-_ABSTAIN_TERMS = ("abstain", "unknown", "other", "none", "not applicable")
+# H-10: an unquoted, parenthesised list -- `priority (low, medium, high, or critical)`.
+# The committed triage spec is written exactly that way and produced **zero** hits, and
+# that is the very task whose adapter leaked a third label.
+_PAREN_LIST_RE = re.compile(r"\(\s*[^()\n]*?,[^()\n]*?\bor\b[^()\n]*?\)", re.IGNORECASE)
+
+_ABSTAIN_TERMS = ("abstain", "unknown", "other", "none", "not applicable", "n/a")
+# H-10: whole words, not substrings. As bare substrings, `"other"` matched inside
+# `another`/`otherwise` and `"none"` inside `nonetheless`, so ordinary prose silenced
+# the rule. `re.escape` because "n/a" carries a slash.
+_ABSTAIN_TERM_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(t) for t in _ABSTAIN_TERMS) + r")\b", re.IGNORECASE
+)
+
+#: Sentence-ish boundaries. Used to bound the search for an abstain term to the
+#: neighbourhood of the enumeration it would have to be an escape hatch *for*.
+_SENTENCE_SPLIT_RE = re.compile(r"[.?!\n]")
+
+
+def _enumeration_windows(spec: str) -> List[str]:
+    """The text an abstain term would have to appear in, per enumeration, to count as
+    that enumeration's escape hatch.
+
+    Two different window sizes, because the two kinds of enumeration delimit themselves
+    differently:
+
+    * A **parenthesised** list is its own window. `priority (low, medium, high, or
+      critical) and department (billing, technical, or unknown)` is one sentence with
+      two enumerations, and `unknown` is an option for *department* only -- `priority`
+      is still a forced choice. Widening to the sentence would call that spec clean.
+    * Everything else (`one of ...`, `either X or Y`, a quoted comma list) has no
+      closing delimiter, so the sentence is the tightest honest bound.
+    """
+    windows = [m.group(0) for m in _PAREN_LIST_RE.finditer(spec)]
+    for pattern in _CLOSED_SET_PATTERNS:
+        windows += [_sentence_around(spec, *m.span()) for m in pattern.finditer(spec)]
+    windows += [_sentence_around(spec, *m.span()) for m in _QUOTED_LIST_RE.finditer(spec)]
+    return windows
+
+
+def _sentence_around(spec: str, start: int, end: int) -> str:
+    """The text between the sentence boundaries either side of `spec[start:end]`."""
+    left = 0
+    for m in _SENTENCE_SPLIT_RE.finditer(spec, 0, start):
+        left = m.end()
+    right_match = _SENTENCE_SPLIT_RE.search(spec, end)
+    right = right_match.start() if right_match else len(spec)
+    return spec[left:right]
 
 
 def check_forced_choice_no_abstain(spec: str) -> List[Finding]:
@@ -109,22 +166,33 @@ def check_forced_choice_no_abstain(spec: str) -> List[Finding]:
     ambiguous input -- the model found the forced binary unanswerable for that input
     and leaked outside the contract rather than silently picking one. The suite's own
     `not_contains: neutral` assertion (correctly) failed every time.
+
+    **H-10, two fixes, and the first alone is not enough.** The abstain check was a bare
+    substring scan of the whole spec, so `"other"` matched inside `another`/`otherwise`
+    and `"none"` inside `nonetheless`. Whole-word matching fixes that class -- but not
+    the case that was actually measured: this project's own lookup spec matches the
+    closed-set pattern, offers no abstain option, and was silent **solely because the
+    spec contains the phrase "a city in some other country"**, where `other` is a
+    perfectly good whole word. An abstain term is only an escape hatch if it is offered
+    *for the enumeration*, so the search is bounded to the sentence containing it.
     """
-    has_closed_set = any(p.search(spec) for p in _CLOSED_SET_PATTERNS) or bool(
-        _QUOTED_LIST_RE.search(spec)
-    )
-    if not has_closed_set:
+    windows = _enumeration_windows(spec)
+    if not windows:
         return []
-    lower = spec.lower()
-    if any(term in lower for term in _ABSTAIN_TERMS):
+    # Fires unless EVERY enumeration has an escape hatch in its own window: a spec that
+    # offers "unknown" for `department` and nothing for `priority` still forces a choice
+    # on `priority`.
+    if all(_ABSTAIN_TERM_RE.search(w) for w in windows):
         return []
     return [
         Finding(
             "forced-choice-no-abstain",
             "warn",
             "Spec enumerates a closed label set (\"one of\", \"either X or Y\", "
-            '"positive or negative", or a quoted comma list) with no '
-            "abstain/unknown/other/none/\"not applicable\" option. A real compiled "
+            '"positive or negative", a quoted comma list, or a parenthesised '
+            '"(a, b, or c)" list) with no '
+            "abstain/unknown/other/none/\"not applicable\" option offered alongside "
+            "that enumeration. A real compiled "
             'sentiment adapter told strictly "positive or negative" still leaked a '
             'third label, "neutral", on ambiguous input rather than force a coin-flip '
             '(measurements/README.md, "Terse, docs-style specs"). Add an explicit '

@@ -180,3 +180,114 @@ def test_lint_spec_clean_input_yields_no_findings():
     )
     findings = lint_spec(spec)
     assert findings == []
+
+
+# =====================================================================================
+# Report section 6, H-10 (bug-hunt-remediation, Track B, Phase B6)
+# =====================================================================================
+
+import yaml as _yaml  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+from paw_kit.speclint import (  # noqa: E402
+    check_forced_choice_no_abstain,
+    check_output_format_unpinned,
+)
+
+_REPO = _Path(__file__).parent.parent
+
+
+def _committed_spec(relpath: str) -> str:
+    return _yaml.safe_load((_REPO / relpath).read_text(encoding="utf-8"))["spec"]
+
+
+def test_h10_forced_choice_fires_on_the_committed_lookup_spec() -> None:
+    """H-10: this project's own lookup spec matches the closed-set pattern ("one of
+    RG-K7, RG-M2, ...") and offers no abstain option, yet the rule was silent -- solely
+    because the spec contains the phrase "a city in some other country", where the bare
+    substring `"other"` matched."""
+    findings = check_forced_choice_no_abstain(
+        _committed_spec("measurements/finetune-lookup-suite-A.yaml")
+    )
+    assert [f.rule_id for f in findings] == ["forced-choice-no-abstain"]
+
+
+def test_h10_forced_choice_fires_on_the_committed_triage_spec() -> None:
+    """H-10: the triage spec writes its closed sets as unquoted parenthesised lists --
+    `priority (low, medium, high, or critical)` -- which no pattern matched, so it
+    produced zero hits. That is the very task whose adapter leaked a third label."""
+    findings = check_forced_choice_no_abstain(
+        _committed_spec("measurements/finetune-triage-suite.yaml")
+    )
+    assert [f.rule_id for f in findings] == ["forced-choice-no-abstain"]
+
+
+def test_h10_ordinary_prose_no_longer_suppresses_the_rule() -> None:
+    """`another`/`otherwise`/`nonetheless` contain `other`/`none` as substrings. As a
+    substring scan, each silenced the rule outright."""
+    for prose in (
+        "Pick one of red, green or blue. Another run may differ.",
+        "Pick one of red, green or blue. Otherwise escalate.",
+        "Sentiment is positive or negative. Nonetheless be careful.",
+    ):
+        assert check_forced_choice_no_abstain(prose), prose
+
+
+def test_h10_a_real_escape_hatch_still_suppresses_the_rule() -> None:
+    """The rule must not become unsuppressable: an abstain option offered alongside the
+    enumeration is exactly what it asks for."""
+    for spec in (
+        "Pick one of red, green or blue, or unknown if none fit.",
+        'Return "positive" or "negative", or "not applicable" for empty input.',
+        "Classify into department (billing, technical, sales, or unknown).",
+    ):
+        assert check_forced_choice_no_abstain(spec) == [], spec
+
+
+def test_h10_abstain_term_must_be_near_the_enumeration_it_escapes() -> None:
+    """An abstain word in an unrelated sentence is not an escape hatch for a different
+    sentence's forced choice. This is the lookup spec's exact shape, minimised."""
+    far = (
+        "The city is irrelevant, and it may well be a city in some other country.\n"
+        "Output exactly one of RG-K7, RG-M2, RG-Q9."
+    )
+    assert check_forced_choice_no_abstain(far)
+
+    near = "Output exactly one of RG-K7, RG-M2, RG-Q9, or unknown if no country matches."
+    assert check_forced_choice_no_abstain(near) == []
+
+
+def test_h10_every_enumeration_needs_its_own_escape_hatch() -> None:
+    """A spec that offers an abstain option for one field and forces a choice on
+    another still forces a choice."""
+    spec = (
+        "Classify into priority (low, medium, high, or critical) and "
+        "department (billing, technical, or unknown)."
+    )
+    assert check_forced_choice_no_abstain(spec)
+
+
+def test_h10_has_example_requires_an_actual_example() -> None:
+    """H-10, rule 1: the word "example" anywhere suppressed `output-format-unpinned` --
+    the rule that exists because "format it consistently" with nothing showing the
+    format scored 0.0% structural pass."""
+    # A promise of an example is not an example.
+    assert check_output_format_unpinned(
+        "Extract the phone number and format it consistently. No examples are given."
+    )
+    assert check_output_format_unpinned(
+        "Extract the phone number and format it consistently. For example, be careful."
+    )
+    # `Output:` alone is a format instruction, not a demonstration.
+    assert check_output_format_unpinned(
+        "Extract the phone number and format it consistently. Output: the number."
+    )
+    # An actual demonstration still suppresses it, in each of the accepted forms.
+    for demo in (
+        "Input: call 5551234\nOutput: (555) 123-4567",
+        "555-1234 -> (555) 123-4567",
+        "555-1234 => (555) 123-4567",
+        "```\n(555) 123-4567\n```",
+    ):
+        spec = "Extract the phone number and format it consistently.\n" + demo
+        assert check_output_format_unpinned(spec) == [], demo

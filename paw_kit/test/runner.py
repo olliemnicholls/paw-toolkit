@@ -141,6 +141,9 @@ class TestRunReport(BaseModel):
     # reported `5/5 (100.0%)` while true correctness was 5/10. `total_cases` alone
     # cannot express that, because it includes fuzz cases which never carry one.
     standard_cases_count: int = 0
+    # H-12: fuzz cases generated and then cut by the fuzzer's total cap. Non-zero means
+    # this run covered less than the suite asked for, which was previously invisible.
+    fuzz_cases_dropped: int = 0
     # measurements/README.md, "Tool feedback" point 1: how many cases carried an
     # `expected` field at all (`expected_total`) and how many of those matched
     # (`expected_matched`) -- a suite with no `expected` anywhere leaves both 0, and
@@ -372,7 +375,12 @@ class TestRunner:
 
         # 2. Adversarial fuzzer cases
         seed_inputs = [c.input for c in config.standard_cases]
-        fuzzed_cases = AdversarialFuzzer.generate(config.fuzzing, base_inputs=seed_inputs)
+        # H-12: `generate_detailed`, so the cases the 500-case cap cut are reported
+        # rather than silently absent -- a suite with more than 500 custom probes used
+        # to have whole enabled mutation categories run zero cases while still
+        # declaring them on.
+        fuzz_result = AdversarialFuzzer.generate_detailed(config.fuzzing, base_inputs=seed_inputs)
+        fuzzed_cases = fuzz_result.cases
         inputs_to_test.extend(fuzzed_cases)
         expected_values.extend([None] * len(fuzzed_cases))
 
@@ -515,6 +523,7 @@ class TestRunner:
             errored_cases=errored_count,
             abstained_cases=abstained_count,
             standard_cases_count=len(config.standard_cases),
+            fuzz_cases_dropped=fuzz_result.dropped_count,
             expected_total=expected_total,
             expected_matched=expected_matched,
             expected_abstained=expected_abstained,

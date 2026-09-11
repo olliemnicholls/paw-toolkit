@@ -1857,3 +1857,117 @@ def test_g1_teacher_query_hook_receives_the_case_input_not_the_framed_prompt(
     # The finding, stated as an assertion: the first 40 characters of what the teacher
     # callable receives are identical across cases, so they cannot identify one.
     assert len({p[:40] for p in prompts}) == 1
+
+
+# =====================================================================================
+# Report section 6, H-12 / H-13 (bug-hunt-remediation, Track B, Phase B6)
+# =====================================================================================
+
+
+def test_h12_custom_probes_no_longer_starve_the_generated_categories() -> None:
+    """H-12: `adversarial_probes` were appended FIRST and the whole list truncated at
+    500, so a suite with more than 500 of them consumed the entire budget and every
+    generated mutation category ran zero cases -- while the suite still declared them
+    enabled. The bug hunt verified it: not one zero-width space appeared in the
+    generated set of a suite with `inject_unicode: true`."""
+    from paw_kit.test.fuzzer import _MAX_FUZZED_CASES
+
+    config = FuzzingConfig(
+        inject_unicode=True,
+        empty_inputs=True,
+        whitespace_flood=True,
+        adversarial_probes=[f"probe-{i}" for i in range(_MAX_FUZZED_CASES + 200)],
+    )
+    cases = AdversarialFuzzer.generate(config, base_inputs=["seed"])
+
+    assert len(cases) == _MAX_FUZZED_CASES
+    # The finding, as an assertion: an enabled category actually ran.
+    assert any("​" in c for c in cases), "inject_unicode was on and produced nothing"
+    assert "" in cases, "empty_inputs was on and produced nothing"
+    assert any("\t\t\t" == c for c in cases), "whitespace_flood was on and produced nothing"
+
+
+def test_h12_dropped_count_is_reported() -> None:
+    """The cap still cuts -- what changed is that it says how much."""
+    from paw_kit.test.fuzzer import _MAX_FUZZED_CASES
+
+    config = FuzzingConfig(
+        adversarial_probes=[f"probe-{i}" for i in range(_MAX_FUZZED_CASES + 37)]
+    )
+    result = AdversarialFuzzer.generate_detailed(config, base_inputs=["seed"])
+
+    assert result.generated_count == _MAX_FUZZED_CASES
+    assert result.dropped_count == 37
+
+
+def test_h12_nothing_dropped_reports_zero() -> None:
+    result = AdversarialFuzzer.generate_detailed(
+        FuzzingConfig(adversarial_probes=["a", "b"]), base_inputs=["seed"]
+    )
+    assert result.dropped_count == 0
+    assert result.cases == ["a", "b"]
+
+
+def test_h12_dropped_count_reaches_the_run_report(tmp_path: Path) -> None:
+    from paw_kit.test.fuzzer import _MAX_FUZZED_CASES
+
+    adapter_path = str(tmp_path / "fuzzcap.paw")
+    backend = MockPAWBackend()
+    backend.compile(spec="s", examples=[], output_path=adapter_path)
+    config = TestSuiteConfig(
+        task_name="fuzzcap",
+        spec="s",
+        adapter_path=adapter_path,
+        standard_cases=[],
+        assertions=[],
+        fuzzing=FuzzingConfig(
+            adversarial_probes=[f"p-{i}" for i in range(_MAX_FUZZED_CASES + 5)]
+        ),
+    )
+    report = TestRunner(backend=backend).run(config)
+    assert report.fuzz_cases_dropped == 5
+    assert report.total_cases == _MAX_FUZZED_CASES
+
+
+def test_h13_duplicate_standard_cases_block_is_rejected() -> None:
+    """H-13: PyYAML's last-key-wins meant a suite with two `standard_cases:` blocks
+    loaded cleanly and silently ran only the second -- the first block's cases never
+    executed, and the case count looked plausible either way."""
+    duplicated = """
+task_name: dup
+spec: "s"
+adapter_path: "./a.paw"
+standard_cases:
+  - input: "first-block-case"
+    expected: "A"
+standard_cases:
+  - input: "second-block-case"
+    expected: "B"
+"""
+    with pytest.raises(ValueError, match="Duplicate key 'standard_cases'"):
+        load_suite(duplicated)
+
+
+def test_h13_duplicate_key_of_any_kind_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Duplicate key 'task_name'"):
+        load_suite('task_name: a\nspec: "s"\nadapter_path: "./a.paw"\ntask_name: b\n')
+
+
+def test_h13_a_nested_duplicate_is_rejected_too() -> None:
+    dup_nested = """
+task_name: dup
+spec: "s"
+adapter_path: "./a.paw"
+fuzzing:
+  empty_inputs: true
+  empty_inputs: false
+"""
+    with pytest.raises(ValueError, match="Duplicate key 'empty_inputs'"):
+        load_suite(dup_nested)
+
+
+def test_h13_an_ordinary_suite_still_loads() -> None:
+    """The guard must not reject a suite that merely repeats a key in two *different*
+    mappings -- e.g. `input:` once per standard case."""
+    config = load_suite(SAMPLE_SUITE_YAML)
+    assert len(config.standard_cases) == 2
