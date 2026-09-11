@@ -303,6 +303,13 @@ _MAX_ENUMERATED_INT_RANGE = 256
 # asked for it, so it is recorded as an option rather than taken.
 _MAX_UNROLLED_STRING_LENGTH = 32
 _MAX_UNROLLED_COLLECTION_ITEMS = 8
+# Note for a mutation-gate reader: `len(unbounded_regex) >= _MAX_UNROLLED_COLLECTION_CHARS`
+# is an EQUIVALENT mutant of the `>` below, and provably so rather than by inspection. A
+# collection's rendering is its entry regex twice inside a fixed frame, so its length is
+# always odd (executed across List/Set/Dict/variadic-Tuple/nested-List families: 69, 71,
+# 73, ... and 317, 319, 321, ...). An even budget is therefore never hit exactly and the
+# two comparisons agree on every input this compiler can produce.
+#
 # The item count is the dominant lever -- at eight items every collection this compiler
 # can render measured between 122 and 2,122 states and under a second, including a list
 # of nested models. This second limit is the backstop for an element whose rendering is

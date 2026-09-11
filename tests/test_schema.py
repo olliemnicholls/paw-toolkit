@@ -2713,12 +2713,17 @@ def test_the_unrolling_budget_keeps_a_realistic_schema_compilable_S_9() -> None:
     before this track would have stopped compiling. This is the regression test for
     that, asserted against the decoder's own budget rather than against a wall clock,
     so it cannot flake on a loaded machine.
+
+    It goes through `_compile_fsm_safe` rather than calling `interegular` directly, for
+    two reasons: that is the call the decoder actually makes, so it is the real
+    question; and it is bounded by `_FSM_TIMEOUT_SECONDS`, so a regression fails in
+    three seconds with a `PAWSchemaError` instead of spending half a minute building the
+    very DFA the test exists to forbid -- which matters because the mutation harness
+    runs this suite hundreds of times.
     """
     import warnings as _warnings
 
-    import interegular
-
-    from paw_kit.schema.logits_processor import _MAX_FSM_STATES
+    from paw_kit.schema.logits_processor import _MAX_FSM_STATES, _compile_fsm_safe
 
     class BudgetLineItem(BaseModel):
         sku: str = Field(pattern=r"[A-Z]{3}-[0-9]{4}")
@@ -2736,8 +2741,115 @@ def test_the_unrolling_budget_keeps_a_realistic_schema_compilable_S_9() -> None:
         _warnings.simplefilter("ignore")
         pattern = pydantic_to_regex(BudgetInvoice)
 
-    fsm = interegular.parse_pattern(pattern).to_fsm()
+    fsm = _compile_fsm_safe(pattern)  # raises PAWSchemaError past the decoder's budget
     assert len(fsm.states) < _MAX_FSM_STATES // 2, (
         f"a realistic schema now costs {len(fsm.states)} states, over half the "
         f"decoder's whole budget of {_MAX_FSM_STATES}"
+    )
+
+
+# --- S-9: the constraint-reading boundaries Gate 3 exposed ---------------------------
+#
+# Each of the five below kills a mutant that survived the first mutation run of this
+# pass. They are boundary cases of `_field_constraints`, `_integer_range` and
+# `_resolve_length_bounds` that the behavioural tests above happen not to reach --
+# which is exactly the gap a mutation run exists to find.
+
+
+def test_field_constraints_reads_a_grouped_Len_S_9() -> None:
+    """`annotated_types.Len` carries BOTH ends, and it reaches `FieldInfo.metadata`.
+
+    pydantic normally expands a `Field(min_length=..., max_length=...)` into separate
+    `MinLen`/`MaxLen`, and the three are separate types rather than a hierarchy. But a
+    directly-annotated `Len` survives verbatim (executed: `Annotated[str, Len(2, 5)]`
+    yields `[Len(min_length=2, max_length=5)]`), so its own branch has to read both ends
+    -- a branch that reads only `min_length` would silently drop the upper bound.
+    """
+    import re as _re
+    from typing import Annotated
+
+    import annotated_types
+
+    from paw_kit.schema.grammar import _field_constraints
+
+    model = create_model("S9Len", x=(Annotated[str, annotated_types.Len(2, 5)], ...))
+    constraints = _field_constraints(model.model_fields["x"])
+    assert (constraints.min_len, constraints.max_len) == (2, 5)
+
+    pat = pydantic_to_regex(model, anchors=True)
+    assert _re.fullmatch(pat, '{"x":"ab"}') is not None
+    assert _re.fullmatch(pat, '{"x":"abcde"}') is not None
+    assert _re.fullmatch(pat, '{"x":"abcdef"}') is None, "the upper end of Len was dropped"
+
+
+def test_a_pattern_constraint_alone_never_warns_S_9() -> None:
+    """`Field(pattern=...)` is honoured by S-3, so it must not be reported as dropped.
+
+    `_field_constraints` skips pattern metadata deliberately -- `_extract_pattern_from_field`
+    owns it. A reading that failed to skip it would file the pattern under "constraints
+    this compiler cannot express" and warn about the one constraint it enforces most
+    strictly, which is worse than saying nothing.
+    """
+    import warnings as _warnings
+
+    pydantic_to_regex.cache_clear()
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        pydantic_to_regex(create_model("S9PatOnly", x=(str, Field(pattern=r"[a-z]+"))))
+    assert [str(w.message) for w in caught if "does not enforce" in str(w.message)] == []
+
+
+@pytest.mark.parametrize("bound", [True, Decimal("1")], ids=["bool", "decimal"])
+def test_a_non_integer_bound_is_not_enumerated_as_an_integer_range_S_9(bound: Any) -> None:
+    """A bound that is not an `int` cannot pick out an integer interval.
+
+    pydantic keeps both of these verbatim on an `int` field (executed: `Field(ge=True)`
+    yields `Ge(ge=True)` and `Field(ge=Decimal("1"))` yields `Ge(ge=Decimal('1'))`),
+    and `bool` is an `int` subclass, so "is it an int" is not the whole question.
+    Enumerating from a `Decimal` bound would raise `TypeError` out of `range()`;
+    enumerating from `True` would quietly reinterpret a boolean as the number 1.
+    """
+    model = create_model("S9NonInt", x=(int, Field(ge=bound, le=10)))
+    pydantic_to_regex.cache_clear()
+    with pytest.warns(UserWarning, match="does not enforce"):
+        pat = pydantic_to_regex(model, anchors=True)
+    assert "(?:1|2|" not in pat, "a non-integer bound was enumerated anyway"
+
+
+def test_a_single_value_integer_range_is_still_enumerated_S_9() -> None:
+    """`ge == le` is a legal one-value interval, not an empty one."""
+    import re as _re
+    import warnings as _warnings
+
+    pydantic_to_regex.cache_clear()
+    model = create_model("S9OneValue", x=(int, Field(ge=5, le=5)))
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        pat = pydantic_to_regex(model, anchors=True)
+    assert _re.fullmatch(pat, '{"x":5}') is not None
+    assert _re.fullmatch(pat, '{"x":6}') is None
+    assert _re.fullmatch(pat, '{"x":4}') is None
+
+
+def test_a_collection_bound_exactly_at_the_item_budget_is_expressed_S_9() -> None:
+    """The budget is a limit, not a threshold: the value AT it is still affordable."""
+    import re as _re
+    import warnings as _warnings
+
+    from paw_kit.schema.grammar import _MAX_UNROLLED_COLLECTION_ITEMS
+
+    pydantic_to_regex.cache_clear()
+    at_budget = create_model(
+        "S9ItemsAtBudget",
+        x=(List[int], Field(min_length=1, max_length=_MAX_UNROLLED_COLLECTION_ITEMS)),
+    )
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        pat = pydantic_to_regex(at_budget, anchors=True)
+
+    inside = "[%s]" % ",".join("1" * _MAX_UNROLLED_COLLECTION_ITEMS)
+    outside = "[%s]" % ",".join("1" * (_MAX_UNROLLED_COLLECTION_ITEMS + 1))
+    assert _re.fullmatch(pat, '{"x":%s}' % inside) is not None
+    assert _re.fullmatch(pat, '{"x":%s}' % outside) is None, (
+        "the bound was not applied at the budget value itself"
     )
