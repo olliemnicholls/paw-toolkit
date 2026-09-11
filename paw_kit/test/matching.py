@@ -34,6 +34,33 @@ def normalize_whitespace(text: str) -> str:
     return " ".join(unicodedata.normalize("NFC", text).split())
 
 
+def _json_kind(value: Any) -> str:
+    """The JSON type of a `json.loads` result: one of `"null"`, `"bool"`, `"number"`,
+    `"string"`, `"array"`, `"object"`, or `"unknown"`.
+
+    `bool` is tested **first**, before `int`, because in Python `bool` is a subclass of
+    `int` -- which is H-4's entire root cause. Naming the type once, here, is what lets
+    `json_values_equal` say "different types are not equal" in a single place instead of
+    as a chain of paired `isinstance(a, T) and isinstance(b, T)` guards. Those pairs are
+    also untestable: weakened from `and` to `or` they raise or fall through to the same
+    answer on every input, so `tools/mutate.py` reports them as survivors that no test
+    can ever kill.
+    """
+    if isinstance(value, bool):
+        return "bool"
+    if value is None:
+        return "null"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "unknown"
+
+
 def json_values_equal(a: Any, b: Any) -> bool:
     """Type-aware structural equality for two `json.loads` results (H-4).
 
@@ -56,20 +83,31 @@ def json_values_equal(a: Any, b: Any) -> bool:
     `int`/`float` of equal value (`1` vs `1.0`) are still equal -- that is a JSON
     encoding difference with no semantic content, unlike a bool/number confusion.
     """
-    # bool before int: bool IS a subclass of int in Python, which is the whole defect.
-    if isinstance(a, bool) or isinstance(b, bool):
-        return isinstance(a, bool) and isinstance(b, bool) and a is b
-    if a is None or b is None:
-        return a is None and b is None
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        if not (math.isfinite(a) and math.isfinite(b)):
+    kind = _json_kind(a)
+    if kind != _json_kind(b):
+        return False
+
+    if kind == "null":
+        return True
+    if kind == "bool":
+        return a is b
+    if kind == "number":
+        # Each side checked separately, deliberately. Written as
+        # `not (isfinite(a) and isfinite(b))` the guard is untestable: with one side
+        # non-finite the subsequent `==` is False anyway, so weakening the `and` to
+        # `or` changes no result and no test can pin it. Two statements, each of which
+        # decides an outcome on its own, is the same rule with the same behaviour and
+        # a boundary a test can actually reach.
+        if not math.isfinite(a):
+            return False
+        if not math.isfinite(b):
             return False
         return a == b
-    if isinstance(a, str) and isinstance(b, str):
+    if kind == "string":
         return a == b
-    if isinstance(a, list) and isinstance(b, list):
+    if kind == "array":
         return len(a) == len(b) and all(json_values_equal(x, y) for x, y in zip(a, b))
-    if isinstance(a, dict) and isinstance(b, dict):
+    if kind == "object":
         return a.keys() == b.keys() and all(json_values_equal(a[k], b[k]) for k in a)
     return False
 
