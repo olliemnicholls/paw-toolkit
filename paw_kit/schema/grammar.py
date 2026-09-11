@@ -26,6 +26,28 @@ from decimal import Decimal
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
+# S-3: `Field(pattern=...)` constraints are translated through interegular's AST rather
+# than spliced as regex source (see `_translate_field_pattern`). interegular exports
+# only `parse_pattern`, `Pattern`, `Unsupported`, `InvalidSyntax` and `REFlags`, so the
+# node types and the parser itself are reached through private names. That coupling is
+# deliberate and is pinned by `test_interegular_ast_surface_is_still_what_the_translator_expects`:
+# it is a far smaller risk than writing a regex parser of our own, which is what every
+# alternative to the AST approach reduces to.
+from interegular.patterns import (  # noqa: E402 -- grouped with the other third-party imports
+    _CHAR_GROUPS,
+    _CharGroup,
+    _Concatenation,
+    _EMPTY,
+    _DOT,
+    _NonCapturing,
+    _ParsePattern,
+    _Repeated,
+    InvalidSyntax,
+    Pattern as _InteregularPattern,
+    REFlags,
+    Unsupported,
+)
+
 from paw_kit.schema.exceptions import PAWSchemaError
 
 # Atomic regex fragments for JSON primitives
@@ -151,7 +173,7 @@ def _is_escaped(pattern: str, index: int) -> bool:
 
 
 def _strip_anchors(pattern: str) -> str:
-    """Remove leading `^` and trailing `$` anchors, honouring backslash escapes (S-7).
+    r"""Remove leading `^` and trailing `$` anchors, honouring backslash escapes (S-7).
 
     The previous spelling was `pattern.lstrip("^").rstrip("$")`, which is
     *character-wise*: it removes every trailing `$` regardless of what precedes it. So
@@ -179,37 +201,407 @@ def _strip_anchors(pattern: str) -> str:
     return pattern[start:end]
 
 
-def _sanitize_field_pattern(pattern: str) -> str:
-    """Validate a `Field(pattern=...)` regex constraint for safe JSON-string embedding.
+# --- S-3: JSON-safe AST translation of Field(pattern=...) ----------------------------
+#
+# The character set a JSON string can carry *raw*, i.e. the negated class inside
+# JSON_STRING above. Every character class the translation renders is intersected with
+# this, which is what makes splicing the result between two quote marks safe.
+_JSON_UNSAFE_CHARS = frozenset(
+    {'"', "\\"}
+    | {chr(c) for c in range(0x00, 0x20)}
+    | {chr(c) for c in range(0x7F, 0xA0)}
+)
+_ASCII_CHARS = frozenset(chr(c) for c in range(0x80))
 
-    PAW-SCHEMA-01: the pattern is inserted verbatim as regex source between JSON
-    quote marks (`f'"{clean_pattern}"'`) since it constrains what the *string value*
-    may contain -- unlike a Literal/Enum value, it cannot simply be JSON-escaped
-    without changing its regex semantics. Any `"` in the pattern source is rejected
-    outright, including one the schema author intended as an "escaped" quote.
+# interegular's AST records a character class as a plain `frozenset` of characters and
+# keeps no note of how it was spelled, so `\D` and `[^0-9]` arrive identical -- yet
+# pydantic reads the first as "not a Unicode digit" (rejecting U+0663) and the second as
+# "not one of these ten characters" (accepting it). Rendering the second reading for a
+# pattern that meant the first is the one direction that is not allowed (rule 1), so the
+# provenance has to be carried through the parse. It is carried as two private-use
+# characters injected into the shorthand groups themselves, because that is the only
+# thing `_combine_char_groups` propagates: it merges the positive and negated sides of a
+# bracket group into one `chars` set, and a mark on the side it lands on survives. Two
+# marks and not one, because a single mark cancels itself out: `[\S\d]` puts it on both
+# sides and `neg - pos` then drops it, losing exactly the fact that the class is
+# ASCII-under-approximated.
+# Spelled as escapes, never as the characters themselves: they are invisible in a
+# source file and an editor or a re-encoding could silently eat them.
+_SHORTHAND_MARK_POSITIVE = "\ue000"  # injected into \d \w \s
+_SHORTHAND_MARK_NEGATED = "\ue001"  # injected into \D \W \S
+_SHORTHAND_MARKS = frozenset({_SHORTHAND_MARK_POSITIVE, _SHORTHAND_MARK_NEGATED})
+_MARKED_SHORTHANDS = {
+    "d": _SHORTHAND_MARK_POSITIVE,
+    "w": _SHORTHAND_MARK_POSITIVE,
+    "s": _SHORTHAND_MARK_POSITIVE,
+    "D": _SHORTHAND_MARK_NEGATED,
+    "W": _SHORTHAND_MARK_NEGATED,
+    "S": _SHORTHAND_MARK_NEGATED,
+}
 
-    A naive "reject unescaped quotes, allow backslash-escaped ones" check (the
-    audit's own suggested fix) is not actually safe here: in a *regex*, a single
-    backslash before `"` (`r'a\\"b'`, one backslash) does not require a backslash in
-    the matched text at all -- `re.compile(r'a\\"b').fullmatch('a"b')` matches, since
-    `\"` isn't a recognized escape and Python's `re` simply drops the backslash and
-    matches the literal `"`. Requiring a backslash in the matched *output* text needs
-    *two* source backslashes (`r'a\\\\"b'`), which no schema author would intuitively
-    write, and a heuristic that tries to tell these apart by counting backslash parity
-    is exactly the kind of subtle-and-wrong check that reintroduces the vulnerability
-    for anyone who writes the "obvious" single-backslash escape. So: no quote
-    character is permitted in a pattern constraint at all, escaped or not.
+_POSIX_BRACKET_CLASS = re.compile(
+    r"\[:\^?(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space"
+    r"|upper|word|xdigit):\]"
+)
+
+# `_ParsePattern.extension_group` is entered with the cursor just past the opening `(?`,
+# so a flag group at the very start of the pattern -- the only position at which the
+# three engines agree about what it means -- is the one entered at index 2.
+_PATTERN_INITIAL_GROUP_INDEX = 2
+
+
+class _ShorthandTrackingParser(_ParsePattern):
+    """interegular's parser, with two things recorded that its AST throws away.
+
+    `escaped` returns the module-level singleton out of `_CHAR_GROUPS` for a shorthand,
+    which is what makes the identity check below exact: no other path produces those
+    objects. `extension_group` is the only place `self.flags` is assigned, so noting the
+    cursor there records where each inline flag group sat.
     """
-    clean = _strip_anchors(pattern)
-    if '"' in clean:
-        raise PAWSchemaError(
-            f"Invalid field pattern constraint {pattern!r}: double quote characters "
-            "are forbidden in Field(pattern=...) constraints entirely -- a compiled "
-            "regex referencing a quote, escaped or not, can be made to match a "
-            "literal JSON-string-terminating quote in the constrained decoder's "
-            "output. Remove the quote from the pattern."
+
+    def __init__(self, data: str) -> None:
+        super().__init__(data)
+        self.inline_flag_positions: List[int] = []
+
+    def escaped(self, inner: bool = False) -> Any:
+        node = super().escaped(inner)
+        for key, mark in _MARKED_SHORTHANDS.items():
+            if node is _CHAR_GROUPS[key]:
+                return _CharGroup(node.chars | {mark}, node.negated)
+        return node
+
+    def extension_group(self) -> Any:
+        at = self.index
+        before = self.flags
+        node = super().extension_group()
+        if self.flags is not before:
+            self.inline_flag_positions.append(at)
+        return node
+
+
+def _char_set_intersect(
+    a: Tuple[bool, FrozenSet[str]], b: Tuple[bool, FrozenSet[str]]
+) -> Tuple[bool, FrozenSet[str]]:
+    """Intersect two character sets, each `(is_positive, chars)`.
+
+    `(True, s)` is exactly `s`; `(False, s)` is every character except `s`.
+    """
+    (a_pos, a_chars), (b_pos, b_chars) = a, b
+    if a_pos and b_pos:
+        return True, a_chars & b_chars
+    if a_pos:
+        return True, a_chars - b_chars
+    if b_pos:
+        return True, b_chars - a_chars
+    return False, a_chars | b_chars
+
+
+def _case_expand(chars: FrozenSet[str]) -> FrozenSet[str]:
+    """Close `chars` over ASCII/simple case folding, as `(?i)` requires.
+
+    Multi-character case mappings (`'ß'.upper() == 'SS'`) are dropped rather than
+    spliced in as a string: they are not expressible as a member of a character class.
+    Dropping them widens a *negated* class, which is why a negated class under `(?i)` is
+    ASCII-restricted in `_render_char_group` -- within ASCII this closure is exact.
+    """
+    out: Set[str] = set()
+    for char in chars:
+        out.add(char)
+        for variant in (char.lower(), char.upper(), char.casefold()):
+            if len(variant) == 1:
+                out.add(variant)
+    return frozenset(out)
+
+
+def _escape_in_class(char: str) -> str:
+    """Render one character for use inside a `[...]` character class."""
+    code = ord(char)
+    if code < 0x20 or 0x7F <= code <= 0x9F:
+        # `\xHH` and not `\uHHHH`: interegular's parser implements `\x` (exactly two hex
+        # digits) and raises Unsupported for `\u`, so the escape has to be the one both
+        # engines read. Every character that needs escaping here is below U+00A0.
+        return f"\\x{code:02x}"
+    if char in "\\]^-[":
+        return "\\" + char
+    return char
+
+
+def _escape_literal(char: str) -> str:
+    """Render one character for use outside a character class."""
+    code = ord(char)
+    if code < 0x20 or 0x7F <= code <= 0x9F:
+        return f"\\x{code:02x}"
+    if char in ".^$*+?{}[]()|\\":
+        return "\\" + char
+    return char
+
+
+def _render_char_set(is_positive: bool, chars: FrozenSet[str]) -> str:
+    """Render a character set as a regex atom, collapsing contiguous runs into ranges.
+
+    Ranges and not enumerations (`[0-9]`, never `[0123456789]`): the JSON-safe negated
+    classes this produces span thousands of code points, the compiled regex is capped by
+    length (`logits_processor._MAX_PATTERN_LENGTH`), and `examples/` tells users to read
+    the compiled regex.
+    """
+    if is_positive and len(chars) == 1:
+        return _escape_literal(next(iter(chars)))
+    codes = sorted(ord(c) for c in chars)
+    pieces: List[str] = []
+    start = 0
+    while start < len(codes):
+        end = start
+        while end + 1 < len(codes) and codes[end + 1] == codes[end] + 1:
+            end += 1
+        if end - start >= 2:
+            pieces.append(_escape_in_class(chr(codes[start])) + "-" + _escape_in_class(chr(codes[end])))
+        else:
+            pieces.extend(_escape_in_class(chr(c)) for c in codes[start : end + 1])
+        start = end + 1
+    return ("[" if is_positive else "[^") + "".join(pieces) + "]"
+
+
+def _render_quantifier(low: int, high: Optional[int]) -> str:
+    if high is None:
+        if low == 0:
+            return "*"
+        if low == 1:
+            return "+"
+        return f"{{{low},}}"
+    if low == 0 and high == 1:
+        return "?"
+    if low == high:
+        return f"{{{low}}}"
+    return f"{{{low},{high}}}"
+
+
+def _raise_empty_intersection(source: str, described: str, lost: FrozenSet[str]) -> None:
+    """Rule 4: refuse, rather than render a sub-expression that can match nothing."""
+    detail = ""
+    if '"' in lost or "\\" in lost:
+        detail = (
+            " Note that double quote characters are forbidden in Field(pattern=...) "
+            "constraints entirely, escaped or not: in a regex a single backslash before "
+            'a quote (`a\\"b`) does not require a backslash in the matched text at all, '
+            "so a pattern that looks escaped in its source can still be made to match "
+            "the literal quote that terminates the JSON string."
         )
-    return clean
+    raise PAWSchemaError(
+        f"Invalid field pattern constraint {source!r}: {described} can only match "
+        f"characters a JSON string cannot carry ({''.join(sorted(lost))!r}), so it has "
+        f"no JSON-safe form and the compiled grammar would accept nothing at that "
+        f"position.{detail}"
+    )
+
+
+def _render_char_group(
+    chars: FrozenSet[str], negated: bool, flags: REFlags, source: str
+) -> str:
+    """Translate one `_CharGroup` into a JSON-safe regex atom."""
+    marks = _SHORTHAND_MARKS & chars
+    chars = chars - _SHORTHAND_MARKS
+    if flags & REFlags.CASE_INSENSITIVE:
+        chars = _case_expand(chars)
+    char_set: Tuple[bool, FrozenSet[str]] = (not negated, chars)
+
+    # Rule 2, and the soundness condition on `_case_expand`. Only the *negated* case
+    # needs it. A positive class is exactly the characters it lists, and a shorthand
+    # contributes only ASCII ones, so it is already no wider than pydantic reads it. A
+    # negated class excludes them instead, and under-excluding is the widening
+    # direction: `\D` as interegular reads it admits U+0663, which pydantic rejects.
+    if negated and (marks or flags & REFlags.CASE_INSENSITIVE):
+        char_set = _char_set_intersect(char_set, (True, _ASCII_CHARS))
+
+    safe = _char_set_intersect(char_set, (False, _JSON_UNSAFE_CHARS))
+    if safe[0] and not safe[1]:
+        # Only a positive set can empty out here (the complement of a finite set never
+        # can), so `char_set[1]` is exactly the characters the sub-expression could have
+        # matched -- all of which JSON forbids.
+        described = (
+            f"the literal {next(iter(char_set[1]))!r}"
+            if len(char_set[1]) == 1
+            else "a character class"
+        )
+        _raise_empty_intersection(source, described, char_set[1])
+    return _render_char_set(*safe)
+
+
+def _render_node(node: Any, flags: REFlags, source: str) -> Tuple[str, bool]:
+    """Render one AST node, returning `(regex, is_atomic)`.
+
+    `is_atomic` says whether a quantifier can be appended directly, which is what keeps
+    the output free of gratuitous `(?:...)` wrapping.
+    """
+    if node is _EMPTY or isinstance(node, type(_EMPTY)):
+        return "", True
+
+    if node is _DOT or isinstance(node, type(_DOT)):
+        excluded: FrozenSet[str] = frozenset() if flags & REFlags.SINGLE_LINE else frozenset("\n")
+        return _render_char_set(*_char_set_intersect((False, excluded), (False, _JSON_UNSAFE_CHARS))), True
+
+    if isinstance(node, _CharGroup):
+        return _render_char_group(node.chars, node.negated, flags, source), True
+
+    if isinstance(node, _Repeated):
+        inner, atomic = _render_node(node.base, flags, source)
+        if not inner:
+            return "", True
+        if not atomic:
+            inner = f"(?:{inner})"
+        # Reported as NOT atomic: a quantified atom cannot itself take a quantifier.
+        # interegular parses `a**` as a repetition of a repetition (its `atom` consumes
+        # the first `*` and its `obj` the second), so returning True here rendered
+        # `a**` verbatim -- a string Python `re` refuses with "multiple repeat", which
+        # is exactly the failure mode this whole translation exists to remove. The
+        # wrapping is only ever added where a quantifier actually follows.
+        return inner + _render_quantifier(node.min, node.max), False
+
+    if isinstance(node, _Concatenation):
+        parts: List[Tuple[str, bool]] = []
+        for part in node.parts:
+            if isinstance(part, _NonCapturing):
+                raise PAWSchemaError(
+                    f"Invalid field pattern constraint {source!r}: lookahead and "
+                    "lookbehind are not expressible as a finite automaton, so they "
+                    "cannot be compiled into a decoding grammar. Remove the "
+                    "zero-width group."
+                )
+            rendered = _render_node(part, flags, source)
+            if rendered[0]:
+                parts.append(rendered)
+        if len(parts) == 1:
+            return parts[0]
+        return "".join(text for text, _ in parts), not parts
+
+    if isinstance(node, _InteregularPattern):
+        scoped = (flags | node.added_flags) & ~node.removed_flags
+        options = [_render_node(option, scoped, source) for option in node.options]
+        if len(options) == 1:
+            return options[0]
+        return "(?:" + "|".join(text for text, _ in options) + ")", True
+
+    raise PAWSchemaError(
+        f"Invalid field pattern constraint {source!r}: the compiler does not know how "
+        f"to translate a {type(node).__name__} node into a JSON-safe grammar."
+    )
+
+
+def _translate_field_pattern(pattern: str) -> str:
+    """Translate a `Field(pattern=...)` constraint into a JSON-string-safe regex.
+
+    S-3, and the reason `_sanitize_field_pattern` no longer exists. The old approach
+    spliced the user's regex *source* between JSON quote marks and defended the splice
+    by refusing a literal `"` in the source. That defence is not sufficient and cannot
+    be made sufficient: nothing stops a character *class* from matching a quote, so
+    `Field(pattern=".*")` accepted a value consisting of a single bare quote (so the
+    emitted object was `{"x": <quote><quote><quote>, "y": 1}`), and `\\S+`, `[^a]+`,
+    `[\\w\\W]+` and `\\D+` all did the same -- strings that satisfy the grammar and are
+    not JSON. The quote ban only blocked the one spelling nobody uses.
+
+    Nor can it be fixed by rewriting the source: `[.]` is a literal dot, `\\.` is an
+    escaped one, and `[^\\D]` means "digit", so textually substituting `\\D` yields
+    `[^[^0-9...]]`, which Python `re` mis-parses rather than rejects. A safe source
+    rewriter has to reimplement a regex parser.
+
+    So the pattern is parsed into `interegular`'s AST -- the same parser the decoder
+    uses -- and re-*rendered* as an explicit regex whose every character class has
+    already been intersected with the set of characters a JSON string can carry. The
+    output contains no shorthand class, no anchor, no capturing group and no inline
+    flag, so Python `re`, `interegular` and pydantic's rust-regex all read it the same
+    way. Four rules govern the translation:
+
+    1. **Narrow, never widen.** Every transformation must shrink the accepted language
+       or leave it alone. This is what makes the whole thing safe: the compiled grammar
+       is allowed to reject something pydantic would accept (the grammar is already
+       deliberately narrower), and is never allowed to accept something pydantic
+       rejects.
+    2. **A class derived from `\\d \\D \\w \\W \\s \\S` is additionally ASCII-restricted
+       where it appears in negated position.** interegular's shorthands are ASCII;
+       pydantic's (rust-regex) and Python `re`'s are Unicode. Executed:
+       `parse_pattern(r"\\D").to_fsm().accepts("\u0663")` is True while `re.fullmatch` and
+       pydantic both reject it -- so rendering interegular's reading verbatim would be
+       *wider* than the validator (addendum S-3b). `.` and explicit classes are **not**
+       ASCII-restricted: all three engines agree there, and `_json_string_literal_regex`
+       deliberately keeps non-ASCII literals working (`ensure_ascii=False`).
+    3. **Constructs the two engines read differently are refused.** Executed:
+       `Field(pattern="[[:alpha:]]+")` -- pydantic accepts `"ahl]"` and `"[:a]"` on a
+       POSIX reading while Python `re` full-match rejects them, so the grammar would be
+       broader than the validator. Same for an inline flag group that is not at the very
+       start: pydantic applies `(?i)` from that point onwards, `interegular` applies it
+       to the whole pattern, and Python `re` refuses the pattern outright.
+    4. **An empty intersection raises; it is never rendered as "match nothing".** A
+       nomatch grammar hands the decoder an all-`-inf` mask at step 0, which is the S-12
+       failure by a different door.
+
+    Second accepted residual limitation, found while implementing rule 2 and not
+    anticipated by the plan: a bracket group that mixes a shorthand with its own
+    negation, `[\\w\\W]` being the idiomatic spelling of "any character at all",
+    collapses in interegular's AST to "the complement of nothing" with only the
+    shorthand provenance left behind. There is then no way to tell it apart from
+    `[a-zA-Z0-9_\\W]`, which genuinely does exclude every non-ASCII word character, so
+    both are ASCII-restricted. `[\\w\\W]` therefore stops matching non-ASCII input.
+    That is the narrowing direction (rule 1), so it is safe; `.` is the spelling that
+    keeps non-ASCII, and separating the two cases would need interval algebra over
+    symbolic Unicode classes rather than interegular's plain frozensets.
+
+    Accepted residual limitation, documented rather than fixed: after translation a
+    `Field(pattern=".*")` value cannot contain a quote or a backslash *even escaped*, so
+    `He said "hi"` is unreachable although pydantic accepts it. Admitting it is possible
+    and would be sound (emit `\\\\"` and friends as alternatives beside the safe class,
+    since the JSON escape decodes to the character `.` matched) but roughly doubles the
+    rendered length for a case no schema author has yet asked for.
+
+    Raises:
+        PAWSchemaError: for a construct that cannot be expressed as a finite automaton
+            (`\\b`, lookaround, `\\p{L}`), one the two engines disagree about, or one
+            whose JSON-safe intersection is empty.
+    """
+    if _SHORTHAND_MARKS & set(pattern):
+        raise PAWSchemaError(
+            f"Invalid field pattern constraint {pattern!r}: it contains a Unicode "
+            f"private-use character ({_SHORTHAND_MARKS!r}) that the pattern translator "
+            "reserves for tracking where a shorthand class came from. Remove it."
+        )
+    posix = _POSIX_BRACKET_CLASS.search(pattern)
+    if posix is not None:
+        raise PAWSchemaError(
+            f"Invalid field pattern constraint {pattern!r}: the POSIX bracket class "
+            f"{posix.group(0)!r} is not supported. pydantic's regex engine reads it as "
+            "a named class while Python's `re` reads it as an ordinary set of "
+            "characters, so a grammar built from it would accept values pydantic "
+            "rejects. Spell the class out (e.g. `[a-zA-Z]` for `[:alpha:]`)."
+        )
+
+    clean = _strip_anchors(pattern)
+    parser = _ShorthandTrackingParser(clean)
+    try:
+        node = parser.parse().simplify()
+    except (Unsupported, InvalidSyntax) as exc:
+        raise PAWSchemaError(
+            f"Invalid field pattern constraint {pattern!r}: "
+            f"{type(exc).__name__}: {exc}. Grammar-constrained decoding needs a pattern "
+            "expressible as a finite automaton; zero-width assertions (\\b, \\B), "
+            "anchors other than a leading ^ / trailing $, lookaround, backreferences "
+            "and Unicode property classes (\\p{...}) are not."
+        ) from exc
+
+    # An inline flag group is a *global* flag wherever it appears, for both interegular
+    # (`_ParsePattern.start` applies it to the whole pattern) and Python `re` (which
+    # refuses it outright anywhere but position 0). pydantic's rust-regex instead
+    # applies it from that point onwards, so anywhere but the very start the three
+    # engines mean three different things -- rule 3.
+    if parser.inline_flag_positions not in ([], [_PATTERN_INITIAL_GROUP_INDEX]):
+        raise PAWSchemaError(
+            f"Invalid field pattern constraint {pattern!r}: an inline flag group such "
+            "as `(?i)` is only supported at the very start of the pattern. Elsewhere "
+            "pydantic applies it from that point onwards while this compiler (and "
+            "`interegular`) would apply it to the whole pattern, and Python's `re` "
+            "refuses the pattern outright. Move the flag to the start, or use a scoped "
+            "group like `(?i:...)`."
+        )
+
+    rendered, _atomic = _render_node(node, REFlags(0), pattern)
+    return rendered
 
 
 def _check_model_recursion(annotation: Type[BaseModel], seen: frozenset, depth: int) -> None:
@@ -620,8 +1012,9 @@ def _pydantic_to_regex_impl(
         # Check for Field(pattern=...) constraint
         pattern_override = _extract_pattern_from_field(field_info)
         if pattern_override is not None:
-            clean_pattern = _sanitize_field_pattern(pattern_override)  # PAW-SCHEMA-01
-            value_regex = f'"{clean_pattern}"'
+            # S-3 / PAW-SCHEMA-01: translated through interegular's AST and re-rendered
+            # against the JSON-safe character set, never spliced as source.
+            value_regex = f'"{_translate_field_pattern(pattern_override)}"'
         else:
             value_regex = _type_to_regex(field_info.annotation, seen=_seen, depth=_depth)
         field_pattern = f"{field_key}{JSON_WHITESPACE}:{JSON_WHITESPACE}{value_regex}"

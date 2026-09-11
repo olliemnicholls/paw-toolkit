@@ -1224,3 +1224,144 @@ def test_regex_logits_processor_wraps_interegular_exceptions_S_15() -> None:
     """
     with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
         RegexLogitsProcessor(regex_pattern=r"\bword\b", vocabulary={0: "a"}, eos_token_id=1)
+
+
+# --- S-3 / S-3b: Field(pattern=...) is translated through the AST, not spliced --------
+
+
+class _DotStar(BaseModel):
+    x: str
+    y: int
+
+
+@pytest.mark.parametrize(
+    "pattern_src,escape",
+    [(r".*", '"'), (r"\S+", '"'), (r"[^a]+", '"'), (r"[\w\W]+", '"'), (r"\D+", '"'),
+     (r".*", "\\"), (r"\S+", "\\"), (r"[^a]+", "\\"), (r"\D+", "\\")],
+)
+def test_character_classes_cannot_match_the_json_string_terminator_S_3(
+    pattern_src: str, escape: str
+) -> None:
+    """No class may match a bare quote or backslash, however it is spelled (S-3).
+
+    `_sanitize_field_pattern` rejected a literal `"` in the pattern *source* and nothing
+    else, so every one of these -- including `.*`, the single most common idiom --
+    compiled to a grammar that accepted a value breaking out of its own JSON string.
+    """
+    import re as _re
+
+    model = create_model("Escaper", x=(str, Field(pattern=pattern_src)), y=(int, ...))
+    pat = pydantic_to_regex(model, anchors=True)
+    broken = '{"x": "' + escape + '", "y": 1}'
+    assert _re.match(pat, broken) is None, (
+        f"pattern {pattern_src!r} still admits {broken!r}, which is not valid JSON"
+    )
+
+
+def test_shorthand_classes_are_ascii_restricted_where_they_negate_S_3b() -> None:
+    """`\\D` must not admit a character pydantic rejects (S-3b).
+
+    interegular's shorthands are ASCII and Python `re`'s / pydantic's are Unicode, so
+    `interegular.parse_pattern(r"\\D").to_fsm().accepts("\u0663")` is True while both
+    `re.fullmatch(r"\\D", "\u0663")` and pydantic reject it. Splicing `\\D` into the
+    grammar therefore made the grammar wider than the validator, and made the exported
+    regex and the decoding FSM two different languages.
+    """
+    import re as _re
+
+    import interegular
+
+    # The premise: the two engines really do disagree about the shorthand itself.
+    assert interegular.parse_pattern(r"\D").to_fsm().accepts("\u0663") is True
+    assert _re.fullmatch(r"\D", "\u0663") is None
+
+    model = create_model("Shorthand", x=(str, Field(pattern=r"\D+")))
+    with pytest.raises(Exception):
+        model(x="\u0663")  # pydantic itself rejects it
+
+    pat = pydantic_to_regex(model, anchors=False)
+    assert _re.fullmatch(pat, '{"x": "\u0663"}') is None
+    # ... and the decoder must agree with the exported regex, which is the S-3b half.
+    # (`anchors=False`: interegular refuses `^`/`$` outright, so the decoder only ever
+    # sees the unanchored form.)
+    assert interegular.parse_pattern(pat).to_fsm().accepts('{"x": "\u0663"}') is False
+    assert _re.fullmatch(pat, '{"x": "abc"}') is not None
+
+
+def test_posix_bracket_classes_are_refused_S_3() -> None:
+    """POSIX bracket classes mean different things to the two engines, so they raise."""
+    model = create_model("Posix", x=(str, Field(pattern=r"[[:alpha:]]+")))
+    with pytest.raises(PAWSchemaError, match="POSIX bracket class"):
+        pydantic_to_regex(model)
+
+
+def test_inline_flag_group_away_from_the_start_is_refused_S_3() -> None:
+    """`a(?i)b` means three different things to three engines, so it raises."""
+    model = create_model("MidFlag", x=(str, Field(pattern=r"a(?i)b")))
+    with pytest.raises(PAWSchemaError, match="inline flag group"):
+        pydantic_to_regex(model)
+
+
+def test_empty_json_safe_intersection_raises_rather_than_matching_nothing_S_3() -> None:
+    """Rule 4: a sub-expression with no JSON-safe form raises, never renders nomatch.
+
+    A "match nothing" grammar hands the decoder an all-`-inf` mask at step 0, which is
+    the S-12 failure reached by a different door.
+    """
+    model = create_model("Tabbed", x=(str, Field(pattern=r"\t+")))
+    with pytest.raises(PAWSchemaError, match="no JSON-safe form"):
+        pydantic_to_regex(model)
+
+
+@pytest.mark.parametrize("pattern_src", [r"a**", r"a*+", r"a+*?", r"(a*)*", r"(?:a{2}){3}"])
+def test_stacked_quantifiers_render_as_a_regex_python_re_accepts_S_3(pattern_src: str) -> None:
+    """A quantified atom cannot itself take a quantifier, so it must be wrapped (S-3).
+
+    interegular parses `a**` as a repetition OF a repetition -- its `atom()` consumes
+    the first `*` and its `obj()` the second -- so a renderer that treats a quantified
+    atom as atomic emits `a**` verbatim, which Python `re` refuses with "multiple
+    repeat". That is the same class of failure as S-1: `pydantic_to_regex` returning a
+    string that is not a regex.
+    """
+    import re as _re
+
+    import interegular
+
+    model = create_model("Stacked", x=(str, Field(pattern=pattern_src)))
+    pat = pydantic_to_regex(model, anchors=False)
+    _re.compile(pat)  # the failure mode is this line raising
+    interegular.parse_pattern(pat).to_fsm()  # ... and the decoder must take it too
+
+
+def test_interegular_ast_surface_is_still_what_the_translator_expects() -> None:
+    """Pin the private `interegular` surface `_translate_field_pattern` is built on.
+
+    The translation reaches into `interegular.patterns` for its node types and its
+    parser, because the library exports neither. That is a deliberate trade (the only
+    alternative to an AST translation is writing a regex parser of our own), but it is
+    a coupling to private names, so it gets a test that fails loudly on an upgrade
+    rather than silently mistranslating.
+    """
+    import interegular
+    from interegular.patterns import _CHAR_GROUPS, _CharGroup, _ParsePattern
+
+    # The shorthand singletons the provenance marking keys on, by identity.
+    parsed = _ParsePattern(r"\d").parse()
+    group = parsed.options[0].parts[0]
+    assert isinstance(group, _CharGroup)
+    assert group is _CHAR_GROUPS["d"], "escaped() no longer returns the shared singleton"
+    assert _CHAR_GROUPS["d"].chars == frozenset("0123456789")
+    assert _CHAR_GROUPS["D"].negated is True
+
+    # A bare inline-flag group sets `flags` on the parser and nothing on the node.
+    parser = _ParsePattern(r"(?i)a")
+    parser.parse()
+    assert parser.flags is interegular.patterns.REFlags.CASE_INSENSITIVE
+
+    # The six node types the renderer dispatches on.
+    ast = interegular.parse_pattern(r"(?:a|b)*.")
+    assert type(ast).__name__ == "Pattern"
+    concat = ast.options[0]
+    assert type(concat).__name__ == "_Concatenation"
+    assert type(concat.parts[0]).__name__ == "_Repeated"
+    assert type(concat.parts[1]).__name__ == "__DotCls"
