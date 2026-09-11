@@ -73,6 +73,18 @@ except ImportError:  # pragma: no cover
 
 REFERENCE_MODEL = "claude-haiku-4-5-20251001"
 REFERENCE_TEMPERATURE = 0.0
+# B-3 (bug hunt 2026-09-11): arm D used to be called with a hardcoded 400-token cap,
+# recorded nowhere, while the three compiled arms ran unbounded. The rule here needs real
+# multi-step arithmetic, so Haiku reasons out loud and ran past that budget on 39 of 300
+# cases; each was scored as a failure with no label, which put arm D at 85.7% when it was
+# exactly right on 257 of the 261 it finished (98.5%). The baseline was deflated ~13
+# points, which overstates how close the finetune compiler (49.0%) is to the frontier.
+#
+# 2000, not 30. `measure_finetune_lookup.py` has a constant of the same name whose value
+# is 30 and whose docstring says why: its answer is six characters and there is nothing to
+# reason about. Copying that value here would truncate essentially every arm-D answer
+# instead of 13% of them.
+REFERENCE_MAX_TOKENS = 2000
 
 FAST_COMPILER = "paw-4b-qwen3-0.6b"
 FINETUNE_COMPILER = "paw-ft-bs48"
@@ -394,21 +406,28 @@ def run_api_arm(arm: Dict[str, Any], evaluation: List[Dict[str, Any]]) -> List[D
         try:
             resp = client.messages.create(
                 model=REFERENCE_MODEL,
-                max_tokens=400,
+                max_tokens=REFERENCE_MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
                 extra_body={"temperature": REFERENCE_TEMPERATURE},
             )
             raw = "".join(b.text for b in resp.content if hasattr(b, "text"))
             err = None
+            # `stop_reason == "max_tokens"` is the direct evidence of a truncated answer,
+            # as opposed to an answer that was simply wrong. Recorded per case so the
+            # truncation count in the summary is an observation, not an inference from an
+            # absent label. (B-3.)
+            stop_reason = getattr(resp, "stop_reason", None)
         except Exception as exc:  # noqa: BLE001
-            raw, err = "", f"{type(exc).__name__}: {exc}"
-        rows.append(_row(case, raw, err, (time.perf_counter() - t0) * 1000.0))
+            raw, err, stop_reason = "", f"{type(exc).__name__}: {exc}", None
+        rows.append(_row(case, raw, err, (time.perf_counter() - t0) * 1000.0,
+                         stop_reason=stop_reason))
         if (i + 1) % 50 == 0:
             print(f"  [{arm['arm']}] {i + 1}/{len(evaluation)}")
     return rows
 
 
-def _row(case: Dict[str, Any], raw: str, err: Optional[str], latency_ms: float) -> Dict[str, Any]:
+def _row(case: Dict[str, Any], raw: str, err: Optional[str], latency_ms: float,
+         stop_reason: Optional[str] = None) -> Dict[str, Any]:
     """Score one output against ground truth.
 
     Two notions of "parses": `strict_shape` is the whole output being exactly a label
@@ -444,6 +463,9 @@ def _row(case: Dict[str, Any], raw: str, err: Optional[str], latency_ms: float) 
         "week_off_by_one": week is not None and abs(week - exp_week) == 1,
         "week_delta": None if week is None else week - exp_week,
         "latency_ms": latency_ms,
+        # None for the adapter arms, which have no upstream stop reason to report.
+        "stop_reason": stop_reason,
+        "truncated": stop_reason == "max_tokens",
     }
 
 
@@ -454,12 +476,31 @@ _METRICS = ["exact", "fy_correct", "week_correct", "week_off_by_one",
 
 
 def _rates(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per-cut counts and rates, plus the answered/unanswered split.
+
+    B-3: `exact` alone conflates "got the rule wrong" with "never produced a label",
+    and for a token-capped reference arm those are different failures. `exact` keeps the
+    whole cut as its denominator -- it is the number that answers "how often is this arm
+    right?" -- and `exact_when_answered` reports the same count over the cases that
+    produced a label at all. `truncated_n` is the count that explains the gap, taken from
+    the API's own `stop_reason` rather than inferred from a missing label.
+    """
     n = len(rows)
     counts = {m: sum(1 for r in rows if r[m]) for m in _METRICS}
+    answered = [r for r in rows if r["label_found"]]
+    exact_answered = sum(1 for r in answered if r["exact"])
     return {
         "n": n,
         "counts": counts,
         "rates_pct": {m: (counts[m] / n * 100.0 if n else 0.0) for m in _METRICS},
+        "answered_n": len(answered),
+        "unanswered_n": n - len(answered),
+        "truncated_n": sum(1 for r in rows if r.get("truncated")),
+        "error_n": sum(1 for r in rows if r["error"]),
+        "exact_when_answered": exact_answered,
+        "exact_when_answered_pct": (
+            exact_answered / len(answered) * 100.0 if answered else None
+        ),
     }
 
 
@@ -623,6 +664,26 @@ def main() -> int:
         "ground_truth": "computed by code (fiscal_label); no judge, no teacher, exact",
         "reference_model": REFERENCE_MODEL,
         "reference_temperature": REFERENCE_TEMPERATURE,
+        "reference_max_tokens": REFERENCE_MAX_TOKENS,
+        # Every parameter that can change arm D's output, in one place. The 2026-09-10 run
+        # recorded the model and the temperature but not the token cap -- which is the one
+        # that decided 39 of its 300 results. (B-3.)
+        "reference_sampling": {
+            "model": REFERENCE_MODEL,
+            "temperature": REFERENCE_TEMPERATURE,
+            "max_tokens": REFERENCE_MAX_TOKENS,
+            "top_p": None,
+            "top_k": None,
+            "stop_sequences": None,
+            "system": None,
+            "prompt_template": "{SPEC}\n\nInput: {input}\nOutput:",
+            "note": (
+                "top_p/top_k/stop_sequences/system are not passed to the API at all; "
+                "None records that, so the absence is stated rather than left to be "
+                "inferred from the source. temperature goes through extra_body because "
+                "anthropic 1.4.0 removed it from the typed signature."
+            ),
+        },
         "adapter_temperature": 0.0,
         "adapter_temperature_note": (
             "programasweights' PawFunction defaults to temperature=0.0 (greedy). "
@@ -642,8 +703,13 @@ def main() -> int:
         r = a["scores"]["overall"]["rates_pct"]
         b = a["scores"]["by_boundary"]
         print(f"\n[{a['arm']}] {a['description']}")
+        o = a["scores"]["overall"]
         print(f"   exact {r['exact']:.1f}%  fy {r['fy_correct']:.1f}%  "
               f"week {r['week_correct']:.1f}%  week+/-1 {r['week_off_by_one']:.1f}%")
+        ewa = o["exact_when_answered_pct"]
+        print(f"   answered {o['answered_n']}/{o['n']} "
+              f"(truncated {o['truncated_n']}, errors {o['error_n']})  "
+              f"exact when answered " + ("n/a" if ewa is None else f"{ewa:.1f}%"))
         print(f"   strict shape {r['strict_shape']:.1f}%  label found {r['label_found']:.1f}%")
         print(f"   boundary exact {b['boundary']['rates_pct']['exact']:.1f}%  "
               f"non-boundary exact {b['non_boundary']['rates_pct']['exact']:.1f}%")

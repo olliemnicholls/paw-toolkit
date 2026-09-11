@@ -271,3 +271,118 @@ def test_triage_requests_a_private_compile_explicitly() -> None:
     from paw_kit.backend.programasweights import ProgramAsWeightsBackend
     import inspect
     assert inspect.signature(ProgramAsWeightsBackend).parameters["public"].default is False
+
+
+# ================================================================================  B-3
+#
+# Arm D of the fiscal run was called with a hardcoded `max_tokens=400` that the artifact
+# recorded nowhere, while the compiled arms ran unbounded. 39 of 300 answers were truncated
+# and scored as failures with no label.
+
+FISCAL_ARTIFACT = _MEASUREMENTS / "finetune-fiscal-3080-20260910-190137.json"
+
+
+@pytest.fixture(scope="module")
+def fiscal_run() -> dict:
+    return json.loads(FISCAL_ARTIFACT.read_text())
+
+
+def test_fiscal_reference_max_tokens_is_the_fiscal_value_not_the_lookup_one() -> None:
+    """2000, and specifically not the lookup script's task-specific 30.
+
+    `measure_finetune_lookup.py` has a constant of the same name set to 30 because its
+    answer is six characters. Copying that value here would truncate essentially every
+    arm-D answer rather than 13% of them, which is a worse version of the same bug.
+    """
+    mff = _load("measure_finetune_fiscal")
+    mfl = _load("measure_finetune_lookup")
+    assert mff.REFERENCE_MAX_TOKENS == 2000
+    assert mfl.REFERENCE_MAX_TOKENS == 30
+    src = (_SCRIPTS / "measure_finetune_fiscal.py").read_text()
+    assert "max_tokens=REFERENCE_MAX_TOKENS" in src
+    assert "max_tokens=400" not in src
+
+
+def test_fiscal_summary_records_every_reference_sampling_parameter() -> None:
+    """Report §5's named test for B-3: the summary must record all of them.
+
+    The 2026-09-10 artifact records `reference_model` and `reference_temperature` and
+    nothing else -- the token cap that decided 39 of its 300 results is absent. Asserted
+    against the script's own keys, not against a re-run, since a re-run costs money.
+    """
+    mff = _load("measure_finetune_fiscal")
+    src = (_SCRIPTS / "measure_finetune_fiscal.py").read_text()
+    summary_block = src[src.index('summary = {\n        "label": args.label,'):]
+    for key in ("reference_model", "reference_temperature", "reference_max_tokens",
+                "reference_sampling"):
+        assert f'"{key}"' in summary_block, key
+    sampling = src[src.index('"reference_sampling": {'):]
+    for field in ("model", "temperature", "max_tokens", "top_p", "top_k",
+                  "stop_sequences", "system", "prompt_template"):
+        assert f'"{field}"' in sampling, field
+    # The cap that is recorded is the one the call actually uses.
+    assert mff.REFERENCE_MAX_TOKENS == 2000
+
+
+def test_fiscal_rates_separate_exact_from_exact_when_answered(fiscal_run: dict) -> None:
+    """A named recomputation over the committed artifact's untouched `cases[]`.
+
+    `measure_finetune_fiscal._rates` applied to arm D's 300 rows: 257 exact over 300
+    (85.7%, the published figure) and 257 exact over the 261 that produced a label
+    (98.5%). The truncation is the whole of the difference.
+    """
+    mff = _load("measure_finetune_fiscal")
+    arms = {a["arm"]: a for a in fiscal_run["arms"]}
+    d = mff._rates(arms["D"]["cases"])
+
+    assert d["n"] == 300
+    assert d["counts"]["exact"] == 257
+    assert round(d["rates_pct"]["exact"], 1) == 85.7
+    assert d["answered_n"] == 261
+    assert d["unanswered_n"] == 39
+    assert d["exact_when_answered"] == 257
+    assert round(d["exact_when_answered_pct"], 1) == 98.5
+    assert d["error_n"] == 0
+
+    # The compiled arms answered every case, so the two rates coincide there -- which is
+    # what makes the gap specific to the token-capped arm rather than a scoring change.
+    for arm in ("A", "B", "C"):
+        cut = mff._rates(arms[arm]["cases"])
+        assert cut["answered_n"] == 300, arm
+        assert cut["unanswered_n"] == 0, arm
+        assert cut["exact_when_answered_pct"] == cut["rates_pct"]["exact"], arm
+
+
+def test_fiscal_truncation_count_comes_from_the_api_stop_reason() -> None:
+    """`truncated_n` must be an observation, not "no label was found".
+
+    An arm can also fail to produce a label by answering in prose, so inferring truncation
+    from an absent label would over-count. `_row` records `stop_reason` and `truncated`.
+    """
+    mff = _load("measure_finetune_fiscal")
+    case = {"id": "x", "date": "2026-03-03", "format": "iso", "input": "2026-03-03",
+            "expected": "FY2026-W05", "boundary": False, "fiscal_year": 2026, "week": 5}
+
+    truncated = mff._row(case, "Let me work through this step by", None, 1.0,
+                         stop_reason="max_tokens")
+    assert truncated["truncated"] is True
+    assert truncated["label_found"] is False
+
+    chatty = mff._row(case, "I think the answer is probably around week five.", None, 1.0,
+                      stop_reason="end_turn")
+    assert chatty["truncated"] is False
+    assert chatty["label_found"] is False
+
+    clean = mff._row(case, "FY2026-W05", None, 1.0, stop_reason="end_turn")
+    assert clean["truncated"] is False
+    assert clean["exact"] is True
+
+    # Adapter arms pass no stop reason at all and must not be counted as truncated.
+    adapter = mff._row(case, "FY2026-W05", None, 1.0)
+    assert adapter["stop_reason"] is None
+    assert adapter["truncated"] is False
+
+    rates = mff._rates([truncated, chatty, clean, adapter])
+    assert rates["truncated_n"] == 1
+    assert rates["unanswered_n"] == 2
+    assert rates["exact_when_answered"] == 2
