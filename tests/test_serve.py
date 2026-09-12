@@ -1,10 +1,14 @@
 """Unit and integration tests for paw_kit.serve: OpenAI and Anthropic HTTP serving layer and Docker exporter."""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 from pathlib import Path
+import re
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 import pytest
@@ -454,15 +458,243 @@ def test_serve_payload_limit_asgi_streaming_PAW_SERVE_03(mock_adapter: Path) -> 
     assert res_normal.json()["output"]["priority"] == "high"
 
 
-def test_serve_invoke_returns_503_when_inference_busy_PAW_SERVE_04(
+# ---------------------------------------------------------------- X-2 / X-1 / X-3: Group 1
+# (auth/middleware-ordering/buffering reordering -- see the track's Implementation
+# overview for why these three land together.)
+
+
+def test_serve_auth_before_body_parsing_rejects_oversized_body_401_X_2(
+    mock_adapter: Path,
+) -> None:
+    """Verify X-2: authentication runs ahead of body buffering, JSON parsing and
+    Pydantic validation -- an oversized, malformed body with no Authorization header
+    must be rejected 401 before any of that expensive work runs, not 422/413. At
+    `main`, `_verify_auth` runs as the first statement *inside* the route body, which
+    is downstream of FastAPI's own body parsing/validation, so a malformed or
+    oversized unauthenticated body gets 422 or 413 there instead."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="secret")
+    client = TestClient(fastapi_app)
+
+    # Oversized (bigger than the new lower cap) AND malformed (not valid JSON), no
+    # credentials at all.
+    oversized_malformed = b"{" + b"not-json" * (1024 * 1024)
+    res = client.post(
+        "/v1/chat/completions",
+        content=oversized_malformed,
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 401
+
+    # Well-formed JSON, but with an oversized `messages` array (see the field
+    # constraint test below) -- still no credentials, still 401, not 422.
+    too_many_messages = {"messages": [{"role": "user", "content": "hi"} for _ in range(600)]}
+    res2 = client.post("/v1/chat/completions", json=too_many_messages)
+    assert res2.status_code == 401
+
+
+def test_serve_messages_array_bounded_by_field_constraint_X_2(mock_adapter: Path) -> None:
+    """Verify X-2's models.py half: `ChatCompletionRequest`/`AnthropicMessageRequest`
+    reject an oversized `messages` array with a 422 field-level validation error
+    (once authenticated) -- proving the constraint actually exists and fires, since
+    the 401-before-parsing test above can't distinguish "no constraint" from "never
+    reached the constraint"."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="k")
+    client = TestClient(fastapi_app)
+
+    too_many_messages = [{"role": "user", "content": "hi"} for _ in range(600)]
+
+    res_oai = client.post(
+        "/v1/chat/completions",
+        json={"messages": too_many_messages},
+        headers={"Authorization": "Bearer k"},
+    )
+    assert res_oai.status_code == 422
+
+    res_claude = client.post(
+        "/v1/messages",
+        json={"messages": too_many_messages},
+        headers={"Authorization": "Bearer k"},
+    )
+    assert res_claude.status_code == 422
+
+
+def test_serve_middleware_registration_order_matches_docstring_X_1(
     mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify PAW-SERVE-04: a caller that can't get the single inference slot within
-    the bounded timeout gets 503 instead of blocking forever, and /health keeps
-    responding throughout since it no longer shares the inference threadpool path."""
-    import paw_kit.serve.server as server_module
+    """Verify X-1: `app.user_middleware`'s actual order matches create_app's own
+    ordering comment (CORS -> RateLimit -> Auth -> PayloadSizeLimit -> routes). At
+    `main`, `add_middleware`'s `insert(0, ...)` semantics make the *last*-registered
+    middleware outermost -- the exact inverse of the call order used there, and the
+    exact inverse of what the comment at that location claimed."""
+    from paw_kit.serve.server import AuthMiddleware, PayloadSizeLimitMiddleware, RateLimitMiddleware
 
-    monkeypatch.setattr(server_module, "_INFERENCE_SLOT_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setenv("PAW_CORS_ORIGINS", "https://good.example")
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="k", requests_per_minute=5)
+
+    classes = [m.cls for m in fastapi_app.user_middleware]
+    assert classes == [CORSMiddleware, RateLimitMiddleware, AuthMiddleware, PayloadSizeLimitMiddleware]
+
+
+def test_serve_throttled_client_oversized_body_gets_429_not_413_X_1(mock_adapter: Path) -> None:
+    """Verify X-1: with RateLimit correctly positioned ahead of PayloadSizeLimit, a
+    throttled client sending an oversized body gets 429, not 413 -- at `main`,
+    PayloadSizeLimitMiddleware was (due to the insert(0, ...) bug) the *outermost*
+    middleware, so it saw -- and rejected -- an oversized body before the rate
+    limiter ever got a chance to."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, allow_anonymous=True, requests_per_minute=1
+    )
+    client = TestClient(fastapi_app)
+
+    assert client.post("/invoke", json={"input": "Urgent payment failure"}).status_code == 200
+
+    # Bigger than *both* the new lower body cap (2MB) and the old 10MB one -- must
+    # stay oversized regardless of which cap is in effect, so this genuinely
+    # exercises the ordering (RateLimit ahead of PayloadSizeLimit), not just the cap
+    # value: at `main`, an 11MB body is caught by the (there, outermost)
+    # PayloadSizeLimitMiddleware before RateLimitMiddleware (there, innermost) ever
+    # runs, giving 413 regardless of the caller's rate-limit state.
+    large_payload = b"a" * (11 * 1024 * 1024)
+    res = client.post("/invoke", content=large_payload)
+    assert res.status_code == 429
+
+
+def test_serve_cors_preflight_succeeds_without_auth_when_both_configured(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify the Implementation overview's ordering decision (not a defect at
+    `main`, since `_verify_auth` never ran for a preflight OPTIONS request either
+    way -- a regression guard for the fix, added because no existing test exercised
+    this combination): Auth sits inside CORSMiddleware, not outside it, so an
+    unauthenticated cross-origin preflight is still answered by CORSMiddleware
+    before AuthMiddleware ever runs. Placing auth outside CORS would 401 every
+    preflight whenever both PAW_CORS_ORIGINS and an API key are configured -- the
+    expected production configuration, not an edge case."""
+    monkeypatch.setenv("PAW_CORS_ORIGINS", "https://good.example")
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="secret")
+    client = TestClient(fastapi_app)
+
+    res = client.options(
+        "/invoke",
+        headers={
+            "Origin": "https://good.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") == "https://good.example"
+
+
+def test_serve_body_read_timeout_returns_408_on_stall_X_3() -> None:
+    """Verify X-3: a chunked request that sends one byte and then stalls past the
+    read deadline gets 408, instead of being held open indefinitely (pre-auth,
+    pre-rate-limit -- PayloadSizeLimitMiddleware buffers the body before either of
+    those layers run, by design). Driven directly at the ASGI layer with a synthetic
+    `receive` that stalls after the first chunk -- httpx's TestClient has no way to
+    model a `receive()` call that never resolves within a bounded test run, so this
+    is the same "manipulate the ASGI layer directly" style as the rate-limiter's
+    `_consume()` tests, applied to this middleware's `__call__` instead."""
+    from paw_kit.serve.server import PayloadSizeLimitMiddleware
+
+    calls = 0
+
+    async def receive() -> Dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"type": "http.request", "body": b"a", "more_body": True}
+        await asyncio.sleep(1000)  # never actually reached within the 0.05s deadline
+        raise AssertionError("unreachable")
+
+    sent: list = []
+
+    async def send(message: Dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def inner_app(scope: object, receive: object, send: object) -> None:
+        raise AssertionError("downstream app must not be reached: the body never completed")
+
+    scope = {"type": "http", "headers": []}
+    middleware = PayloadSizeLimitMiddleware(
+        inner_app, max_body_bytes=10 * 1024 * 1024, body_read_timeout=0.05
+    )
+
+    asyncio.run(middleware(scope, receive, send))
+
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 408
+
+
+def test_serve_body_read_already_expired_deadline_returns_408_X_3() -> None:
+    """Verify X-3: a deadline that has already passed *before the loop's first
+    iteration even begins* still produces 408 -- not just a deadline crossed mid-
+    read (the test above). No separate pre-check exists for this in the source
+    (see the comment at the top of the buffering loop): `asyncio.wait_for(coro,
+    timeout=T)` for any T <= 0 raises `asyncio.TimeoutError` immediately without
+    ever running `coro`, which this test also verifies directly (`receive_calls`
+    stays 0) -- a negative `body_read_timeout` needs no clock mocking at all to
+    land reliably past its own deadline."""
+    from paw_kit.serve.server import PayloadSizeLimitMiddleware
+
+    receive_calls = 0
+
+    async def receive() -> Dict[str, Any]:
+        nonlocal receive_calls
+        receive_calls += 1
+        return {"type": "http.request", "body": b"a", "more_body": False}
+
+    sent: list = []
+
+    async def send(message: Dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def inner_app(scope: object, receive: object, send: object) -> None:
+        raise AssertionError("downstream app must not be reached")
+
+    scope = {"type": "http", "headers": []}
+    middleware = PayloadSizeLimitMiddleware(
+        inner_app, max_body_bytes=10 * 1024 * 1024, body_read_timeout=-1.0
+    )
+
+    asyncio.run(middleware(scope, receive, send))
+
+    assert receive_calls == 0
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 408
+
+    assert receive_calls == 0
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 408
+
+
+def test_format_max_body_message_integer_vs_fractional_mb_X_2() -> None:
+    """Verify X-2's dynamic 413 message text pins both branches of
+    `if mb == int(mb)`: an exact-megabyte cap renders as a bare integer ("2MB"),
+    not "2.00MB", while a non-exact cap renders with two decimal places. Without
+    this, a mutant flipping the comparison (or a future refactor) could silently
+    start showing "2.00MB" for the default 2MB cap and nothing would notice --
+    exactly the "message describes a limit other than the one enforced" class of
+    bug X-2's own docstring calls out."""
+    from paw_kit.serve.server import _format_max_body_message
+
+    assert _format_max_body_message(2 * 1024 * 1024) == "Payload Too Large (maximum 2MB)"
+    assert _format_max_body_message(int(1.5 * 1024 * 1024)) == "Payload Too Large (maximum 1.50MB)"
+
+
+def test_serve_invoke_returns_503_when_inference_busy_PAW_SERVE_04(
+    mock_adapter: Path,
+) -> None:
+    """Verify PAW-SERVE-04 / X-7: a caller that can't get the single inference slot
+    gets an immediate 503 instead of waiting for it -- admission (X-7) is a
+    non-blocking acquire_nowait check on the event loop, not a bounded wait, so no
+    timeout needs configuring here at all -- and /health keeps responding throughout
+    since it no longer shares the inference threadpool path."""
 
     class SlowBackend(MockPAWBackend):
         def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
@@ -483,6 +715,50 @@ def test_serve_invoke_returns_503_when_inference_busy_PAW_SERVE_04(
 
         assert busy_future.result(timeout=5).status_code == 503
         assert slow_future.result(timeout=5).status_code == 200
+
+
+def test_serve_inference_admission_bounded_under_load_X_7(mock_adapter: Path) -> None:
+    """Verify X-7: admission to the single inference slot is immediate (acquire_nowait
+    -- no worker thread is ever consumed queueing for it), so under N >> pool-size
+    concurrent load, only one request actually runs inference; every other request's
+    round trip stays bounded by a concrete p99 figure well under the old unbounded-
+    queue / 30s-per-request behaviour, instead of piling up at 50s+ apiece. At
+    `main`, the equivalent of this admission wait was `semaphore.acquire(timeout=30)`
+    -- reached only *after* FastAPI's sync-route dispatch already granted a worker
+    thread, itself an unbounded wait -- so this same N would have taken up to
+    N * 30s serialized through the threadpool rather than completing near-instantly."""
+
+    class SlowBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+            time.sleep(0.3)
+            return super().infer(adapter_path, input_text, grammar_constraint)
+
+    fastapi_app = create_app(mock_adapter, backend=SlowBackend(), allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    n = 25
+
+    def _timed_request() -> "tuple[int, float]":
+        t0 = time.perf_counter()
+        res = client.post("/invoke", json={"input": "Urgent payment failure"})
+        return res.status_code, time.perf_counter() - t0
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        results = list(pool.map(lambda _: _timed_request(), range(n)))
+
+    statuses = [status for status, _ in results]
+    latencies = sorted(latency for _, latency in results)
+
+    assert statuses.count(200) == 1
+    assert statuses.count(503) == n - 1
+
+    # Concrete p99 bound (same percentile-index style as ServerState.get_metrics):
+    # every response, including the one that actually ran 0.3s of inference, must
+    # complete in well under the old 30s admission wait. 2.0s leaves generous
+    # headroom for test-machine scheduling jitter while still proving admission does
+    # not queue.
+    p99 = latencies[min(int(len(latencies) * 0.99), len(latencies) - 1)]
+    assert p99 < 2.0
 
 
 def test_extract_content_handles_null_text_value_PAW_SERVE_05() -> None:
@@ -648,6 +924,119 @@ def test_serve_401_includes_www_authenticate_header_PAW_SERVE_09(mock_adapter: P
     assert res_wrong.headers.get("www-authenticate") == "Bearer"
 
 
+def test_serve_non_ascii_bearer_token_returns_401_not_500_X_6(mock_adapter: Path) -> None:
+    """Verify X-6: a non-ASCII bearer token (as it arrives after the ASGI layer's
+    latin-1 header decoding) returns 401, not an unhandled 500. At `main`,
+    `hmac.compare_digest(token, configured_api_key)` compares two `str` objects, and
+    raises `TypeError: comparing strings with non-ASCII characters is not supported`
+    for any non-ASCII `str` operand -- escaping `_verify_auth` as a bare 500 that
+    `ServerErrorMiddleware` re-raises with a full traceback per attempt, and never
+    recorded via `record_request(is_error=True)`.
+
+    httpx encodes `str` header values as strict ASCII and raises before the request
+    is even sent for one containing a non-ASCII character, so this passes raw bytes
+    (a `(bytes, bytes)` header tuple) directly -- httpx does not re-encode those,
+    and Starlette's `Headers(scope=scope)` decodes the same raw bytes back to the
+    same non-ASCII `str` server-side, exactly reproducing the reported crash."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="secret")
+    client = TestClient(fastapi_app)
+
+    raw_auth = b"Bearer " + bytes([0xFF, 0xFE])
+    res = client.post(
+        "/invoke",
+        json={"input": "test"},
+        headers=[(b"authorization", raw_auth)],
+    )
+    assert res.status_code == 401
+    assert res.headers.get("www-authenticate") == "Bearer"
+
+
+def test_serve_auth_comparison_exception_returns_401_not_500_X_6(mock_adapter: Path) -> None:
+    """Verify X-6's `except Exception: token_ok = False` branch specifically --
+    distinct from the test above, which the fix's bytes-level comparison actually
+    handles *without* raising at all (non-ASCII survives a round trip through
+    `.encode("utf-8")` just fine), so nothing before this test ever actually forces
+    an exception out of the `hmac.compare_digest` call. A lone UTF-16 surrogate in
+    the *configured* key (impossible to type, but not impossible to configure
+    programmatically, e.g. from a corrupted environment variable) raises
+    `UnicodeEncodeError` from `.encode("utf-8")` itself, reaching this except
+    clause for real."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="\ud800")
+    client = TestClient(fastapi_app)
+
+    res = client.post(
+        "/invoke", json={"input": "test"}, headers={"Authorization": "Bearer anything"}
+    )
+    assert res.status_code == 401
+    assert res.headers.get("www-authenticate") == "Bearer"
+
+
+def test_serve_auth_failure_response_body_text_X_2(mock_adapter: Path) -> None:
+    """Pin the exact 401 body text AuthMiddleware constructs
+    (`f"Unauthorized: {failure_reason[0].upper()}{failure_reason[1:]}"`) for both
+    failure reasons -- a mutant changing either literal index (0 or 1) garbles the
+    capitalization/content in a way no existing test notices, since they only ever
+    check the status code and the WWW-Authenticate header, never the body text."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="secret")
+    client = TestClient(fastapi_app)
+
+    res_missing = client.post("/invoke", json={"input": "test"})
+    assert res_missing.text == "Unauthorized: Missing or malformed Bearer token"
+
+    res_wrong = client.post(
+        "/invoke", json={"input": "test"}, headers={"Authorization": "Bearer wrong"}
+    )
+    assert res_wrong.text == "Unauthorized: Invalid API key"
+
+
+def test_serve_auth_failure_logs_and_increments_metrics_X_9(
+    mock_adapter: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify X-9: a failed-auth request increments /metrics' counters and produces a
+    log record that does not echo the presented (wrong) token. At `main`, auth
+    failures are neither logged nor counted at all -- /metrics reads
+    total_requests: 0 regardless of how many failed attempts preceded it."""
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="supersecret-token")
+    client = TestClient(fastapi_app)
+
+    res = client.post(
+        "/invoke",
+        json={"input": "test"},
+        headers={"Authorization": "Bearer wrong-token-value"},
+    )
+    assert res.status_code == 401
+
+    metrics = client.get(
+        "/metrics", headers={"Authorization": "Bearer supersecret-token"}
+    ).json()
+    assert metrics["total_requests"] >= 1
+    assert metrics["error_count"] >= 1
+
+    assert "auth" in caplog.text.lower()
+    assert "supersecret-token" not in caplog.text
+    assert "wrong-token-value" not in caplog.text
+
+
+def test_serve_api_key_whitespace_warns_at_startup_X_12(
+    mock_adapter: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify X-12: configuring an API key with leading/trailing whitespace logs a
+    startup warning naming the problem. At `main`, the incoming bearer token is
+    `.strip()`ed but the *configured* key never is, so a `PAW_API_KEY`/`--api-key`
+    value with stray whitespace can never authenticate and the operator sees only
+    "Invalid API key" with no indication why."""
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+    backend = MockPAWBackend()
+    create_app(mock_adapter, backend=backend, api_key="  secret-with-space  ")
+
+    assert "whitespace" in caplog.text.lower()
+
+
 def test_serve_rate_limit_returns_429_on_exceedance_PAW_SERVE_10(mock_adapter: Path) -> None:
     """Verify PAW-SERVE-10: a client exceeding its per-minute token-bucket budget gets
     429, while /health stays exempt so container healthchecks never trip the limiter."""
@@ -681,20 +1070,424 @@ def test_serve_rate_limit_disabled_when_zero_PAW_SERVE_10(mock_adapter: Path) ->
 
 
 def test_serve_rate_limit_bucket_storage_bounded_PAW_SERVE_10() -> None:
-    """Verify the rate limiter's per-client bucket storage evicts the oldest entry
-    past _MAX_RATE_LIMIT_BUCKETS instead of growing unbounded under many distinct
-    client addresses — otherwise the limiter would itself become an unbounded-memory
-    DoS surface, the exact problem class it exists to defend against."""
+    """Verify the rate limiter's per-client bucket storage never exceeds
+    _MAX_RATE_LIMIT_BUCKETS under many distinct client addresses — otherwise the
+    limiter would itself become an unbounded-memory DoS surface, the exact problem
+    class it exists to defend against. `global_requests_per_minute` is set high
+    enough here to be a non-factor -- this test is about storage bounding, not
+    throughput, and X-4's separate global-ceiling test below exercises that."""
     from paw_kit.serve.server import _MAX_RATE_LIMIT_BUCKETS, RateLimitMiddleware
 
     async def _noop_app(scope: object, receive: object, send: object) -> None:
         pass
 
-    middleware = RateLimitMiddleware(_noop_app, requests_per_minute=60)
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=60, global_requests_per_minute=10**9
+    )
     for i in range(_MAX_RATE_LIMIT_BUCKETS + 50):
         middleware._consume(f"10.0.0.{i}")
 
     assert len(middleware._buckets) == _MAX_RATE_LIMIT_BUCKETS
+
+
+def test_serve_rate_limit_eviction_preserves_throttled_bucket_X_5() -> None:
+    """Verify X-5: bucket eviction never resets a *throttled* client's budget. At
+    `main`, `popitem(last=False)` evicted whichever bucket was oldest regardless of
+    its token level, and a fresh key defaults to a full bucket (the old
+    `.pop(key, (capacity, now))`), so evicting a throttled client's entry was
+    indistinguishable from silently handing it a brand new full one. Throttle one
+    key first, then flood past _MAX_RATE_LIMIT_BUCKETS with fresh keys, and assert
+    the throttled key's budget is unchanged (same direct
+    RateLimitMiddleware._consume() manipulation style as the existing
+    bucket-bound test)."""
+    from paw_kit.serve.server import _MAX_RATE_LIMIT_BUCKETS, RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=60, global_requests_per_minute=10**9
+    )
+    for _ in range(60):
+        middleware._consume("victim")
+    tokens_before, _ = middleware._buckets["victim"]
+    assert tokens_before < 1.0  # fully drained -- genuinely throttled
+
+    for i in range(_MAX_RATE_LIMIT_BUCKETS + 50):
+        middleware._consume(f"flood-{i}")
+
+    assert "victim" in middleware._buckets
+    tokens_after, _ = middleware._buckets["victim"]
+    assert tokens_after == pytest.approx(tokens_before, abs=1e-6)
+
+
+def test_serve_rate_limit_ipv6_slash64_shares_bucket_X_4() -> None:
+    """Verify X-4: two different addresses inside the same IPv6 /64 collapse onto
+    one bucket -- otherwise an attacker with a routable /64 (trivial to obtain,
+    unlike an IPv4 /32) evades the limiter entirely by incrementing the low 64 bits
+    on every request. A different /64 must get its own, independent bucket."""
+    from paw_kit.serve.server import RateLimitMiddleware, _normalize_address_key
+
+    key_a = _normalize_address_key("2001:db8:1234:5678::1")
+    key_b = _normalize_address_key("2001:db8:1234:5678:ffff:ffff:ffff:ffff")
+    assert key_a == key_b
+
+    key_other = _normalize_address_key("2001:db8:1234:5679::1")
+    assert key_other != key_a
+
+    # End-to-end through the middleware itself: exhausting the budget from one
+    # address in a /64 throttles a different address in the *same* /64.
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=1, global_requests_per_minute=10**9
+    )
+    scope_a = {"type": "http", "path": "/invoke", "client": ("2001:db8:1234:5678::1", 0)}
+    scope_b = {"type": "http", "path": "/invoke", "client": ("2001:db8:1234:5678:1::1", 0)}
+
+    assert asyncio.run(_rate_limit_allows(middleware, scope_a)) is True
+    assert asyncio.run(_rate_limit_allows(middleware, scope_b)) is False
+
+
+def test_resolve_client_key_reports_resolved_not_none_X_4() -> None:
+    """Verify `_resolve_client_key`'s `client_was_none` flag is False whenever an
+    address is actually resolved -- via the real socket peer, or via a trusted
+    X-Forwarded-For -- and that the resolved key is the actual address, not some
+    other field. Covers both `_resolve_client_key`'s internal `return ..., False`
+    statements directly (the request-level tests elsewhere only ever observe this
+    function's *effect* on throttling, never its two return values together)."""
+    from paw_kit.serve.server import _resolve_client_key
+
+    key, was_none = _resolve_client_key({"client": ("203.0.113.7", 54321)}, trust_proxy_header=False)
+    assert key == "203.0.113.7"
+    assert was_none is False
+
+    key, was_none = _resolve_client_key(
+        {
+            "headers": [(b"x-forwarded-for", b"198.51.100.4")],
+            "client": ("203.0.113.7", 54321),
+        },
+        trust_proxy_header=True,
+    )
+    assert key == "198.51.100.4"
+    assert was_none is False
+
+
+async def _rate_limit_allows(middleware: "RateLimitMiddleware", scope: Dict[str, Any]) -> bool:
+    """Drive `RateLimitMiddleware.__call__` directly and report whether the
+    downstream app was reached (True) or a 429 was returned (False)."""
+    reached = False
+
+    async def receive() -> Dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Dict[str, Any]) -> None:
+        pass
+
+    async def inner_app(scope: object, receive: object, send: object) -> None:
+        nonlocal reached
+        reached = True
+
+    middleware.app = inner_app
+    await middleware(scope, receive, send)
+    return reached
+
+
+def test_serve_rate_limit_client_none_logs_warning_not_silent_X_4(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify X-4: `scope["client"] is None` with no trusted proxy header configured
+    (the documented reverse-proxy deployment) is loud, not silent -- at `main`, this
+    situation collapses every such client onto one shared "unknown" bucket with no
+    indication it happened at all."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(_noop_app, requests_per_minute=60)
+    scope = {"type": "http", "path": "/invoke", "client": None}
+    assert asyncio.run(_rate_limit_allows(middleware, scope)) is True
+
+    assert "client" in caplog.text.lower()
+    assert "PAW_TRUST_PROXY_HEADER" in caplog.text
+
+    # X-4: "log once" means once -- `self._warned_no_client` must actually latch
+    # to True after the first warning, or every subsequent client=None request
+    # would log again. A mutant flipping that assignment's `True` to `False`
+    # leaves the flag permanently False, so the guard's `not self._warned_no_client`
+    # half stays True forever and every call re-logs.
+    caplog.clear()
+    assert asyncio.run(_rate_limit_allows(middleware, scope)) is True
+    assert caplog.records == []
+
+
+def test_serve_rate_limit_global_ceiling_caps_across_all_keys_X_4() -> None:
+    """Verify X-4's global ceiling: an attacker rotating through many distinct
+    per-key buckets (each starting full, by design -- a fresh key must default to a
+    full bucket, or a legitimate first-time client would be throttled before its
+    first request) cannot exceed the aggregate ceiling across all of them combined.
+    At `main` there is no such ceiling at all: address rotation bypasses the
+    limiter entirely, bounded only by however many distinct addresses the attacker
+    can produce."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=1000, global_requests_per_minute=5
+    )
+
+    allowed = sum(1 for i in range(20) if middleware._consume(f"rotating-{i}"))
+    assert allowed == 5
+
+
+def test_serve_rate_limit_negative_env_value_warns_and_disables_X_8(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify X-8: PAW_RATE_LIMIT_PER_MINUTE=-5 logs a warning and disables the
+    limiter instead of passing a negative capacity through. At `main`,
+    `int("-5")` succeeds and `if requests_per_minute > 0` silently skips installing
+    the limiter with no log line at all."""
+    monkeypatch.setenv("PAW_RATE_LIMIT_PER_MINUTE", "-5")
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    for _ in range(15):
+        assert client.post("/invoke", json={"input": "Urgent payment failure"}).status_code == 200
+
+    assert "PAW_RATE_LIMIT_PER_MINUTE" in caplog.text
+
+
+def test_serve_rate_limit_non_integer_env_value_falls_back_X_8(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify X-8: PAW_RATE_LIMIT_PER_MINUTE="not-a-number" falls back cleanly (no
+    raw ValueError at startup) and logs a warning. At `main`,
+    `int(os.environ.get("PAW_RATE_LIMIT_PER_MINUTE", ...))` raises an unhandled
+    ValueError directly out of create_app."""
+    monkeypatch.setenv("PAW_RATE_LIMIT_PER_MINUTE", "not-a-number")
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    assert client.post("/invoke", json={"input": "Urgent payment failure"}).status_code == 200
+    assert "PAW_RATE_LIMIT_PER_MINUTE" in caplog.text
+
+
+def test_int_env_with_fallback_zero_is_not_negative_X_8(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify the exact boundary in X-8's `_int_env_with_fallback`: `if value < 0`
+    must not treat 0 itself as negative. 0 is a legitimate, intentional value here
+    (PAW_RATE_LIMIT_PER_MINUTE=0 explicitly disables the limiter, see
+    test_serve_rate_limit_disabled_when_zero_PAW_SERVE_10) -- a mutant widening the
+    comparison to `<=` would additionally clamp 0 to 0 (a no-op on the return value)
+    but log the same "is negative" warning for a value that was never negative,
+    which is exactly the false-positive this test would catch even though the
+    *return value* is identical either way."""
+    from paw_kit.serve.server import _int_env_with_fallback
+
+    monkeypatch.setenv("PAW_RATE_LIMIT_PER_MINUTE", "0")
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+
+    result = _int_env_with_fallback("PAW_RATE_LIMIT_PER_MINUTE", 120)
+
+    assert result == 0
+    assert "is negative" not in caplog.text
+
+
+def test_serve_rate_limit_global_bucket_allows_exactly_one_token_X_4() -> None:
+    """Verify the exact boundary in X-4's global ceiling: `if self._global_tokens <
+    1.0` must allow a consume when exactly 1.0 token is available (not just when
+    strictly more than 1.0 is), and correctly deny once it drops to 0.0. A mutant
+    widening this to `<=` would reject a caller with a perfectly full one-token
+    budget, which no request-level test above catches (they only ever observe the
+    limiter through many requests, never pin the single-token boundary case
+    directly)."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(_noop_app, requests_per_minute=60, global_requests_per_minute=1)
+    now = middleware._global_last_refill  # same instant: refill contributes exactly 0
+
+    assert middleware._consume_global_locked(now) is True  # exactly 1.0 tokens -> allowed
+    assert middleware._consume_global_locked(now) is False  # now 0.0 tokens -> denied
+
+
+def test_serve_rate_limit_eviction_boundary_at_epsilon_X_5() -> None:
+    """Verify the exact boundary in X-5's eviction guard: `if projected >=
+    self.capacity - 1e-9` must still evict a bucket sitting *exactly* at that
+    epsilon-tolerance threshold (the "approximately full" case the epsilon exists
+    for), not only one strictly above it. A mutant narrowing this to `>` would
+    refuse to evict a bucket parked exactly on the boundary, which
+    `test_serve_rate_limit_eviction_preserves_throttled_bucket_X_5` cannot detect:
+    that test only ever produces buckets far from this exact floating-point
+    boundary."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=60, global_requests_per_minute=10**9
+    )
+    now = time.monotonic()
+    # Token count placed exactly on the tolerance boundary, with last_refill == now
+    # so the projection adds zero refill -- `projected` is exactly
+    # `capacity - 1e-9`, the precise value the comparison tests against.
+    middleware._buckets["idle-at-boundary"] = (60.0 - 1e-9, now)
+
+    assert middleware._evict_one_full_bucket_locked(now) is True
+    assert "idle-at-boundary" not in middleware._buckets
+
+
+def test_serve_rate_limit_consume_denies_when_table_full_of_throttled_keys_X_5() -> None:
+    """Verify X-5's shed-load path returns False (denied) from `_consume` itself
+    when the bucket table is full and nothing is evictable -- not just that the
+    table's *size* stays bounded (which `test_serve_rate_limit_bucket_storage_bounded_PAW_SERVE_10`
+    already covers) or that an existing throttled key's *budget* survives (which
+    `test_serve_rate_limit_eviction_preserves_throttled_bucket_X_5` covers). A
+    mutant turning this shed-load `return False` into `return True` makes
+    `_consume` report a brand-new, never-tracked key as *allowed* -- exactly the
+    "admit anyway" failure mode X-5 exists to prevent -- while leaving the table's
+    size and every other key's budget untouched, so neither of those two other
+    tests can observe it."""
+    from paw_kit.serve.server import _MAX_RATE_LIMIT_BUCKETS, RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=60, global_requests_per_minute=10**9
+    )
+    for i in range(_MAX_RATE_LIMIT_BUCKETS):
+        assert middleware._consume(f"flood-{i}") is True
+
+    # Table is now exactly full, and (this same tight loop, negligible elapsed
+    # time) every tracked bucket sits below capacity -- nothing is evictable.
+    assert middleware._consume("one-more-new-key") is False
+
+
+def test_serve_rate_limit_real_client_does_not_log_none_warning_X_4(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify X-4's log-once guard is a genuine `and`, not `or`:
+    `if client_was_none and not self._warned_no_client` must stay silent for a
+    request with a real (non-None) client address, even on a fresh middleware
+    instance where `_warned_no_client` is still False. A mutant widening this to
+    `or` would fire the "scope['client'] is None" warning on literally the first
+    request handled by any middleware instance, real client address or not --
+    undetectable by the existing client=None test, which never checks the
+    negative case."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(_noop_app, requests_per_minute=60)
+    scope = {"type": "http", "path": "/invoke", "client": ("10.0.0.1", 12345)}
+
+    assert asyncio.run(_rate_limit_allows(middleware, scope)) is True
+    assert caplog.records == []
+
+
+def test_serve_execution_timeout_returns_exactly_503_X_7(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify the execution-timeout path in `_execute_with_telemetry` (X-7) returns
+    exactly 503, pinned as a literal rather than merely "not 200" -- distinct from
+    the admission-overflow 503 the busy-inference tests above exercise (a
+    different call site in the same function): this specifically forces an
+    *admitted* inference to overrun `_INFERENCE_SLOT_TIMEOUT_SECONDS`, which no
+    existing test reaches (they all use sub-second sleeps well under the 20s
+    default)."""
+    import paw_kit.serve.server as server_module
+
+    monkeypatch.setattr(server_module, "_INFERENCE_SLOT_TIMEOUT_SECONDS", 0.05)
+
+    class SlowBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+            time.sleep(0.3)
+            return super().infer(adapter_path, input_text, grammar_constraint)
+
+    fastapi_app = create_app(mock_adapter, backend=SlowBackend(), allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    res = client.post("/invoke", json={"input": "Urgent payment failure"})
+    assert res.status_code == 503
+    assert "execution bound" in res.json()["detail"]
+
+    # X-7: this failure must be recorded as an error like every other one -- a
+    # mutant flipping this call site's `is_error=True` to `False` would leave
+    # /metrics silent about it, exactly the PAW-SERVE-05 class of gap this
+    # telemetry boundary exists to close.
+    metrics = client.get("/metrics").json()
+    assert metrics["error_count"] >= 1
+
+
+def test_serve_trust_proxy_header_env_var_gates_xff_trust_X_4(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify X-4's `PAW_TRUST_PROXY_HEADER` env-var parsing in create_app
+    (`... in ("1", "true", "yes", "on")`) actually gates whether
+    X-Forwarded-For is trusted, end to end through the real middleware stack --
+    the existing X-4 tests construct RateLimitMiddleware directly with an explicit
+    `trust_proxy_header=` kwarg and never exercise this env-var-parsing line at
+    all. A mutant flipping `in` to `not in` would invert the opt-in entirely."""
+    monkeypatch.setenv("PAW_TRUST_PROXY_HEADER", "1")
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, allow_anonymous=True, requests_per_minute=1
+    )
+    client = TestClient(fastapi_app)
+
+    res1 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.5"}
+    )
+    assert res1.status_code == 200
+    # Different spoofed address, same real TestClient peer -- trusted, so this is a
+    # fresh bucket rather than sharing the first request's exhausted one.
+    res2 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.9"}
+    )
+    assert res2.status_code == 200
+
+
+def test_serve_trust_proxy_header_disabled_by_default_ignores_xff_X_4(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion to the test above: with PAW_TRUST_PROXY_HEADER unset (the
+    default), X-Forwarded-For must be ignored -- both requests key on the real
+    (identical) TestClient peer address and share one budget. Together the two
+    tests bracket both sides of the `in` boundary that a `not in` mutant would
+    invert."""
+    monkeypatch.delenv("PAW_TRUST_PROXY_HEADER", raising=False)
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, allow_anonymous=True, requests_per_minute=1
+    )
+    client = TestClient(fastapi_app)
+
+    res1 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.5"}
+    )
+    assert res1.status_code == 200
+    res2 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.9"}
+    )
+    assert res2.status_code == 429
 
 
 def test_server_state_metrics_calculation() -> None:
@@ -710,6 +1503,38 @@ def test_server_state_metrics_calculation() -> None:
     assert metrics["p95_latency_ms"] == 50.0
 
 
+def test_server_state_auth_failure_count_starts_zero_and_increments_by_one_X_9() -> None:
+    """Verify X-9's new counter: `auth_failure_count` starts at exactly 0 (not a
+    stray nonzero initial value) and `record_auth_failure()` increments it by
+    exactly 1 per call, matching the running total the AuthMiddleware log line
+    reports."""
+    state = ServerState()
+    assert state.get_auth_failure_count() == 0
+
+    state.record_auth_failure()
+    assert state.get_auth_failure_count() == 1
+
+    state.record_auth_failure()
+    assert state.get_auth_failure_count() == 2
+
+
+def test_max_body_bytes_and_global_rate_limit_default_exact_values_X_2_X_4() -> None:
+    """Pin the exact values of two constants introduced by this track, both of
+    which are computed from literals a mutation could silently perturb without
+    any behavioural test catching a one-off change: X-2's lowered default body cap
+    (`_MAX_BODY_BYTES`, exactly 2MB) and X-4's default global rate-limit ceiling
+    (`_DEFAULT_GLOBAL_RATE_LIMIT_PER_MINUTE`, exactly 2x `_MAX_RATE_LIMIT_BUCKETS`,
+    as its own docstring states)."""
+    from paw_kit.serve.server import (
+        _DEFAULT_GLOBAL_RATE_LIMIT_PER_MINUTE,
+        _MAX_BODY_BYTES,
+        _MAX_RATE_LIMIT_BUCKETS,
+    )
+
+    assert _MAX_BODY_BYTES == 2 * 1024 * 1024 == 2097152
+    assert _DEFAULT_GLOBAL_RATE_LIMIT_PER_MINUTE == 2 * _MAX_RATE_LIMIT_BUCKETS == 20000
+
+
 def test_docker_exporter_scaffold(mock_adapter: Path, tmp_path: Path) -> None:
     """Verify export_docker_scaffold generates all production deployment files with non-root user (M-4)."""
     out_dir = tmp_path / "docker_dist"
@@ -723,7 +1548,13 @@ def test_docker_exporter_scaffold(mock_adapter: Path, tmp_path: Path) -> None:
     assert (dest / "triage.paw").exists()
 
     dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
-    assert "FROM python:3.12-slim" in dockerfile
+    # X-10 pinned the base image by digest (see bug-hunt-F-server.md's named-hazard
+    # note): a bare "FROM python:3.12-slim" substring check would keep passing by
+    # accident once a digest is appended, so this asserts the actual pinned
+    # reference explicitly instead.
+    from paw_kit.serve.docker import _PYTHON_BASE_IMAGE
+
+    assert f"FROM {_PYTHON_BASE_IMAGE}" in dockerfile
     assert "USER app" in dockerfile
     assert "paw-serve" in dockerfile
     assert "triage.paw" in dockerfile
@@ -819,6 +1650,85 @@ def test_docker_exporter_pinned_requirements_txt_PAW_DOCKER_03(
     assert "COPY requirements.txt /app/requirements.txt" in dockerfile
     assert "uv pip install --system -r requirements.txt" in dockerfile
     assert "uv pip install --system paw-kit fastapi uvicorn httpx" not in dockerfile
+
+
+def test_resolved_dependency_names_reads_real_environment_metadata_X_10() -> None:
+    """Verify `_resolved_dependency_names` itself returns the actual names resolved
+    from this environment's installed `paw-kit` metadata (non-empty, and matching
+    known [project.dependencies] entries) -- called directly, not through
+    `_requirements_txt_content`'s own `or list(_FALLBACK_DEPENDENCY_NAMES)`
+    fallback, which happens to contain the same names in this environment and so
+    cannot by itself distinguish "resolved from the environment" from "silently
+    fell back to the hardcoded tuple" (see the mutant `_pkg_requires(package) or
+    []` -> `and []`, which makes this function always return `[]` whenever the
+    package genuinely has requirements -- masked at the `_requirements_txt_content`
+    level by that same fallback, but not here)."""
+    from paw_kit.serve.docker import _resolved_dependency_names
+
+    names = _resolved_dependency_names("paw-kit")
+
+    assert names, "expected paw-kit's installed metadata to yield a non-empty list"
+    assert "fastapi" in names
+    assert "pydantic" in names
+
+
+def test_requirements_txt_uses_resolved_names_over_fallback_when_present_X_10(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify `_requirements_txt_content`'s `_resolved_dependency_names("paw-kit")
+    or list(_FALLBACK_DEPENDENCY_NAMES)` actually prefers a non-empty resolved
+    list over the fallback -- a mutant flipping `or` to `and` would silently
+    discard any real resolved list and substitute the hardcoded fallback tuple
+    instead whenever resolution succeeds (i.e. always, in practice), which the
+    test above cannot catch on its own since it only inspects
+    `_resolved_dependency_names` in isolation, not how its result is actually
+    used. Distinguished here by monkeypatching resolution to a name that is not
+    in the fallback tuple at all."""
+    import paw_kit.serve.docker as docker_module
+
+    monkeypatch.setattr(docker_module, "_resolved_dependency_names", lambda package: ["pytest"])
+
+    content = docker_module._requirements_txt_content("mock")
+
+    assert "pytest==" in content
+    assert "fastapi==" not in content
+    assert "uvicorn==" not in content
+
+
+def test_docker_exporter_pins_full_dependency_set_and_no_latest_tags_X_10(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """Verify X-10: the generated requirements.txt covers every name in
+    pyproject.toml's [project.dependencies] -- at `main` only fastapi/uvicorn/httpx
+    were pinned, leaving interegular/pydantic/pyyaml/typer to float unpinned -- and
+    neither the base Python image nor the uv installer image floats on a mutable
+    tag (`FROM python:3.12-slim` / `COPY --from=ghcr.io/astral-sh/uv:latest` at
+    `main`); both are pinned by immutable digest instead."""
+    out_dir = tmp_path / "docker_dist"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
+
+    requirements = (dest / "requirements.txt").read_text(encoding="utf-8")
+    for package in ("interegular", "pydantic", "pyyaml", "typer", "fastapi", "uvicorn", "httpx"):
+        assert f"{package}==" in requirements, f"{package} is not pinned in requirements.txt"
+
+    dockerfile = (dest / "Dockerfile").read_text(encoding="utf-8")
+    assert ":latest" not in dockerfile
+    assert re.search(r"FROM python:[\w.\-]+@sha256:[0-9a-f]{64}", dockerfile)
+    assert re.search(r"COPY --from=ghcr\.io/astral-sh/uv:[\w.\-]+@sha256:[0-9a-f]{64}", dockerfile)
+
+
+def test_docker_exporter_dockerignore_covers_secrets_X_11(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """Verify X-11: the generated .dockerignore excludes .env/.env.*/*.pem/*.key/
+    secrets/ -- at `main` it omits all of these even though the generated README
+    tells the operator to put PAW_API_KEY in a .env file next to the compose file."""
+    out_dir = tmp_path / "docker_dist"
+    dest = export_docker_scaffold(mock_adapter, output_dir=out_dir)
+
+    dockerignore = (dest / ".dockerignore").read_text(encoding="utf-8")
+    for pattern in (".env", ".env.*", "*.pem", "*.key", "secrets/"):
+        assert pattern in dockerignore.splitlines(), f"{pattern!r} missing from .dockerignore"
 
 
 def test_docker_exporter_healthcheck_hits_ready_with_cold_start_period(
