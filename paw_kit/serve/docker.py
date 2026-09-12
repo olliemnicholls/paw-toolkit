@@ -238,19 +238,6 @@ def _requirements_txt_content(backend: str) -> str:
     dependency_names = _resolved_dependency_names("paw-kit") or list(_FALLBACK_DEPENDENCY_NAMES)
     lines.extend(_pinned_requirement(pkg) for pkg in dependency_names)
 
-    if backend == "real":
-        # Best-effort: `programasweights` is pinned directly only when *this*
-        # environment actually has it installed (e.g. the operator exported from an
-        # environment that had already compiled/run against --backend real).
-        # Otherwise there is nothing resolved to pin, and the `paw-kit[real]==` line
-        # above already constrains pip to pyproject.toml's own declared range for it.
-        try:
-            resolved_paw_version = _pkg_version("programasweights")
-        except PackageNotFoundError:
-            resolved_paw_version = None
-        if resolved_paw_version is not None:
-            lines.append(f"programasweights=={resolved_paw_version}")
-
     return "\n".join(lines) + "\n"
 
 
