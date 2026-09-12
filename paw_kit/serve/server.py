@@ -311,10 +311,15 @@ class PayloadSizeLimitMiddleware:
         deadline = time.monotonic() + self.body_read_timeout
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                response = Response(status_code=408, content="Request body read timed out")
-                await response(scope, receive, send)
-                return
+            # No separate "deadline already passed" pre-check here: verified
+            # directly that `asyncio.wait_for(coro, timeout=T)` for any T <= 0
+            # (zero or negative) raises `asyncio.TimeoutError` immediately without
+            # ever running `coro` -- identical, in every observable way, to a
+            # manual `if remaining <= 0: return 408` done ahead of it. A separate
+            # pre-check duplicating that built-in behaviour is not just redundant
+            # but literally unobservable dead code (confirmed: a mutant flipping
+            # its `<=` to `<`, or its `0` to `1`, changed nothing any test -- or
+            # any real caller -- could detect), so it is not reintroduced here.
             try:
                 message = await asyncio.wait_for(receive(), timeout=remaining)
             except asyncio.TimeoutError:

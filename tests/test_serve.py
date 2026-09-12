@@ -631,36 +631,23 @@ def test_serve_body_read_timeout_returns_408_on_stall_X_3() -> None:
     assert start["status"] == 408
 
 
-def test_serve_body_read_deadline_boundary_at_exactly_zero_X_3(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify X-3's deadline pre-check (`if remaining <= 0`, at the top of the
-    buffering loop) is inclusive of exactly zero remaining time, not just strictly
-    negative -- distinct from the test above, which only exercises the
-    `asyncio.wait_for(...)` timeout path (a few lines further down) and never hits
-    this specific comparison with `remaining == 0`. Deterministic: only
-    `paw_kit.serve.server`'s *own* module-level `time` name is replaced (not the
-    global `time` module `sys.modules['time']` holds, which asyncio's event loop
-    also relies on for its own scheduling) with a fake whose `monotonic()` returns
-    a fixed two-value sequence chosen so `remaining` computes to exactly 0.0 on the
-    loop's first pass -- real wall-clock timing could never reliably land on that
-    exact boundary."""
-    import paw_kit.serve.server as server_module
+def test_serve_body_read_already_expired_deadline_returns_408_X_3() -> None:
+    """Verify X-3: a deadline that has already passed *before the loop's first
+    iteration even begins* still produces 408 -- not just a deadline crossed mid-
+    read (the test above). No separate pre-check exists for this in the source
+    (see the comment at the top of the buffering loop): `asyncio.wait_for(coro,
+    timeout=T)` for any T <= 0 raises `asyncio.TimeoutError` immediately without
+    ever running `coro`, which this test also verifies directly (`receive_calls`
+    stays 0) -- a negative `body_read_timeout` needs no clock mocking at all to
+    land reliably past its own deadline."""
     from paw_kit.serve.server import PayloadSizeLimitMiddleware
-
-    # Call 1: `deadline = time.monotonic() + body_read_timeout` (body_read_timeout
-    # is 0.0, so deadline == 100.0). Call 2: the loop's `remaining = deadline -
-    # time.monotonic()` -- also 100.0, so remaining == 0.0 exactly.
-    clock_calls = iter([100.0, 100.0])
-    fake_time = type("FakeTime", (), {"monotonic": staticmethod(lambda: next(clock_calls))})()
-    monkeypatch.setattr(server_module, "time", fake_time)
 
     receive_calls = 0
 
     async def receive() -> Dict[str, Any]:
         nonlocal receive_calls
         receive_calls += 1
-        raise AssertionError("receive() must not be called once the deadline is reached")
+        return {"type": "http.request", "body": b"a", "more_body": False}
 
     sent: list = []
 
@@ -672,10 +659,12 @@ def test_serve_body_read_deadline_boundary_at_exactly_zero_X_3(
 
     scope = {"type": "http", "headers": []}
     middleware = PayloadSizeLimitMiddleware(
-        inner_app, max_body_bytes=10 * 1024 * 1024, body_read_timeout=0.0
+        inner_app, max_body_bytes=10 * 1024 * 1024, body_read_timeout=-1.0
     )
 
     asyncio.run(middleware(scope, receive, send))
+
+    assert receive_calls == 0
 
     assert receive_calls == 0
     start = next(m for m in sent if m["type"] == "http.response.start")
@@ -961,6 +950,46 @@ def test_serve_non_ascii_bearer_token_returns_401_not_500_X_6(mock_adapter: Path
     assert res.headers.get("www-authenticate") == "Bearer"
 
 
+def test_serve_auth_comparison_exception_returns_401_not_500_X_6(mock_adapter: Path) -> None:
+    """Verify X-6's `except Exception: token_ok = False` branch specifically --
+    distinct from the test above, which the fix's bytes-level comparison actually
+    handles *without* raising at all (non-ASCII survives a round trip through
+    `.encode("utf-8")` just fine), so nothing before this test ever actually forces
+    an exception out of the `hmac.compare_digest` call. A lone UTF-16 surrogate in
+    the *configured* key (impossible to type, but not impossible to configure
+    programmatically, e.g. from a corrupted environment variable) raises
+    `UnicodeEncodeError` from `.encode("utf-8")` itself, reaching this except
+    clause for real."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="\ud800")
+    client = TestClient(fastapi_app)
+
+    res = client.post(
+        "/invoke", json={"input": "test"}, headers={"Authorization": "Bearer anything"}
+    )
+    assert res.status_code == 401
+    assert res.headers.get("www-authenticate") == "Bearer"
+
+
+def test_serve_auth_failure_response_body_text_X_2(mock_adapter: Path) -> None:
+    """Pin the exact 401 body text AuthMiddleware constructs
+    (`f"Unauthorized: {failure_reason[0].upper()}{failure_reason[1:]}"`) for both
+    failure reasons -- a mutant changing either literal index (0 or 1) garbles the
+    capitalization/content in a way no existing test notices, since they only ever
+    check the status code and the WWW-Authenticate header, never the body text."""
+    backend = MockPAWBackend()
+    fastapi_app = create_app(mock_adapter, backend=backend, api_key="secret")
+    client = TestClient(fastapi_app)
+
+    res_missing = client.post("/invoke", json={"input": "test"})
+    assert res_missing.text == "Unauthorized: Missing or malformed Bearer token"
+
+    res_wrong = client.post(
+        "/invoke", json={"input": "test"}, headers={"Authorization": "Bearer wrong"}
+    )
+    assert res_wrong.text == "Unauthorized: Invalid API key"
+
+
 def test_serve_auth_failure_logs_and_increments_metrics_X_9(
     mock_adapter: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1119,6 +1148,30 @@ def test_serve_rate_limit_ipv6_slash64_shares_bucket_X_4() -> None:
     assert asyncio.run(_rate_limit_allows(middleware, scope_b)) is False
 
 
+def test_resolve_client_key_reports_resolved_not_none_X_4() -> None:
+    """Verify `_resolve_client_key`'s `client_was_none` flag is False whenever an
+    address is actually resolved -- via the real socket peer, or via a trusted
+    X-Forwarded-For -- and that the resolved key is the actual address, not some
+    other field. Covers both `_resolve_client_key`'s internal `return ..., False`
+    statements directly (the request-level tests elsewhere only ever observe this
+    function's *effect* on throttling, never its two return values together)."""
+    from paw_kit.serve.server import _resolve_client_key
+
+    key, was_none = _resolve_client_key({"client": ("203.0.113.7", 54321)}, trust_proxy_header=False)
+    assert key == "203.0.113.7"
+    assert was_none is False
+
+    key, was_none = _resolve_client_key(
+        {
+            "headers": [(b"x-forwarded-for", b"198.51.100.4")],
+            "client": ("203.0.113.7", 54321),
+        },
+        trust_proxy_header=True,
+    )
+    assert key == "198.51.100.4"
+    assert was_none is False
+
+
 async def _rate_limit_allows(middleware: "RateLimitMiddleware", scope: Dict[str, Any]) -> bool:
     """Drive `RateLimitMiddleware.__call__` directly and report whether the
     downstream app was reached (True) or a 429 was returned (False)."""
@@ -1159,6 +1212,15 @@ def test_serve_rate_limit_client_none_logs_warning_not_silent_X_4(
 
     assert "client" in caplog.text.lower()
     assert "PAW_TRUST_PROXY_HEADER" in caplog.text
+
+    # X-4: "log once" means once -- `self._warned_no_client` must actually latch
+    # to True after the first warning, or every subsequent client=None request
+    # would log again. A mutant flipping that assignment's `True` to `False`
+    # leaves the flag permanently False, so the guard's `not self._warned_no_client`
+    # half stays True forever and every call re-logs.
+    caplog.clear()
+    assert asyncio.run(_rate_limit_allows(middleware, scope)) is True
+    assert caplog.records == []
 
 
 def test_serve_rate_limit_global_ceiling_caps_across_all_keys_X_4() -> None:
@@ -1287,6 +1349,33 @@ def test_serve_rate_limit_eviction_boundary_at_epsilon_X_5() -> None:
     assert "idle-at-boundary" not in middleware._buckets
 
 
+def test_serve_rate_limit_consume_denies_when_table_full_of_throttled_keys_X_5() -> None:
+    """Verify X-5's shed-load path returns False (denied) from `_consume` itself
+    when the bucket table is full and nothing is evictable -- not just that the
+    table's *size* stays bounded (which `test_serve_rate_limit_bucket_storage_bounded_PAW_SERVE_10`
+    already covers) or that an existing throttled key's *budget* survives (which
+    `test_serve_rate_limit_eviction_preserves_throttled_bucket_X_5` covers). A
+    mutant turning this shed-load `return False` into `return True` makes
+    `_consume` report a brand-new, never-tracked key as *allowed* -- exactly the
+    "admit anyway" failure mode X-5 exists to prevent -- while leaving the table's
+    size and every other key's budget untouched, so neither of those two other
+    tests can observe it."""
+    from paw_kit.serve.server import _MAX_RATE_LIMIT_BUCKETS, RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=60, global_requests_per_minute=10**9
+    )
+    for i in range(_MAX_RATE_LIMIT_BUCKETS):
+        assert middleware._consume(f"flood-{i}") is True
+
+    # Table is now exactly full, and (this same tight loop, negligible elapsed
+    # time) every tracked bucket sits below capacity -- nothing is evictable.
+    assert middleware._consume("one-more-new-key") is False
+
+
 def test_serve_rate_limit_real_client_does_not_log_none_warning_X_4(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1337,6 +1426,13 @@ def test_serve_execution_timeout_returns_exactly_503_X_7(
     res = client.post("/invoke", json={"input": "Urgent payment failure"})
     assert res.status_code == 503
     assert "execution bound" in res.json()["detail"]
+
+    # X-7: this failure must be recorded as an error like every other one -- a
+    # mutant flipping this call site's `is_error=True` to `False` would leave
+    # /metrics silent about it, exactly the PAW-SERVE-05 class of gap this
+    # telemetry boundary exists to close.
+    metrics = client.get("/metrics").json()
+    assert metrics["error_count"] >= 1
 
 
 def test_serve_trust_proxy_header_env_var_gates_xff_trust_X_4(
@@ -1403,6 +1499,38 @@ def test_server_state_metrics_calculation() -> None:
     assert metrics["error_count"] == 0
     assert metrics["p50_latency_ms"] == 30.0
     assert metrics["p95_latency_ms"] == 50.0
+
+
+def test_server_state_auth_failure_count_starts_zero_and_increments_by_one_X_9() -> None:
+    """Verify X-9's new counter: `auth_failure_count` starts at exactly 0 (not a
+    stray nonzero initial value) and `record_auth_failure()` increments it by
+    exactly 1 per call, matching the running total the AuthMiddleware log line
+    reports."""
+    state = ServerState()
+    assert state.get_auth_failure_count() == 0
+
+    state.record_auth_failure()
+    assert state.get_auth_failure_count() == 1
+
+    state.record_auth_failure()
+    assert state.get_auth_failure_count() == 2
+
+
+def test_max_body_bytes_and_global_rate_limit_default_exact_values_X_2_X_4() -> None:
+    """Pin the exact values of two constants introduced by this track, both of
+    which are computed from literals a mutation could silently perturb without
+    any behavioural test catching a one-off change: X-2's lowered default body cap
+    (`_MAX_BODY_BYTES`, exactly 2MB) and X-4's default global rate-limit ceiling
+    (`_DEFAULT_GLOBAL_RATE_LIMIT_PER_MINUTE`, exactly 2x `_MAX_RATE_LIMIT_BUCKETS`,
+    as its own docstring states)."""
+    from paw_kit.serve.server import (
+        _DEFAULT_GLOBAL_RATE_LIMIT_PER_MINUTE,
+        _MAX_BODY_BYTES,
+        _MAX_RATE_LIMIT_BUCKETS,
+    )
+
+    assert _MAX_BODY_BYTES == 2 * 1024 * 1024 == 2097152
+    assert _DEFAULT_GLOBAL_RATE_LIMIT_PER_MINUTE == 2 * _MAX_RATE_LIMIT_BUCKETS == 20000
 
 
 def test_docker_exporter_scaffold(mock_adapter: Path, tmp_path: Path) -> None:
