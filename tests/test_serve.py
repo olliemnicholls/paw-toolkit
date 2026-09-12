@@ -665,6 +665,8 @@ def test_serve_body_read_already_expired_deadline_returns_408_X_3() -> None:
     asyncio.run(middleware(scope, receive, send))
 
     assert receive_calls == 0
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 408
 
     assert receive_calls == 0
     start = next(m for m in sent if m["type"] == "http.response.start")
