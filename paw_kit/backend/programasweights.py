@@ -39,6 +39,19 @@ program unchanged, regardless of what `public` is passed this time (`compile()` 
 checks for this via `precheck_compile` and warns; it cannot change the existing program's
 visibility).
 
+**What the manifest can and cannot tell you about visibility (A-2).** `public_requested`
+is what this backend *asked* the service for. It is not, and has never been, evidence of
+what the compiled program's visibility actually is -- a cache hit ignores `public=`
+entirely, and the precheck that detects a cache hit exposes no visibility field at all.
+`public_confirmed` is the separate, three-state record of what the server answered when
+asked directly: `True`, `False`, or `None` with `public_confirmed_reason` saying why there
+is no answer. It is `None` unless the backend was constructed with
+`verify_visibility=True`, and an unanswered question is never reported as "private".
+Confirmed live on 2026-09-11: six programs this project compiled report `public: True`
+from the server, and their local manifests recorded no visibility at all. Note also that
+visibility is not retroactive -- nothing in this module can make an already-compiled
+public program private.
+
 Nothing in this module is imported at package import time except the standard library
 and paw-kit's own helpers; `programasweights` is imported lazily so the rest of paw-kit
 keeps working (and its test suite keeps running) without it installed.
@@ -131,6 +144,16 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             hub with their full spec text (including any folded traced examples) readable
             by anyone, unauthenticated. Upstream defaults this to `True`; paw-kit defaults
             it to `False` (see module docstring, Privacy). Pass `True` to opt in.
+            **Only the literal `True` opts in** (A-9): anything else is coerced to
+            `False` in `__init__`, because `public=None` used to forward
+            `{"public": null}` to a service whose own default is `True` -- a leak out of
+            a falsy-looking argument.
+        verify_visibility: After a successful compile, ask the service what the compiled
+            program's visibility actually *is* and record the answer in the manifest
+            (A-2). Off by default because it costs one extra authenticated GET per
+            compile. The recorded `public_confirmed` is deliberately three-state --
+            `True`/`False`/`None` -- and never collapses an unanswered question into
+            "private"; see `_confirm_visibility`.
         ephemeral: Forwarded to upstream `compile`/`compile_async` as-is; see the SDK's
             own documentation for its effect.
         compile_retries: Extra attempts for the actual `paw.compile`/`paw.compile_async`
@@ -163,6 +186,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         poll_interval_s: float = 5.0,
         compile_timeout_s: float = 3600.0,
         public: bool = False,
+        verify_visibility: bool = False,
         ephemeral: bool = False,
         compile_retries: int = 1,
         sdk: Any = None,
@@ -175,7 +199,13 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         self.max_spec_examples = max_spec_examples
         self.poll_interval_s = poll_interval_s
         self.compile_timeout_s = compile_timeout_s
-        self.public = public
+        # A-9: validate rather than trust. `public` is forwarded verbatim to a service
+        # whose own default is `True`, so every value that is not the literal `True`
+        # must resolve to `False` *here* -- not at the request, and not via `bool()`,
+        # which would publish on `1` or `"true"`. Coercing in `__init__` also makes the
+        # manifest record `False` instead of echoing back whatever was passed.
+        self.public = public is True
+        self.verify_visibility = verify_visibility
         self.ephemeral = ephemeral
         self.compile_retries = compile_retries
         self._sdk = sdk
@@ -209,6 +239,20 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
 
     def compile(self, spec: str, examples: List[Dict[str, str]], output_path: str) -> str:
         paw = self._paw()
+        # A-9: `offline=True` documents "never touch the network", and it skipped the
+        # API-key guard below and then POSTed to the compile service anyway. Raising
+        # here -- at the top, beside the existing API-key raise, before any paid work
+        # and on nothing the request path depends on -- is the only placement that does
+        # not weaken the campaign's fail-open invariant. The one in-repo construction of
+        # `offline=True` (scripts/measure_constrained_decoding_upstream.py) is
+        # inference-only and never calls compile().
+        if self.offline:
+            raise RuntimeError(
+                "ProgramAsWeightsBackend was constructed with offline=True, which means "
+                "never contact the compile service. Compilation is a network operation: "
+                "construct a second backend without offline=True to compile, or call "
+                "prepare_program() to populate the cache this instance reads from."
+            )
         if not self.offline and not self.has_api_key():
             raise RuntimeError(
                 "Compilation needs PAW_API_KEY in the environment "
@@ -241,22 +285,53 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         # existing *public* program, unchanged. Best-effort check; never let a precheck
         # failure block the compile itself.
         cache_hit: Optional[bool] = None
+        cached_program_id: Optional[str] = None
         if not self.public:
             try:
                 precheck = paw.precheck_compile(full_spec, compiler=self.compiler)
                 cache_hit = bool(precheck.get("cached")) if isinstance(precheck, dict) else bool(
                     getattr(precheck, "cached", False)
                 )
-            except Exception:
+                # A-2, the free half: `CompilePrecheck` is a plain dict at runtime and
+                # `program_id` is a real key on it -- the id of the existing program a
+                # cache hit will hand back. The old code fetched this and discarded it,
+                # leaving a warning that said "an existing program will be returned"
+                # without ever naming which one. No extra request.
+                raw_id = (
+                    precheck.get("program_id") if isinstance(precheck, dict)
+                    else getattr(precheck, "program_id", None)
+                )
+                cached_program_id = raw_id if isinstance(raw_id, str) and raw_id else None
+            # A-3: narrowed from a bare `except Exception`. `APIError` subclasses
+            # `httpx.HTTPStatusError`, so `httpx.HTTPError` covers every way the
+            # *service* can decline this request while still letting a broken contract
+            # through -- an upstream rename of `precheck_compile` raises AttributeError,
+            # which the bare except absorbed, silently disabling the cache-hit leak
+            # warning forever with nothing in the suite noticing.
+            except httpx.HTTPError as exc:
                 cache_hit = None
-            if cache_hit:
+                # Distinct from the cache-hit warning below, per the finding: silence
+                # was indistinguishable from "checked, and there is no cache hit",
+                # which is the opposite conclusion.
                 warnings.warn(
-                    "ProgramAsWeights already has a compiled program for this exact spec "
-                    "and will return it instead of compiling a new one. paw-kit cannot "
+                    "ProgramAsWeights could not check whether this spec is already "
+                    f"compiled ({type(exc).__name__}: {exc}). If it is, that existing "
+                    "program is returned unchanged and public=False cannot make it "
+                    "private -- proceeding without that warning, not without that risk.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if cache_hit:
+                named = f" ({cached_program_id})" if cached_program_id else ""
+                warnings.warn(
+                    f"ProgramAsWeights already has a compiled program{named} for this "
+                    "exact spec and will return it instead of compiling a new one. "
+                    "paw-kit cannot "
                     "change that existing program's public/private visibility -- if it was "
                     "compiled public, it stays public regardless of public=False here. "
                     "Rephrase the spec (or its folded examples) if you need a fresh, "
-                    "private compile.",
+                    "private compile. Pass verify_visibility=True to record what the "
+                    "server actually reports for it.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -284,6 +359,12 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             compiler_snapshot = extract_snapshot(program)
         compile_wall_s = time.monotonic() - compile_started
 
+        # A-2: ask the server what this program's visibility actually is. Everything
+        # about this call is arranged so that no outcome of it can prevent the manifest
+        # write below -- at this point the compile has been *billed* and `program_id` is
+        # the only record of it.
+        public_confirmed, public_confirmed_reason = self._confirm_visibility(paw, program_id)
+
         manifest = {
             "backend": MANIFEST_BACKEND_NAME,
             "manifest_version": MANIFEST_VERSION,
@@ -297,9 +378,18 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             "examples_folded_into_spec": folded_count,
             "examples_count": len(examples),
             "folded_example_ids": folded_ids,
-            "public": self.public,
+            # A-2: `public` used to sit here, recording `self.public` -- i.e. what was
+            # *asked for* -- under a name every reader took for what the program's
+            # visibility *is*. Confirmed live (parent track doc, §"Report §16 live
+            # verification"): all six historical programs report `public: True` from the
+            # server. The two are now separate keys, and the confirmed one is
+            # three-state so that "never checked" can never be mistaken for "private".
+            "public_requested": self.public,
+            "public_confirmed": public_confirmed,
+            "public_confirmed_reason": public_confirmed_reason,
             "ephemeral": self.ephemeral,
             "cache_hit": cache_hit,
+            "cached_program_id": cached_program_id,
             "parent_program_id": parent_program_id,
             "parent_manifest_sha256": parent_manifest_sha256,
             "compile_wall_s": compile_wall_s,
@@ -313,6 +403,68 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         with self._lock:
             self._functions.pop(output_path, None)
         return output_path
+
+    #: Keys `get_program_meta`'s JSON may carry the program's visibility under, in
+    #: preference order. Only a real `bool` is accepted: a string `"true"` or an int `1`
+    #: is a shape this code has never seen from the service, and guessing at one is how
+    #: a visibility claim becomes wrong rather than unknown.
+    _VISIBILITY_KEYS = ("public", "is_public")
+
+    def _paw_client(self) -> Any:
+        """A `PAWClient`-shaped object for the calls that have no module-level wrapper.
+
+        `get_program_meta` is a `PAWClient` method upstream and `PAWClient` is not even
+        in `programasweights.__all__`, so it is reached through the submodule. The
+        `getattr` first is the test seam: an injected `sdk` supplies its own factory.
+        """
+        paw = self._paw()
+        factory = getattr(paw, "PAWClient", None)
+        if factory is None:
+            factory = importlib.import_module("programasweights.client").PAWClient
+        kwargs: Dict[str, Any] = {}
+        for name, key in (("get_api_url", "api_url"), ("get_api_key", "api_key")):
+            getter = getattr(paw, name, None)
+            if callable(getter):
+                kwargs[key] = getter()
+        return factory(**kwargs)
+
+    def _confirm_visibility(
+        self, paw: Any, program_id: Optional[str]
+    ) -> "tuple[Optional[bool], str]":
+        """A-2: `(public_confirmed, reason)` -- the server's answer, or why there isn't one.
+
+        Three states, never two. `None` means *unknown*, and a missing answer must never
+        render as "private": that is Pattern 5 (a control degrading silently into a
+        reassuring value) and it is the entire shape of A-2, whose own finding is a
+        manifest field recording a request while reading as a fact.
+
+        **Nothing this method does can propagate.** It runs after the compile has been
+        billed and before the manifest is written, so an expired key, a 404, a transient
+        5xx or an upstream rename must not cost the caller the `program_id` of a compile
+        they have already paid for (Phase 0 F8). The blanket `except BaseException` is
+        deliberate and is the narrow case where one is correct: the alternative to
+        swallowing is losing money.
+        """
+        if not self.verify_visibility:
+            return None, "not_attempted"
+        # Belt for A-9's raise: an offline backend may never make this request either.
+        if self.offline:
+            return None, "offline"
+        if not program_id:
+            return None, "no_program_id"
+        if not self.has_api_key():
+            return None, "no_api_key"
+        try:
+            meta = self._paw_client().get_program_meta(str(program_id))
+        except BaseException as exc:  # noqa: BLE001 -- see docstring
+            return None, f"request_failed: {type(exc).__name__}: {exc}"
+        if not isinstance(meta, dict):
+            return None, "no_visibility_key"
+        for key in self._VISIBILITY_KEYS:
+            value = meta.get(key)
+            if isinstance(value, bool):
+                return value, "server"
+        return None, "no_visibility_key"
 
     def _invoke_compile(
         self,

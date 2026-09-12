@@ -1367,9 +1367,19 @@ _INSPECT_FIELD_ORDER = [
     "examples_count",
     "examples_folded_into_spec",
     "folded_example_ids",
+    # A-2 split the old `public` field -- which recorded what was *requested* under a
+    # name every reader took for what the program's visibility *is* -- into a requested
+    # value, the server's confirmed answer, and the reason the answer is unknown. Legacy
+    # `public` stays in this list, immediately after them: a manifest written before
+    # b47ddea has no `public` key at all and one written between b47ddea and A-2 has only
+    # `public`, and neither should drop into the alphabetical "unknown extras" tail.
+    "public_requested",
+    "public_confirmed",
+    "public_confirmed_reason",
     "public",
     "ephemeral",
     "cache_hit",
+    "cached_program_id",
     "parent_program_id",
     "parent_manifest_sha256",
     "compile_wall_s",

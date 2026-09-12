@@ -31,6 +31,9 @@ class FakeSDK:
         statuses: List[str] | None = None,
         precheck_cached: bool = False,
         precheck_raises: bool = False,
+        precheck_exception: BaseException | None = None,
+        program_meta: Dict[str, Any] | None = None,
+        meta_exception: BaseException | None = None,
     ):
         self.compile_calls: List[Dict[str, Any]] = []
         self.function_calls: List[Dict[str, Any]] = []
@@ -39,6 +42,38 @@ class FakeSDK:
         self._polls = 0
         self._precheck_cached = precheck_cached
         self._precheck_raises = precheck_raises
+        # A-3: the precheck's `except` is narrowed to HTTP-level failures, so which
+        # exception the fake raises is now load-bearing. `precheck_raises=True` keeps
+        # its historical meaning via a default httpx error; `precheck_exception` names
+        # an exact one (e.g. the AttributeError of an upstream rename).
+        self._precheck_exception = precheck_exception or httpx.ConnectError("precheck unavailable")
+        # A-2: the `verify_visibility` seam. `get_program_meta` is a PAWClient method
+        # upstream, not a module-level function, so the fake exposes a PAWClient too.
+        self.program_meta: Dict[str, Any] = (
+            {"public": True} if program_meta is None else program_meta
+        )
+        self._meta_exception = meta_exception
+        self.meta_calls: List[str] = []
+        self.client_kwargs: List[Dict[str, Any]] = []
+        outer = self
+
+        class _FakePAWClient:
+            def __init__(self, **kwargs: Any) -> None:
+                outer.client_kwargs.append(kwargs)
+
+            def get_program_meta(self, program_id: str) -> Dict[str, Any]:
+                outer.meta_calls.append(program_id)
+                if outer._meta_exception is not None:
+                    raise outer._meta_exception
+                return outer.program_meta
+
+        self.PAWClient = _FakePAWClient
+
+    def get_api_url(self) -> str:
+        return "https://programasweights.invalid"
+
+    def get_api_key(self) -> str:
+        return "paw_sk_test"
 
     def compile(self, spec: str, compiler: str | None = None, **kw):
         self.compile_calls.append({"spec": spec, "compiler": compiler, **kw})
@@ -51,7 +86,7 @@ class FakeSDK:
     def precheck_compile(self, spec: str, compiler: str | None = None):
         self.precheck_calls.append({"spec": spec, "compiler": compiler})
         if self._precheck_raises:
-            raise RuntimeError("precheck unavailable")
+            raise self._precheck_exception
         return {
             "cached": self._precheck_cached,
             "program_id": "prog-cached" if self._precheck_cached else None,
@@ -267,12 +302,20 @@ def test_public_compile_with_no_examples_folded_does_not_warn(key: None, tmp_pat
 
 
 def test_manifest_records_public_and_ephemeral(key: None, tmp_path: Path) -> None:
+    """A-2 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    `manifest["public"]` became `manifest["public_requested"]`. The assertion is not
+    weakened -- it is the *same* assertion under the name that says what the value
+    actually is. The finding is precisely that this field records the request while
+    reading as the fact, so the rename is the fix and re-pointing the test is how it is
+    pinned. `public` is asserted absent so a reader of a new manifest cannot reach for
+    the ambiguous name at all."""
     sdk = FakeSDK()
     backend = ProgramAsWeightsBackend(sdk=sdk, public=True, ephemeral=True)
     out = tmp_path / "a.paw"
     backend.compile("spec", [], str(out))
     manifest = json.loads(out.read_text())
-    assert manifest["public"] is True
+    assert manifest["public_requested"] is True
+    assert "public" not in manifest
     assert manifest["ephemeral"] is True
 
 
@@ -295,11 +338,24 @@ def test_no_cache_hit_warning_when_not_cached(key: None, tmp_path: Path) -> None
 
 
 def test_precheck_failure_is_swallowed_and_manifest_records_null(key: None, tmp_path: Path) -> None:
+    """A-3 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    this test's `warnings.catch_warnings()` / `simplefilter("error")` block was removed.
+
+    Both of its real subjects are intact and still asserted -- an HTTP-level precheck
+    failure does not break the compile, and `cache_hit` records `None` rather than
+    guessing. What the removed block additionally pinned was *silence*, and silence is
+    the half A-3 fixes: a swallowed failure that warns nothing is indistinguishable from
+    "checked, and there is no cache hit", which is the opposite conclusion. The warning
+    is now asserted positively in
+    `test_precheck_http_failure_warns_distinctly_A_3`, so the behaviour is pinned
+    tighter than before, not looser. `precheck_raises=True` now raises an `httpx` error
+    rather than a bare `RuntimeError`, because under A-3 only HTTP-level failures are
+    swallowed at all (see `test_precheck_attribute_error_is_not_swallowed_A_3`).
+    """
     sdk = FakeSDK(precheck_raises=True)
     backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
     out = tmp_path / "a.paw"
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with pytest.warns(UserWarning, match="could not check"):
         backend.compile("spec", [], str(out))
     manifest = json.loads(out.read_text())
     assert manifest["cache_hit"] is None
@@ -878,3 +934,253 @@ def test_wait_for_job_unknown_status_without_an_error_keeps_polling_A_5(
     assert json.loads(out.read_text())["program_id"] == "prog-ft"
     assert sdk.status_attempts == 2
     assert sdk.cancel_calls == []
+
+
+# ===================================================== A-9: public/offline validation
+
+
+def test_public_none_is_coerced_to_false_A_9(key: None, tmp_path: Path) -> None:
+    """`public: bool = False` was unvalidated, so `public=None` forwarded
+    `{"public": null}` to a service whose own default is `True` -- a leak out of a
+    falsy-looking argument. Anything that is not literally `True` is `False`."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=None)  # type: ignore[arg-type]
+    assert backend.public is False
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    assert sdk.compile_calls[0]["public"] is False
+    # And the manifest records False, not None -- honest about what was asked for.
+    assert json.loads(out.read_text())["public_requested"] is False
+
+
+@pytest.mark.parametrize("value", [None, 0, "", "true", 1, "yes"])
+def test_only_literal_true_opts_into_public_A_9(value: object) -> None:
+    """Every truthy-or-falsy non-`True` value resolves to private. `"true"` and `1` are
+    the dangerous ones: both are truthy, so a looser `bool(public)` check would publish."""
+    backend = ProgramAsWeightsBackend(sdk=FakeSDK(), public=value)  # type: ignore[arg-type]
+    assert backend.public is False
+
+
+def test_offline_backend_refuses_to_compile_A_9(tmp_path: Path) -> None:
+    """`offline=True` documents "never touch the network"; it skipped the API-key guard
+    and then POSTed anyway. The raise is at the top of compile(), before any paid work
+    -- not on a request path."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, offline=True)
+    with pytest.raises(RuntimeError, match="offline=True"):
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert sdk.compile_calls == []
+    assert sdk.precheck_calls == []
+
+
+def test_offline_backend_can_still_infer_A_9(key: None, tmp_path: Path) -> None:
+    """Negative control: `offline=True` is an *inference* mode (that is what the only
+    in-repo construction of it uses it for). The new raise must not reach infer()."""
+    out = str(tmp_path / "t.paw")
+    ProgramAsWeightsBackend(sdk=FakeSDK()).compile("spec", [], out)
+    offline_backend = ProgramAsWeightsBackend(sdk=FakeSDK(), offline=True)
+    assert offline_backend.infer(out, "hello") == "out(prog-fast):hello"
+
+
+# ======================================== A-2: requested vs confirmed visibility
+#
+# Confirmed live (parent track doc, "Report §16 live verification"): all six recorded
+# programs report `public: True` from the server while the local manifests record only
+# what was *asked for* -- and the `public` key is absent from all six, because it did
+# not exist before b47ddea. This renames the request to `public_requested`, adds an
+# opt-in `verify_visibility` that records the server's answer as a THREE-state value,
+# and lands the free half (`cached_program_id`, which the precheck already fetched and
+# the old code threw away) unconditionally.
+
+
+def test_manifest_separates_requested_from_confirmed_visibility_A_2(
+    key: None, tmp_path: Path
+) -> None:
+    """The headline assertion: the manifest must distinguish "this is what I asked for"
+    from "this is what the server says it is"."""
+    sdk = FakeSDK(program_meta={"public": True})
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False, verify_visibility=True)
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+
+    manifest = json.loads(out.read_text())
+    assert manifest["public_requested"] is False
+    assert manifest["public_confirmed"] is True, (
+        "the server said this program is public; the manifest must say so too instead "
+        "of repeating the request back"
+    )
+    assert manifest["public_confirmed_reason"] == "server"
+    assert sdk.meta_calls == ["prog-fast"]
+
+
+def test_manifest_records_confirmed_private_A_2(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK(program_meta={"public": False})
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False, verify_visibility=True)
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["public_confirmed"] is False
+    assert manifest["public_confirmed_reason"] == "server"
+
+
+def test_unverified_visibility_is_none_not_false_A_2(key: None, tmp_path: Path) -> None:
+    """Pattern 5, which is the whole shape of A-2: "not checked" must never render as
+    "private". The default path does not call the server at all."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["public_confirmed"] is None
+    assert manifest["public_confirmed_reason"] == "not_attempted"
+    assert sdk.meta_calls == []
+
+
+def test_visibility_response_without_a_visibility_key_is_none_A_2(
+    key: None, tmp_path: Path
+) -> None:
+    """A server response that carries no visibility field must read as unknown, not as
+    private -- the same Pattern 5 from the other direction."""
+    sdk = FakeSDK(program_meta={"id": "prog-fast", "slug": "s"})
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False, verify_visibility=True)
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["public_confirmed"] is None
+    assert manifest["public_confirmed_reason"] == "no_visibility_key"
+
+
+def test_visibility_check_failure_never_loses_the_paid_compile_A_2(
+    key: None, tmp_path: Path
+) -> None:
+    """Phase 0 F8, the money-losing failure this fix must not introduce:
+    `get_program_meta` does a 10s httpx.get with raise_for_status(), and it runs *after*
+    the billed compile returned. If it could raise out of compile(), an expired key or a
+    transient 5xx would leave no manifest written and the program_id of a paid compile
+    lost. No outcome of the verification may prevent the manifest write."""
+    sdk = FakeSDK(meta_exception=httpx.HTTPStatusError(
+        "404",
+        request=httpx.Request("GET", "https://programasweights.invalid/api/v1/programs/prog-fast"),
+        response=httpx.Response(404, request=httpx.Request(
+            "GET", "https://programasweights.invalid/api/v1/programs/prog-fast")),
+    ))
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False, verify_visibility=True)
+    out = tmp_path / "a.paw"
+
+    backend.compile("spec", [], str(out))  # must NOT raise
+
+    manifest = json.loads(out.read_text())
+    assert manifest["program_id"] == "prog-fast", "the paid compile's program_id survived"
+    assert manifest["public_confirmed"] is None
+    assert manifest["public_confirmed_reason"].startswith("request_failed")
+    assert "HTTPStatusError" in manifest["public_confirmed_reason"]
+
+
+def test_visibility_check_crash_never_loses_the_paid_compile_A_2(
+    key: None, tmp_path: Path
+) -> None:
+    """The same guarantee for a non-HTTP fault (an upstream rename of
+    `get_program_meta`, a client constructor that changed signature)."""
+    sdk = FakeSDK(meta_exception=AttributeError("no attribute 'get_program_meta'"))
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False, verify_visibility=True)
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["program_id"] == "prog-fast"
+    assert manifest["public_confirmed"] is None
+    assert "AttributeError" in manifest["public_confirmed_reason"]
+
+
+def test_visibility_is_not_verified_without_an_api_key_A_2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`get_program_meta` needs a key. Without one, record *why* it is unknown rather
+    than spending a request that will 401.
+
+    Tested directly on the helper rather than through `compile()`, because `compile()`
+    already refuses to run without a key -- so this branch is unreachable from there
+    today. It is kept (and pinned) anyway: it is the correct answer for the state, and
+    the enumeration of reasons is the part of A-2 that has to stay exhaustive. A reason
+    set with a hole in it is how "unknown" turns back into "private".
+    """
+    monkeypatch.delenv("PAW_API_KEY", raising=False)
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False, verify_visibility=True)
+    assert backend._confirm_visibility(sdk, "prog-fast") == (None, "no_api_key")
+    assert sdk.meta_calls == []
+
+
+def test_finetune_path_also_records_confirmed_visibility_A_2(
+    key: None, tmp_path: Path
+) -> None:
+    """The expensive path is the one where getting this wrong matters most."""
+    sdk = FakeSDK(statuses=["completed"], program_meta={"public": True})
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0,
+        public=False, verify_visibility=True,
+    )
+    out = tmp_path / "ft.paw"
+    backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["public_confirmed"] is True
+    assert sdk.meta_calls == ["prog-ft"]
+
+
+def test_cache_hit_program_id_is_recorded_A_2(key: None, tmp_path: Path) -> None:
+    """The free half: `precheck["program_id"]` is the id of the already-compiled program
+    a cache hit will hand back. The old code fetched it and threw it away, leaving a
+    warning that said "an existing program will be returned" without naming which."""
+    sdk = FakeSDK(precheck_cached=True)
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    out = tmp_path / "a.paw"
+    with pytest.warns(UserWarning, match="already has a compiled program"):
+        backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["cache_hit"] is True
+    assert manifest["cached_program_id"] == "prog-cached"
+
+
+def test_cached_program_id_is_none_without_a_cache_hit_A_2(key: None, tmp_path: Path) -> None:
+    sdk = FakeSDK(precheck_cached=False)
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    assert json.loads(out.read_text())["cached_program_id"] is None
+
+
+def test_visibility_is_never_verified_when_offline_A_2(tmp_path: Path) -> None:
+    """`offline=True` must not make a network call even to verify visibility. A-9's
+    raise gets there first, so this is a belt-and-braces assertion on both findings."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, offline=True, verify_visibility=True)
+    with pytest.raises(RuntimeError, match="offline=True"):
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+    assert sdk.meta_calls == []
+
+
+# ============================= A-3: the precheck's bare `except` and the contract
+
+
+def test_precheck_attribute_error_is_not_swallowed_A_3(key: None, tmp_path: Path) -> None:
+    """The defect: `except Exception` around `paw.precheck_compile(...)` means an
+    upstream *rename* silently disables the cache-hit leak warning forever, and nothing
+    in the suite notices. An AttributeError is a broken contract, not a transient
+    service fault, and must not be absorbed."""
+    sdk = FakeSDK(precheck_raises=True, precheck_exception=AttributeError("precheck_compile"))
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    with pytest.raises(AttributeError):
+        backend.compile("spec", [], str(tmp_path / "a.paw"))
+
+
+def test_precheck_http_failure_warns_distinctly_A_3(key: None, tmp_path: Path) -> None:
+    """A genuine HTTP-level precheck failure is still swallowed -- but it now says so.
+    Silence was indistinguishable from "checked, and there is no cache hit", which is
+    the opposite conclusion."""
+    sdk = FakeSDK(precheck_raises=True)
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    out = tmp_path / "a.paw"
+    with pytest.warns(UserWarning, match="could not check"):
+        backend.compile("spec", [], str(out))
+    manifest = json.loads(out.read_text())
+    assert manifest["cache_hit"] is None
+    assert manifest["program_id"] == "prog-fast"

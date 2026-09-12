@@ -241,7 +241,15 @@ def test_triage_summary_carries_a_heldout_denominator(triage_run: dict) -> None:
     assert summary["leak_flags"]["folding_pool_disjoint_from_eval"] is True
     assert summary["leak_flags"]["scored_rows_folded_into_spec"] == 0
     # Visibility and identity of the adapter are recorded, not assumed (A-2 / Phase 0 #9).
-    assert summary["public"] is False
+    # A-2 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    # `summary["public"]` became `summary["public_requested"]`, because the manifest key
+    # it mirrors recorded the *request* under a name that read as the confirmed fact.
+    # The fixture manifest above deliberately still uses the legacy `public` key, so this
+    # also pins the legacy fallback: a summary built from a pre-rename manifest must
+    # still report the value rather than silently None.
+    assert summary["public_requested"] is False
+    # Never checked is never "private": an old manifest carries no confirmation at all.
+    assert summary["public_confirmed"] is None
     assert summary["program_id"] == "deadbeef"
 
     # And the same summariser over B-1's arrangement reports the leak instead of hiding it.

@@ -727,7 +727,14 @@ def main() -> int:
             "compiler_snapshot": md.get("compiler_snapshot"),
             "examples_folded_into_spec": md.get("examples_folded_into_spec"),
             "compile_wall_s": md.get("compile_wall_s"),
-            "public": md.get("public"),
+            # A-2: the manifest key that records the *requested* visibility was renamed
+            # `public` -> `public_requested`, and `public_confirmed` (three-state: True /
+            # False / None-with-a-reason) now carries what the server actually reported.
+            # Read the new name with a legacy fallback so a summary built from a manifest
+            # written before the rename still reports the value instead of silently None.
+            "public_requested": md.get("public_requested", md.get("public")),
+            "public_confirmed": md.get("public_confirmed"),
+            "public_confirmed_reason": md.get("public_confirmed_reason"),
             "cache_hit": md.get("cache_hit"),
             "status": md.get("status"),
             "slug": md.get("slug"),

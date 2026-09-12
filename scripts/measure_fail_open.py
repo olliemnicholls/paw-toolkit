@@ -237,7 +237,14 @@ def main() -> int:
         "teacher_calls": teacher.calls,
         "teacher_outputs": list(teacher.history),
         "program_id": manifest.get("program_id"),
-        "public": manifest.get("public"),
+        # A-2: the manifest key that records the *requested* visibility was renamed
+        # `public` -> `public_requested`, and `public_confirmed` (three-state: True /
+        # False / None-with-a-reason) now carries what the server actually reported.
+        # Read the new name with a legacy fallback so a summary built from a manifest
+        # written before the rename still reports the value instead of silently None.
+        "public_requested": manifest.get("public_requested", manifest.get("public")),
+        "public_confirmed": manifest.get("public_confirmed"),
+        "public_confirmed_reason": manifest.get("public_confirmed_reason"),
         "examples_folded_into_spec": manifest.get("examples_folded_into_spec"),
     }
 

@@ -224,7 +224,8 @@ def main() -> int:
     print(f"[compile] done in {compile_s:.1f}s -> {adapter_path} "
           f"(program {manifest.get('program_id')}, "
           f"folded={manifest.get('examples_folded_into_spec')}, "
-          f"public={manifest.get('public')})")
+          f"public_requested={manifest.get('public_requested', manifest.get('public'))}, "
+          f"public_confirmed={manifest.get('public_confirmed')})")
 
     # structural pass/fail via the real TestRunner (standard cases + fuzzer)
     runner = TestRunner(backend=backend)
@@ -275,7 +276,14 @@ def main() -> int:
         # produced which table is recoverable without the gitignored .paw file.
         "program_id": manifest.get("program_id"),
         "examples_folded_into_spec": manifest.get("examples_folded_into_spec"),
-        "public": manifest.get("public"),
+        # A-2: the manifest key that records the *requested* visibility was renamed
+        # `public` -> `public_requested`, and `public_confirmed` (three-state: True /
+        # False / None-with-a-reason) now carries what the server actually reported.
+        # Read the new name with a legacy fallback so a summary built from a manifest
+        # written before the rename still reports the value instead of silently None.
+        "public_requested": manifest.get("public_requested", manifest.get("public")),
+        "public_confirmed": manifest.get("public_confirmed"),
+        "public_confirmed_reason": manifest.get("public_confirmed_reason"),
         "spec_sha256": manifest.get("spec_sha256"),
         "full_spec_sha256": manifest.get("full_spec_sha256"),
         "compiler": args.compiler,

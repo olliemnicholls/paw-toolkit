@@ -209,7 +209,14 @@ def build_summary(label: str, adapter_path: str, manifest: dict, rows: list,
         "teacher_model": TEACHER_MODEL,
         "adapter_path": adapter_path,
         "program_id": manifest.get("program_id"),
-        "public": manifest.get("public"),
+        # A-2: the manifest key that records the *requested* visibility was renamed
+        # `public` -> `public_requested`, and `public_confirmed` (three-state: True /
+        # False / None-with-a-reason) now carries what the server actually reported.
+        # Read the new name with a legacy fallback so a summary built from a manifest
+        # written before the rename still reports the value instead of silently None.
+        "public_requested": manifest.get("public_requested", manifest.get("public")),
+        "public_confirmed": manifest.get("public_confirmed"),
+        "public_confirmed_reason": manifest.get("public_confirmed_reason"),
         "examples_folded_into_spec": manifest.get("examples_folded_into_spec"),
         "folded_example_ids": manifest.get("folded_example_ids"),
         "n": all_scored["n"],
@@ -298,7 +305,8 @@ def main() -> int:
     print(f"[compile] done in {time.perf_counter() - t0:.1f}s -> {adapter_path}")
     manifest = json.loads(Path(adapter_path).read_text())
     print(f"[compile] program_id={manifest.get('program_id')} "
-          f"public={manifest.get('public')} "
+          f"public_requested={manifest.get('public_requested', manifest.get('public'))} "
+          f"public_confirmed={manifest.get('public_confirmed')} "
           f"folded={manifest.get('examples_folded_into_spec')}")
 
     folded_inputs = {ex["input"] for ex in examples}
