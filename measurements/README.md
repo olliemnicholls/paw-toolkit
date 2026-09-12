@@ -2213,27 +2213,10 @@ manual look before relying on this being free indefinitely.
 
 ### If inference is unexpectedly slow (seconds, not milliseconds)
 
-Check `python -c "import llama_cpp; print(llama_cpp.llama_supports_gpu_offload())"`. If
-that's `False`, the installed `llama-cpp-python` wheel has no CUDA support compiled in —
-the default PyPI wheel is CPU-only. Two fixes, in order of preference:
-
-1. **Prebuilt CUDA wheel** (fast, no compiler needed):
-   ```bash
-   pip install "llama-cpp-python==<version>" \
-       --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
-   ```
-   If you get `OSError: libcudart.so.12: cannot open shared object file` after this, the
-   machine has a GPU driver but no CUDA *toolkit* installed — add the runtime libraries
-   standalone (no compiler needed) and point the loader at them:
-   ```bash
-   pip install "nvidia-cuda-runtime-cu12==12.1.*" "nvidia-cublas-cu12==12.1.*"
-   export LD_LIBRARY_PATH="$(python -c 'import nvidia.cuda_runtime, os; print(os.path.dirname(nvidia.cuda_runtime.__file__))')/lib:$(python -c 'import nvidia.cublas, os; print(os.path.dirname(nvidia.cublas.__file__))')/lib:$LD_LIBRARY_PATH"
-   ```
-2. **Build from source** with `CMAKE_ARGS="-DGGML_CUDA=on"` if you need a CUDA version
-   with no prebuilt wheel available. On Ubuntu 24.04 with CUDA 12.1, the default `gcc`
-   (13.x) is too new for `nvcc`; either install `g++-12`/`gcc-12` and add
-   `-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-12` to `CMAKE_ARGS`, or use CUDA 12.4+ (which
-   added GCC 13 support) if that's an option on your machine.
+The installed `llama-cpp-python` is probably the CPU-only PyPI wheel. The fix (prebuilt
+CUDA wheel, or source build with `-DGGML_CUDA=on`) is documented for users under "GPU
+support" in [`docs/install.md`](../docs/install.md#gpu-support); this section keeps only
+the notes specific to reproducing the measurements.
 
 **If you've installed `paw-kit[measure]` (named `[torch]` at the time) in the same environment**: prefer the source
 build over the prebuilt wheel. Hit this twice on the same machine: a working
@@ -2274,3 +2257,31 @@ Two consequences for anything in this file that is still load-bearing:
   `--extra torch`).
 
 See `conductor/decisions.md` §3 for why an in-process runtime is out of scope by design.
+
+---
+
+## Corrections logged 2026-09-11
+
+Two corrections were first recorded on `docs/results.md`. That page now carries only
+current numbers, so the record moves here, alongside the other dated corrections in this
+file.
+
+**Fiscal-weeks frontier baseline: 85.7% → 98.0%.** Arm D (Claude Haiku zero-shot, no
+compile) in the fiscal-weeks section was silently capped at 400 output tokens, which
+truncated 39 of 300 answers into failures. Re-run uncapped at 2,000 tokens: 300/300
+answered, 0 truncated, 98.0% exact. The frontier baseline was understated, so the finetune
+compiler's 49.0% is further from it than first published, not closer. The 85.7% figures in
+the fiscal-weeks tables above are left as the dated record; read them against this note.
+
+**Programs compiled before the private-by-default fix are still public.** Compiles have
+defaulted to `public=False` since 2026-09-10 (`b47ddea`), but every program compiled
+before that is still live and public. Verified 2026-09-11: all six `program_id`s this
+project has ever compiled report `public: True` from the server and download anonymously,
+no key required, from the `hf_url` it returns. Every one predates `b47ddea` by at least a
+day. Nothing in this project's data was sensitive (the folded examples are synthetic demo
+tickets), but the mechanism is general: a manifest's `public` field records what was
+*requested*, not what the server confirmed, upstream caches by spec text and ignores
+`public` on a cache hit, and re-running any of this project's historical measurement
+scripts unchanged returns the same old public program regardless of what `public=` the
+caller passes now. Publishing this repository publishes every `program_id` it commits, and
+each one resolves, permanently. A later code fix does not reach backward.

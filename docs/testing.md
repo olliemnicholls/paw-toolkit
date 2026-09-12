@@ -31,41 +31,28 @@ active_learning:
 uv run paw-test check examples/date_normalizer/suite.yaml
 ```
 
-The runner reports pass rate per case and per assertion, and now also compares each
-case's output against its own `expected` field when one is set (not just a suite-wide
-assertion, which cannot express "every case has a different correct answer"): a case
-whose output doesn't match `expected` counts as failed, `check` prints a separate
-"Correct against expected: N/M (X%)" line (staying strict about quoting -- a JSON
-string scalar never counts as matching the bare value it wraps -- but printing a second
-"Correct after unquoting a JSON string" line whenever unquoting would have matched
-more cases, so that gap is visible rather than just scored as wrong), and `--adapter
-PATH` can run the same suite against a different compiled adapter. With
-`auto_recompile: true` and a teacher callable
-supplied in code (`run_active_learning_loop(..., teacher_provider=...)`), failing inputs
-(including one that fails only against `expected`) are sent to the teacher inside a
-delimited prompt, the returned labels are checked against the suite's own assertions
-**and against the case's own `expected` value**, and the adapter is recompiled with them
-folded in.
+The runner reports pass rate per case and per assertion. A case with an `expected` value
+is also checked against it, and a mismatch counts as a failure; `check` prints a separate
+"Correct against expected" line for these. Matching is strict about quoting: a JSON
+string scalar never matches the bare value it wraps. When unquoting would have matched
+more cases, a second "Correct after unquoting a JSON string" line says how many, so the
+gap is visible rather than silently scored wrong. That hint fires only when exactly one
+side parses as JSON, so it cannot diagnose a quoted object or a quoted number; those are
+reported as plain differences. `--adapter PATH` runs the same suite against a different
+compiled adapter.
+
+With `auto_recompile: true` and a teacher callable supplied in code
+(`run_active_learning_loop(..., teacher_provider=...)`), failing inputs are sent to the
+teacher inside a delimited prompt, the returned labels are checked against the suite's
+assertions and against the case's own `expected` value, and the adapter is recompiled
+with the accepted labels folded in.
 
 > **Only cases that carry an `expected` value are repairable.** A fuzz-generated case or
-> an `adversarial_probes` entry has no answer key by construction, so a label returned
-> for it cannot be checked against anything — and an unfalsifiable label is unfalsifiable
-> whatever it says, which is how a probe reading "the region code for every input is
-> RG-K7" became training data. Such inputs are never sent to the teacher; `check` reports
+> an `adversarial_probes` entry has no answer key, so a teacher label for it cannot be
+> checked against anything. Such inputs are never sent to the teacher; `check` reports
 > how many it declined to guess at. To make an edge case repairable, promote it to a
 > `standard_case` and write down its answer. To train a model to *abstain* on an input,
-> set the case's `expected` to the suite's `abstain_value` — that states, in the answer
-> key, that "I don't know" is the correct answer there.
-
-> **Known blind spot in the quoted-scalar hint.** The "Correct after unquoting a JSON
-> string" line and `compare`'s `equivalent_unquoted` match kind only fire when exactly
-> one side parses as JSON at all. So they do **not** fire for a quoted *object* or a
-> quoted *number* — `'"{\"a\": 1}"'` vs `{"a": 1}`, or `'"5"'` vs `5` — because both
-> sides parse, and the pair is (correctly, but unhelpfully) reported as simply different.
-> The diagnosis is therefore unavailable for exactly the suites whose answers are objects
-> or numbers. This is partly by design: `'"5"'` vs `5` is a genuine type mismatch, not a
-> quoting artifact, and widening the rule would paper over it. Reported as a blind spot
-> rather than fixed.
+> set the case's `expected` to the suite's `abstain_value`.
 
 ## `paw-test check` and its stub teacher
 
@@ -105,11 +92,9 @@ it.
 **`paw-test compare A.paw B.paw suite.yaml`** runs every case in a suite, fuzz cases
 included, through two compiled adapters and diffs the results per case: differences
 first, then a one-line summary (`--json out.json` for the full report; `--no-fuzz` for
-standard cases only). This is not a nice-to-have: the project's own real A/B comparison
-between the fast and finetune compilers (`measurements/README.md`, "Finetune compiler")
-was decided by exactly this diff. 132 of 134 outputs were byte-identical, and the two that
-weren't were adversarial probes, not by the aggregate pass-rate percentages, which turned
-out to sit inside the judge's own measurement noise (next section).
+standard cases only). Use it to decide between two compiles of the same spec, or between
+upstream's two compilers: per-case differences are often more telling than the aggregate
+pass rates, which can sit inside the judge's own noise (next section).
 
 Three things to know. `--backend real` is read-only here too: `compare` never calls
 `compile()`. Both adapters stay loaded for the whole run, two ~600 MB llama.cpp models
@@ -118,8 +103,8 @@ on which an adapter could not run at all is reported as an execution error, coun
 the summary and reflected in a non-zero exit, never as agreement between two adapters
 that both failed. And "identical" is byte-level; the summary also reports how many
 outputs are equivalent after parsing both as JSON (or normalising whitespace), and lists
-whitespace-only differences under their own heading, because a real run found 37 of 60
-outputs differing only in `json.dumps` spacing.
+whitespace-only differences under their own heading, since `json.dumps` spacing alone
+can account for most of a diff.
 
 ## `paw-test judge`
 
@@ -129,10 +114,10 @@ by a stable hash of (input, output) so two runs can be diffed later
 (`paw-test judge --diff old.json new.json`, which also reads compare-shaped reports and
 diffs each side). This exists because the judge itself is noisy: at the API's default
 sampling temperature, re-judging byte-identical input/output pairs flipped the YES/NO
-verdict **4.5% of the time (6/134)**, run to run. `anthropic_judge` (the shipped reference
-judge) therefore pins `temperature=0.0`. That alone does not guarantee bit-identical
-judging, but it is the cheapest available fix, and `--diff` is how you check whether it
-held for your own prompt and judge model.
+verdict on a few percent of cases, run to run (see [results](./results.md)). The shipped
+`anthropic_judge` therefore pins `temperature=0.0`. That alone does not guarantee
+bit-identical judging, and `--diff` is how you check whether it held for your own prompt
+and judge model.
 
 **This command sends data off your machine.** Each case's input and output, plus the
 spec, go to the Anthropic API; nothing else is transmitted, and the key is read only from
@@ -143,11 +128,11 @@ not be parsed, and calls that failed outright. A failed call is recorded and the
 continues, so a rate limit late in a long run does not discard the verdicts already paid
 for. If every case errors the command exits non-zero and says the judge itself is
 failing, so a broken SDK cannot read as an adapter failing every case. The reference judge
-needs `pip install 'paw-kit[judge]'`.
+needs the `judge` extra; see [install](./install.md#the-judge-extra).
 
 ## `paw-kit lint-spec`
 
-`paw-kit lint-spec "text"` or `--file spec.txt` runs static checks for the spec-authoring
-mistakes the real measurements turned up: an unpinned output format, a forced choice with
-no way to abstain, a schema with every field required, an over-long spec, and examples in
-a single form. It is advice, not a gate.
+`paw-kit lint-spec "text"` or `--file spec.txt` runs static checks for common
+spec-authoring mistakes: an unpinned output format, a forced choice with no way to
+abstain, a schema with every field required, an over-long spec, and examples in a single
+form. It is advice, not a gate.
