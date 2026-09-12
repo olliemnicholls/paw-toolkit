@@ -352,3 +352,46 @@ def test_mock_compile_stays_inside_its_documented_latency_budget_D_4(tmp_path: P
     assert worst < 50.0, (
         f"slowest of 5 mock compiles took {worst:.1f} ms against a documented 50 ms budget"
     )
+
+
+def test_retention_policy_constants_are_the_decided_values_D_4() -> None:
+    """D-4 is a DECISION-bucket item, so the decided numbers are asserted, not just used.
+
+    A cap and a rotation depth that nothing pins are a policy that can drift to any value
+    without a reviewer seeing it -- and "bounded" is only a guarantee once the bound is
+    written down somewhere that fails when it changes. The reasoning for these particular
+    values is in this module's docstring and in the track file's status log.
+
+    (Kills the two `_HISTORY_MAX_BYTES` int mutants the gate-3 run found alive.)
+    """
+    assert lineage._HISTORY_MAX_BYTES == 1024 * 1024, "the per-file cap is 1 MiB"
+    assert lineage._HISTORY_ROTATIONS == 1, (
+        "one generation is kept, so total retention is bounded at ~2x the cap; an "
+        "unbounded rotation depth is an unbounded sidecar wearing a different shape"
+    )
+
+
+def test_rotation_happens_when_the_line_would_exceed_the_cap_not_reach_it_D_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The boundary itself: a line that lands *exactly* on the cap does not rotate; the
+    first byte past it does.
+
+    Asserted directly on `_rotate_history_if_full` rather than through `append_history_entry`
+    because a JSON line's length is not something a test should have to control to the byte
+    to say what it means.
+
+    (Kills `manifest_lineage.py cmp <=-><`, alive at gate 3.)
+    """
+    monkeypatch.setattr(lineage, "_HISTORY_MAX_BYTES", 1_000)
+    live = tmp_path / "a.paw.history.jsonl"
+    rotated = Path(str(live) + ".1")
+    live.write_bytes(b"x" * 900)
+
+    lineage._rotate_history_if_full(str(live), 100)  # 900 + 100 == the cap exactly
+    assert not rotated.exists(), "a line that exactly fills the cap must not rotate"
+    assert live.stat().st_size == 900
+
+    lineage._rotate_history_if_full(str(live), 101)  # one byte past
+    assert rotated.exists(), "a line that would exceed the cap must rotate"
+    assert not live.exists(), "rotation moves the live file aside; it does not copy it"

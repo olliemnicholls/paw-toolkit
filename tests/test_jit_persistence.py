@@ -1798,3 +1798,107 @@ def test_schema_forward_marker_is_never_rolled_backwards_J_5(tmp_path: Path) -> 
         assert _rows(str(db_file), "PRAGMA user_version;") == [(_SCHEMA_VERSION + 7,)]
     finally:
         db.close()
+
+
+# --- gate-3 follow-ups: behaviour the mutation gate found unasserted --------------
+#
+# Each of these closes a specific surviving mutant in code this track added. They are
+# not metric-gaming: every one asserts a property the finding's fix depends on and that
+# nothing else pinned -- which is exactly what a surviving mutant means.
+
+
+def test_try_begin_compile_names_the_previous_status_in_a_first_ever_compile_D_2(
+    tmp_path: Path,
+) -> None:
+    """The audit row for a task that had no row at all still reads `tracing -> compiling`.
+
+    `previous or "tracing"` is load-bearing here and only here: for every other task
+    `previous` is already `"tracing"`, so a mutant that drops the fallback is invisible
+    unless the no-row case checks the row it writes. The epoch is asserted against the
+    task row for the same reason -- the transition row carries its own copy, and nothing
+    else compared the two.
+
+    (Kills `db.py bool or->and  previous or "tracing"` and the `state_epoch or 0` int
+    mutant in `try_begin_compile`, both of which the gate-3 run found alive.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        assert db.try_begin_compile("first-ever") is True
+        _, _, epoch = db.get_task_routing("first-ever")
+        assert _rows(
+            db_path,
+            "SELECT from_status, to_status, state_epoch FROM state_transitions "
+            "WHERE task_id = 'first-ever';",
+        ) == [("tracing", "compiling", epoch)]
+    finally:
+        db.close()
+
+
+def test_reclaim_audit_row_carries_the_epoch_it_created_J_5(tmp_path: Path) -> None:
+    """The reclaim's `state_transitions` row must name the epoch the reclaim produced.
+
+    The task row's epoch is computed in SQL (`state_epoch + 1`); the transition row's is
+    computed in Python. Nothing compared them, so a mutant in either arithmetic left the
+    audit trail pointing at an epoch that never existed -- and shadow-window arithmetic is
+    scoped by exactly that number.
+
+    (Kills `db.py bool or->and  new_epoch = (row["state_epoch"] or 0) + 1`, alive at
+    gate 3.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        # Several transitions first, so the epoch under test is not 0 or 1 by luck.
+        db.set_status("t", "shadow")
+        db.set_status("t", "tracing")
+        assert db.try_begin_compile("t") is True
+        _wedge(db, "t", age_seconds=10_000)
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0) is True
+        _, _, task_epoch = db.get_task_routing("t")
+        reclaim_rows = _rows(
+            db_path,
+            "SELECT state_epoch FROM state_transitions "
+            "WHERE task_id = 't' AND reason = 'stale_compile_lease';",
+        )
+        assert reclaim_rows == [(task_epoch,)], (
+            f"the reclaim's audit row says epoch {reclaim_rows}, the task says "
+            f"{task_epoch}"
+        )
+        assert task_epoch > 1, "the fixture must not make epoch 1 a passing accident"
+    finally:
+        db.close()
+
+
+def test_set_status_maintains_the_compile_lease_stamp_J_5(tmp_path: Path) -> None:
+    """Entering `compiling` stamps the lease; leaving it clears the stamp.
+
+    This is the invariant the reclaim rests on -- it deliberately refuses to act on a
+    `compiling` row with no stamp, so a writer that failed to set one would make a wedged
+    task permanently unreclaimable, and a writer that failed to *clear* one would let a
+    later wedge inherit an already-expired lease and be reclaimed instantly, out from
+    under a live compile.
+
+    (Kills `db.py cmp ==->!=  lease = now if status == "compiling" else None`, alive at
+    gate 3.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+
+    def stamp() -> object:
+        return _rows(db_path, "SELECT compiling_started_at FROM tasks WHERE task_id='t';")[0][0]
+
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert stamp() is None
+        db.set_status("t", "compiling")
+        assert stamp() is not None, "entering `compiling` must start the lease"
+        db.set_status("t", "tracing")
+        assert stamp() is None, "leaving `compiling` must clear the lease"
+        db.set_status("t", "compiling")
+        assert stamp() is not None
+        db.set_status("t", "ready", adapter_path="/tmp/x.paw")
+        assert stamp() is None, "the adapter_path branch must clear it too"
+    finally:
+        db.close()

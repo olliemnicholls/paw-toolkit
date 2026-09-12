@@ -1312,3 +1312,31 @@ def test_renderer_and_selector_share_one_predicate_A_6() -> None:
             rendered = _rendered_inputs(_render_spec_with_examples("S", examples, limit))
             assert len(rendered) == len(selected), (examples, limit)
             assert rendered == [f"{ex['input']}" for ex in selected], (examples, limit)
+
+
+@pytest.mark.parametrize("raw_id", [None, "", 42, {"id": "x"}])
+def test_cached_program_id_is_none_unless_the_precheck_named_a_real_one_A_2(
+    key: None, tmp_path: Path, raw_id: object
+) -> None:
+    """`cached_program_id` is a *provenance* field, so a non-answer must read as None.
+
+    `CompilePrecheck.program_id` is `str | None` upstream, and this value is written into
+    the manifest and read back by measurement scripts. An empty string or a non-string
+    that slipped through would be recorded as if it identified a program -- the same
+    shape of defect as A-2 itself, one field down.
+
+    (Kills `programasweights.py bool and->or  isinstance(raw_id, str) and raw_id`, which
+    the gate-3 run found alive: under `or`, a truthy non-string is recorded verbatim and
+    an empty string still reads as identified.)
+    """
+    class _PrecheckSDK(FakeSDK):
+        def precheck_compile(self, spec: str, compiler: str | None = None):
+            self.precheck_calls.append({"spec": spec, "compiler": compiler})
+            return {"cached": True, "program_id": raw_id}
+
+    sdk = _PrecheckSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=False)
+    out = tmp_path / "a.paw"
+    with pytest.warns(UserWarning, match="already has a compiled program"):
+        backend.compile("spec", [], str(out))
+    assert json.loads(out.read_text())["cached_program_id"] is None
