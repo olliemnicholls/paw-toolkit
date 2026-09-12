@@ -178,6 +178,41 @@ TARGETS: dict[str, Target] = {
         note="added for Track G (D-3/D-8); had no TARGETS entry at all before, so "
         "--modules paw_kit/atomicio.py used to hard-error in resolve_modules.",
     ),
+    "paw_kit/jit/compiler.py": Target(
+        "tests/test_jit.py tests/test_jit_persistence.py",
+        default=False,
+        note="added for Track D (D-2, J-5, J-6): trigger_compilation's cross-process "
+        "compiling-guard and sync_compile's duplicate-compile guard both live here.",
+    ),
+    "paw_kit/backend/programasweights.py": Target(
+        "tests/test_programasweights_backend.py",
+        default=False,
+        note="added for Track D (A-1, A-2, A-3, A-6, A-9): the 5xx-retry guard, the "
+        "manifest's requested-vs-confirmed public field, the precheck contract and "
+        "the folded-example count all live here.",
+    ),
+    "paw_kit/backend/manifest_lineage.py": Target(
+        "tests/test_programasweights_backend.py tests/test_mock_backend.py",
+        default=False,
+        note="added for Track D (D-4): the history-sidecar field filter lives here, "
+        "and both shipped backends' lineage writes go through it, hence both test "
+        "files -- a mock-only fix would miss the real backend's own filter call.",
+    ),
+    "paw_kit/serve/server.py": Target(
+        "tests/test_serve.py",
+        default=False,
+        note="added for Track F (X-1..X-9): auth ordering, middleware stack order, "
+        "the rate limiter's keying and eviction, and the inference-slot admission "
+        "path all live here.",
+    ),
+    "paw_kit/serve/docker.py": Target(
+        "tests/test_serve.py",
+        default=False,
+        note="added for Track F (X-10): the generated requirements.txt pin list and "
+        "the base-image tags live here. Not exercised through test_cli.py -- the "
+        "CLI's `export docker` has no dedicated test file of its own; the exporter "
+        "is tested directly via test_serve.py.",
+    ),
 }
 
 FULL_SUITE = ""  # empty selection == run everything
