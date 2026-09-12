@@ -192,11 +192,18 @@ TARGETS: dict[str, Target] = {
         "the folded-example count all live here.",
     ),
     "paw_kit/backend/manifest_lineage.py": Target(
-        "tests/test_programasweights_backend.py tests/test_mock_backend.py",
+        "tests/test_manifest_lineage.py tests/test_programasweights_backend.py "
+        "tests/test_mock_backend.py",
         default=False,
         note="added for Track D (D-4): the history-sidecar field filter lives here, "
         "and both shipped backends' lineage writes go through it, hence both test "
-        "files -- a mock-only fix would miss the real backend's own filter call.",
+        "files -- a mock-only fix would miss the real backend's own filter call. "
+        "tests/test_manifest_lineage.py joins the selection as Track D implements D-4: "
+        "it did not exist when this entry was written and it holds *every* one of D-4's "
+        "tests (allow-list, evolution guard, rotation, concurrent-append-across-rotation, "
+        "fsync scoping), so without it a run here misses all of them and reports "
+        "survivors those tests do in fact kill -- the same trap Track G recorded for "
+        "db.py and tests/test_jit_persistence.py.",
     ),
     "paw_kit/serve/server.py": Target(
         "tests/test_serve.py",
