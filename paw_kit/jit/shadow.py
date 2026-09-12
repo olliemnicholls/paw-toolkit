@@ -32,8 +32,28 @@ from pydantic import BaseModel
 
 from paw_kit.jit.agreement import safe_agreement, stringify_answer
 from paw_kit.jit.db import _SHADOW_STALL_FACTOR
+from paw_kit.jit.deadline import DeadlinePool, PoolExhausted
 
 logger = logging.getLogger("paw_kit.jit.shadow")
+
+# J-2: a single, process-wide bounded pool of daemon worker threads for every
+# shadow-phase adapter call, across every task's own per-(db_path, task_id)
+# worker thread -- separate from decorator.py's `_SERVED_DEADLINE_POOL` (see
+# this track's Dependency check for why two pools, not one shared one).
+#
+# Residual limitation, stated plainly rather than glossed over: this pool IS
+# shared across every task's shadow comparisons. N wedged shadow comparisons
+# (from N different tasks, or repeated ones from a single wedged task) can
+# still starve *other* tasks' shadow comparisons of a slot -- a real, accepted,
+# and much narrower limitation than today's "one wedged adapter blocks its own
+# task's queue forever," not a claim of full cross-task isolation. A timeout
+# caused by this kind of cross-task pool exhaustion is infrastructure, not this
+# adapter's own drift, and is scored `verdict = "pool_exhausted"` below --
+# excluded from both the promotion numerator and denominator the same way
+# `get_agreement_stats` (paw_kit.jit.db) already excludes `teacher_error`,
+# rather than `error`, which counts against the adapter being compared.
+_SHADOW_POOL_MAX_WORKERS = 4
+_SHADOW_DEADLINE_POOL = DeadlinePool(max_workers=_SHADOW_POOL_MAX_WORKERS, name="paw-shadow-deadline")
 
 # Once a task has accumulated this many times `shadow_window` comparisons at one epoch
 # without promoting, the runner drops to sampling one comparison in every
@@ -53,18 +73,34 @@ _RunnerKey = Tuple[str, str]
 
 
 def _coerce(value: Any, response_model: Optional[Type[BaseModel]]) -> Any:
-    """Re-validate a persisted answer back into the shape the comparison runs on.
+    """Validate a **raw** (undecoded) teacher/adapter value into the shape the
+    comparison runs on (J-4/J-10).
 
-    With a `response_model` both sides are validated into model instances, so the
-    comparison is field-wise over real objects and the stored row is a faithful record
-    of exactly what was compared. A validation failure here is an *adapter error*, not
-    a crash: the caller has already been served by the teacher.
+    `value` is the real object the teacher or adapter call returned -- never a
+    round trip through the persisted `shadow_pairs` string (see this track's
+    Dependency check on J-4 for why: `agreement_fn` must never see a serialized
+    string on either side when a raw value is available).
+
+    Without a `response_model`, this is a pure passthrough: the raw value
+    (`str`, `dict`, `list`, whatever the teacher/adapter actually returned) goes
+    to `agreement_fn` unchanged. With one, both sides are validated into model
+    instances, so the comparison is field-wise over real objects: a `dict` is
+    validated with `model_validate`, a `str` with `model_validate_json`, an
+    already-`response_model` instance passes through, and anything else (a
+    list, a bare scalar) falls back through its canonical string form. A
+    validation failure here is a *coercion* failure, not a crash -- the caller
+    has already been served by the teacher; the caller of `_coerce` is
+    responsible for attributing it to the right side (teacher vs adapter, J-10).
     """
     if response_model is None:
         return value
     if isinstance(value, BaseModel):
         return value
-    return response_model.model_validate_json(value if isinstance(value, str) else str(value))
+    if isinstance(value, dict):
+        return response_model.model_validate(value)
+    if isinstance(value, str):
+        return response_model.model_validate_json(value)
+    return response_model.model_validate_json(stringify_answer(value))
 
 
 @dataclass(frozen=True)
@@ -94,6 +130,19 @@ class ShadowJob:
     teacher_latency_ms: Optional[float] = None
     adapter_output: Optional[str] = None
     adapter_latency_ms: Optional[float] = None
+    # J-4: the RAW (undecoded) values, carried alongside the serialized
+    # `teacher_output`/`adapter_output` above -- those stay exactly what they
+    # already were (the persisted, possibly-redacted `shadow_pairs` form);
+    # these are what `agreement_fn` actually compares. Each is populated by
+    # whichever side already knows it at enqueue (decorator.py: `raw_teacher`
+    # for a `shadow` job, `raw_adapter` for an `audit` job) and filled in on
+    # this worker for the other side, from the real call it makes -- never by
+    # round-tripping through the string above. Same mutation caveat as
+    # `run_teacher`'s `partial` below: `raw_adapter` on an audit job holds a
+    # live reference to the caller's own returned object for the queue's
+    # lifetime.
+    raw_teacher: Any = None
+    raw_adapter: Any = None
     run_adapter: Optional[Callable[[str], Any]] = None
     run_teacher: Optional[Callable[[], Any]] = None
     response_model: Optional[Type[BaseModel]] = None
@@ -105,6 +154,12 @@ class ShadowJob:
     demote_threshold: float = 0.0
     max_pairs: int = 500
     queue_size: int = 8
+    # J-2: deadline for this job's own run_adapter call (phase="shadow" only --
+    # unused, harmless, for phase in ("audit", "fail_open")). Carried per job
+    # rather than read from a module constant so a caller's `adapter_timeout_s=`
+    # decoration parameter (decorator.py) applies here too, not just the served
+    # path.
+    adapter_timeout_s: float = 10.0
     # Finding 1: a "fail_open" job carries nothing but enough to key the worker and
     # call `db.increment_fail_open(task_id)` there -- the persisted fail-open counter
     # must never be written on the caller thread. Every field above this one is
@@ -128,9 +183,20 @@ class ShadowRunner:
         self._queues: Dict[_RunnerKey, "queue.Queue[ShadowJob]"] = {}
         self._threads: Dict[_RunnerKey, threading.Thread] = {}
         self._pending: Dict[_RunnerKey, int] = {}
-        self._dropped: Dict[_RunnerKey, int] = {}
+        # M-4b (C4b): dropped counts keyed on (key, job.phase) -- "shadow",
+        # "audit" or "fail_open" (a fail_open job's own `phase` is already set to
+        # exactly that string by `submit_fail_open`, so no new taxonomy is
+        # needed). Previously one bucket keyed on `key` alone conflated all
+        # three: `submit_fail_open` routes through this same `submit()`, so a
+        # dropped fail-open counted identically to a dropped comparison, and a
+        # dropped shadow-phase comparison counted identically to a dropped
+        # audit-phase one -- even though only audit-phase drops delay demotion
+        # of a drifting adapter, which is the number worth its own name.
+        self._dropped: Dict[Tuple[_RunnerKey, str], int] = {}
         self._stalled: Dict[_RunnerKey, int] = {}
-        self._drop_warned: Set[_RunnerKey] = set()
+        # M-4b: also split per (key, phase), so a task's first shadow-phase drop
+        # does not suppress its own, separate first-audit-phase-drop WARNING.
+        self._drop_warned: Set[Tuple[_RunnerKey, str]] = set()
         self._stall_warned: Set[Tuple[_RunnerKey, int]] = set()
         self._seq_cache: Dict[Tuple[_RunnerKey, int], int] = {}
         # J-12: windows actually *scored* at (key, epoch, phase). See
@@ -162,20 +228,41 @@ class ShadowRunner:
             try:
                 q.put_nowait(job)
             except queue.Full:
+                # M-4b: bucketed by (key, job.phase) -- "shadow", "audit" or
+                # "fail_open" -- so the three are never conflated, and only
+                # audit-phase drops are the ones that delay demotion of a
+                # drifting adapter.
+                drop_key = (key, job.phase)
                 with self._lock:
                     self._pending[key] = max(0, self._pending.get(key, 1) - 1)
-                    self._dropped[key] = self._dropped.get(key, 0) + 1
-                    first = key not in self._drop_warned
-                    self._drop_warned.add(key)
+                    self._dropped[drop_key] = self._dropped.get(drop_key, 0) + 1
+                    first = drop_key not in self._drop_warned
+                    self._drop_warned.add(drop_key)
                 what = "comparison" if job.kind == "compare" else "fail-open"
                 if first:
-                    logger.warning(
-                        "paw_kit.jit.shadow: task_id=%s shadow queue is full (size=%d); "
-                        "dropping this %s. A dropped comparison is not counted as a "
-                        "disagreement -- it is simply not sampled; a dropped fail-open is "
-                        "simply not counted. Further drops for this task log at DEBUG.",
-                        job.task_id, job.queue_size, what,
-                    )
+                    if job.phase == "audit":
+                        # M-4b: named specifically -- an audit-phase drop is the
+                        # one that delays demotion of a drifting adapter by an
+                        # amount that depends on traffic shape, unlike a
+                        # dropped shadow-phase comparison.
+                        logger.warning(
+                            "paw_kit.jit.shadow: task_id=%s shadow queue is full "
+                            "(size=%d); dropping this audit-phase %s. Audit-phase "
+                            "drops specifically delay demotion of a drifting "
+                            "adapter -- if these accumulate, raise "
+                            "shadow_queue_size. A dropped comparison is not "
+                            "counted as a disagreement, it is simply not sampled. "
+                            "Further drops for this task log at DEBUG.",
+                            job.task_id, job.queue_size, what,
+                        )
+                    else:
+                        logger.warning(
+                            "paw_kit.jit.shadow: task_id=%s shadow queue is full (size=%d); "
+                            "dropping this %s. A dropped comparison is not counted as a "
+                            "disagreement -- it is simply not sampled; a dropped fail-open is "
+                            "simply not counted. Further drops for this task log at DEBUG.",
+                            job.task_id, job.queue_size, what,
+                        )
                 else:
                     logger.debug(
                         "paw_kit.jit.shadow: task_id=%s shadow queue full, %s dropped.",
@@ -378,59 +465,91 @@ class ShadowRunner:
         teacher_latency = job.teacher_latency_ms
         adapter_output = job.adapter_output
         adapter_latency = job.adapter_latency_ms
-        adapter_value: Any = None
+        # J-4: the raw (undecoded) values agreement_fn will actually compare.
+        # Seeded from whichever side decorator.py already knew at enqueue; the
+        # other side is filled in below, from the real call this worker makes --
+        # never by round-tripping through the serialized string above.
+        raw_teacher: Any = job.raw_teacher
+        raw_adapter: Any = job.raw_adapter
         verdict: Optional[str] = None
         error_type: Optional[str] = None
 
         if job.phase == "shadow":
             started = time.perf_counter()
             try:
-                adapter_value = job.run_adapter(job.input_payload)  # type: ignore[misc]
+                # J-2: the same deadline mechanism as the served path, on the
+                # separate shadow-path pool -- a wedged adapter must not stall
+                # this task's queue forever.
+                raw_adapter = _SHADOW_DEADLINE_POOL.call(
+                    job.run_adapter, job.input_payload, job.adapter_timeout_s
+                )
                 adapter_latency = (time.perf_counter() - started) * 1000
-                adapter_output = stringify_answer(adapter_value)
+                adapter_output = stringify_answer(raw_adapter)
+            except PoolExhausted as exc:
+                # Infrastructure, not this adapter's drift (see the pool's own
+                # module-level comment above): a different task's wedged
+                # comparisons consumed every slot. Excluded from both the
+                # promotion numerator and denominator, same as `teacher_error`
+                # -- never `error`, which would count against this adapter.
+                verdict = "pool_exhausted"
+                error_type = type(exc).__name__
+                adapter_output = None
+                raw_adapter = None
+                self._log_shadow_error(job.task_id, error_type, exc)
             except BaseException as exc:  # noqa: BLE001
+                # Includes DeadlineExceeded: unlike PoolExhausted, this call got
+                # its own slot and still didn't finish in time -- that reflects
+                # on *this* adapter (too slow, or itself wedged) exactly the way
+                # any other adapter exception does, so it stays `error`.
                 verdict = "error"
                 error_type = type(exc).__name__
                 adapter_output = None
+                raw_adapter = None
                 self._log_shadow_error(job.task_id, error_type, exc)
         else:
             started = time.perf_counter()
             try:
-                teacher_value_raw = job.run_teacher()  # type: ignore[misc]
+                raw_teacher = job.run_teacher()  # type: ignore[misc]
                 teacher_latency = (time.perf_counter() - started) * 1000
-                teacher_output = stringify_answer(teacher_value_raw)
+                teacher_output = stringify_answer(raw_teacher)
             except BaseException as exc:  # noqa: BLE001
                 # Not the adapter's fault: excluded from numerator *and* denominator.
                 verdict = "teacher_error"
                 error_type = type(exc).__name__
                 teacher_output = None
+                raw_teacher = None
                 self._log_shadow_error(job.task_id, error_type, exc)
 
+        # J-10: the two sides are coerced -- and any failure attributed --
+        # SEPARATELY. A teacher-side coercion failure (the teacher's raw value
+        # does not validate against response_model) is not the adapter's fault,
+        # exactly like a teacher *exception* above: `teacher_error`, excluded
+        # from both the promotion numerator and denominator. Only an
+        # adapter-side coercion failure stays `error`.
         if verdict is None:
             try:
-                teacher_compare = _coerce(teacher_output, job.response_model)
-                if job.phase == "shadow":
-                    adapter_compare = (
-                        adapter_value
-                        if isinstance(adapter_value, BaseModel) or job.response_model is None
-                        else _coerce(adapter_output, job.response_model)
-                    )
-                else:
-                    adapter_compare = _coerce(adapter_output, job.response_model)
+                teacher_compare = _coerce(raw_teacher, job.response_model)
             except Exception as exc:
-                verdict = "error"
+                verdict = "teacher_error"
                 error_type = type(exc).__name__
                 self._log_shadow_error(job.task_id, error_type, exc)
             else:
-                agreement_fn = job.agreement_fn
-                agreed, agreement_error = safe_agreement(
-                    agreement_fn, teacher_compare, adapter_compare  # type: ignore[arg-type]
-                )
-                if agreement_error is not None:
+                try:
+                    adapter_compare = _coerce(raw_adapter, job.response_model)
+                except Exception as exc:
                     verdict = "error"
-                    error_type = agreement_error
+                    error_type = type(exc).__name__
+                    self._log_shadow_error(job.task_id, error_type, exc)
                 else:
-                    verdict = "agree" if agreed else "disagree"
+                    agreement_fn = job.agreement_fn
+                    agreed, agreement_error = safe_agreement(
+                        agreement_fn, teacher_compare, adapter_compare  # type: ignore[arg-type]
+                    )
+                    if agreement_error is not None:
+                        verdict = "error"
+                        error_type = agreement_error
+                    else:
+                        verdict = "agree" if agreed else "disagree"
 
         redact = job.redact_fn
         stored_input = redact(job.input_payload) if redact else job.input_payload
@@ -566,12 +685,26 @@ class ShadowRunner:
             ]
 
     def stats(self, task_id: str, db_path: Optional[str] = None) -> Dict[str, int]:
-        """In-process counters for this task since process start (never persisted)."""
+        """In-process counters for this task since process start (never persisted).
+
+        M-4b (C4b): `dropped` is kept as the pre-existing total (every caller
+        that already asserts on it is unaffected), and
+        `dropped_shadow`/`dropped_audit`/`dropped_fail_open` break it down by
+        which of the three routes through `submit()` a drop came from -- they
+        used to be conflated in one bucket, which hid that only audit-phase
+        drops delay demotion of a drifting adapter.
+        """
         keys = self._keys_for(task_id, db_path)
         with self._lock:
+            dropped_shadow = sum(self._dropped.get((k, "shadow"), 0) for k in keys)
+            dropped_audit = sum(self._dropped.get((k, "audit"), 0) for k in keys)
+            dropped_fail_open = sum(self._dropped.get((k, "fail_open"), 0) for k in keys)
             return {
                 "pending": sum(self._pending.get(k, 0) for k in keys),
-                "dropped": sum(self._dropped.get(k, 0) for k in keys),
+                "dropped": dropped_shadow + dropped_audit + dropped_fail_open,
+                "dropped_shadow": dropped_shadow,
+                "dropped_audit": dropped_audit,
+                "dropped_fail_open": dropped_fail_open,
                 "stalled": sum(self._stalled.get(k, 0) for k in keys),
             }
 

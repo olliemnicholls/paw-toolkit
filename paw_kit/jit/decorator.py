@@ -21,6 +21,7 @@ from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.jit.agreement import default_agreement_fn, stringify_answer
 from paw_kit.jit.compiler import BackgroundCompiler
 from paw_kit.jit.db import TraceDB
+from paw_kit.jit.deadline import DeadlinePool
 from paw_kit.jit.shadow import _GLOBAL_SHADOW_RUNNER, ShadowJob
 from paw_kit.schema.loader import get_default_backend, load
 
@@ -29,6 +30,17 @@ T = TypeVar("T")
 logger = logging.getLogger("paw_kit.jit")
 
 _GLOBAL_COMPILER = BackgroundCompiler()
+
+# J-2: a single, process-wide bounded pool of daemon worker threads for every
+# *served* (`ready`-state) adapter call, across every decorated task -- not one
+# pool per task and not a per-call thread. See paw_kit.jit.deadline's module
+# docstring for why ThreadPoolExecutor is disqualified and what this buys.
+# `shadow.py` has its own, separate pool for the shadow/audit-comparison path
+# (`_SHADOW_DEADLINE_POOL`) -- two pools, not one shared one, so a wedged
+# adapter on the served path cannot exhaust capacity a shadow comparison needs,
+# and vice versa (see this track's Dependency check).
+_SERVED_POOL_MAX_WORKERS = 4
+_SERVED_DEADLINE_POOL = DeadlinePool(max_workers=_SERVED_POOL_MAX_WORKERS, name="paw-served-deadline")
 
 # Deferred-topic fix (conductor/deferred/index.md, "Silent fail-open, no signal"):
 # the fail-open except block below used to be silent -- no log, no counter -- on the
@@ -377,6 +389,7 @@ def compile_on_hit(
     shadow_queue_size: int = 8,
     shadow_max_pairs: int = 500,
     task_id: Optional[str] = None,
+    adapter_timeout_s: float = 10.0,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator converting production LLM API calls into local neural functions.
 
@@ -438,6 +451,17 @@ def compile_on_hit(
             disagreement and never enters the window denominator.
         shadow_max_pairs: Per-task retention cap on `shadow_pairs`, oldest-first.
             Must be at least `2 * max(shadow_window, audit_window)` (J-12).
+        adapter_timeout_s: J-2. Deadline for one adapter inference call, on both
+            the served (`ready`) path and the shadow worker's own adapter call
+            in `shadow` state. A backend whose `infer` blocks forever (a
+            deadlocked llama.cpp, a stalled mmap, a socket with no timeout)
+            fails open after this many seconds instead of hanging the caller,
+            or the task's shadow queue, forever. Both paths run under a small,
+            process-wide bounded pool of daemon worker threads (see
+            `paw_kit.jit.deadline.DeadlinePool`); once every slot is genuinely
+            wedged, a further call fails open in ~0ms rather than paying this
+            deadline too. Default 10s is conservative for a local adapter;
+            lower it for a served path with its own stricter SLA.
         task_id: J-8. Override the derived task identity. The derived one is
             `sha256(module.qualname : spec : co_filename : co_firstlineno)`, which
             separates same-named functions in different files but *cannot* separate
@@ -457,6 +481,8 @@ def compile_on_hit(
         shadow_window, shadow_threshold, audit_window, audit_rate,
         demote_threshold, shadow_queue_size, shadow_max_pairs,
     )
+    if adapter_timeout_s <= 0:
+        raise ValueError(f"adapter_timeout_s must be > 0, got {adapter_timeout_s}")
     # J-8: read the parameter here so `decorator` below can bind a local `task_id`
     # without shadowing it.
     explicit_task_id = task_id
@@ -538,6 +564,10 @@ def compile_on_hit(
                         demote_threshold=demote_threshold,
                         max_pairs=shadow_max_pairs,
                         queue_size=shadow_queue_size,
+                        # J-2: only meaningful for phase="shadow" (the shadow
+                        # worker's own run_adapter call), harmless to also carry
+                        # for an "audit" job where it goes unused.
+                        adapter_timeout_s=adapter_timeout_s,
                         **kwargs,
                     )
                 )
@@ -552,19 +582,37 @@ def compile_on_hit(
             active_backend = backend or get_default_backend()
             input_payload = _serialize_input(args, kwargs, func)
 
-            # 1. One SELECT decides how this call is routed.
-            status, adapter_path, state_epoch = db.get_task_routing(task_id)
-
-            # Escape hatch. `shadow_window=0` must also rescue a task that a previous
-            # run left sitting in `shadow`: otherwise the opt-out strands exactly the
-            # users who tried the default first -- teacher forever, adapter compiled
-            # and never used.
-            if shadow_window == 0 and status == "shadow" and adapter_path:
-                try:
-                    db.try_promote(task_id, state_epoch, None, 0, reason="shadow_disabled")
-                except Exception:  # pragma: no cover - never break the request path
-                    pass
+            # 1. One SELECT decides how this call is routed (own fault boundary --
+            #    J-1). A DB fault here is the most dangerous of the three: the
+            #    teacher has not been called yet, so there is no answer at all to
+            #    fall back on except by falling through to step 3 below. The
+            #    default ("tracing", None, 0) does exactly that -- it cannot equal
+            #    "shadow" or "ready", so a faulted read can also never reach step
+            #    2's serving branch or step 5's shadow-job submission (gated on
+            #    status == "shadow") with a wrong or default state_epoch.
+            #
+            #    This needs its own new fail-open signal: a bare default-and-
+            #    continue here would itself be a *new*, silent fail-open --
+            #    get_fail_open_count() staying at 0 while every call quietly
+            #    serves the teacher -- exactly the "the value is right but the
+            #    claim about where it came from is wrong" shape S-14 exists to
+            #    fix elsewhere in this same track.
+            try:
                 status, adapter_path, state_epoch = db.get_task_routing(task_id)
+
+                # Escape hatch. `shadow_window=0` must also rescue a task that a
+                # previous run left sitting in `shadow`: otherwise the opt-out
+                # strands exactly the users who tried the default first -- teacher
+                # forever, adapter compiled and never used.
+                if shadow_window == 0 and status == "shadow" and adapter_path:
+                    try:
+                        db.try_promote(task_id, state_epoch, None, 0, reason="shadow_disabled")
+                    except Exception:  # pragma: no cover - never break the request path
+                        pass
+                    status, adapter_path, state_epoch = db.get_task_routing(task_id)
+            except Exception as exc:
+                _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
+                status, adapter_path, state_epoch = "tracing", None, 0
 
             # 2. Promoted: the adapter serves, with the fail-open path unchanged.
             if status == "ready" and adapter_path:
@@ -573,7 +621,13 @@ def compile_on_hit(
                 )
                 try:
                     served_start = time.perf_counter()
-                    result = run_adapter(input_payload)
+                    # J-2: run under a deadline, on the process-wide served-path
+                    # pool -- not a bare call. A backend whose infer() blocks
+                    # forever must reach this except clause after
+                    # adapter_timeout_s, not hang the caller forever. See
+                    # paw_kit.jit.deadline's module docstring for the mechanism
+                    # and why ThreadPoolExecutor is disqualified for it.
+                    result = _SERVED_DEADLINE_POOL.call(run_adapter, input_payload, adapter_timeout_s)
                     served_latency_ms = (time.perf_counter() - served_start) * 1000
                 except Exception as exc:
                     # Fail-Open Safety: transparently route to wrapped function on local failure.
@@ -581,7 +635,10 @@ def compile_on_hit(
                     # log line and a counter a developer has to go looking for, not any change
                     # to the return value or exception behavior on this path. A fail-open is an
                     # infrastructure fault, not semantic drift: it never enters the audit
-                    # window and never counts toward demotion.
+                    # window and never counts toward demotion. This also covers
+                    # `deadline.PoolExhausted`/`DeadlineExceeded` (both subclass
+                    # TimeoutError, itself an Exception) exactly like any other
+                    # adapter exception.
                     _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
                     return func(*args, **kwargs)
 
@@ -592,6 +649,14 @@ def compile_on_hit(
                             phase="audit",
                             input_payload=input_payload,
                             adapter_output=stringify_answer(result),
+                            # J-4: the raw, undecoded served value -- not just its
+                            # stringified persistence form -- so agreement_fn (e.g.
+                            # field_tolerance_agreement) sees the same dict/model
+                            # the caller actually got, on the audit path too. Same
+                            # mutation caveat as run_teacher's partial just below:
+                            # this holds a live reference to `result` for the
+                            # queue's lifetime.
+                            raw_adapter=result,
                             adapter_latency_ms=served_latency_ms,
                             # Deliberately holds the caller's own args/kwargs by
                             # reference and calls func on a worker thread: the wrapped
@@ -615,19 +680,33 @@ def compile_on_hit(
             # returning e.g. a tuple now serializes identically on every path.
             teacher_output_str = stringify_answer(teacher_result)
 
-            # 4. Record trace and increment counter
+            # 4. Record trace and increment counter (own fault boundary -- J-1).
+            #    Deliberately its own try/except, separate from step 5 below: a
+            #    record_trace fault must not also suppress step 5's shadow-job
+            #    submission as a side effect of sharing a try block with it. Step 5
+            #    depends only on `status` from step 1, not on this succeeding.
             # PAW-JIT-02: redaction (opt-in, see redact_trace docstring above) is
             # applied only to what gets persisted -- input_payload/teacher_result
             # above are untouched, so the function's actual return value to the
             # caller is never redacted.
             traced_input = redact_sensitive_text(input_payload) if redact_trace else input_payload
             traced_output = redact_sensitive_text(teacher_output_str) if redact_trace else teacher_output_str
-            call_count = db.record_trace(
-                task_id=task_id,
-                input_payload=traced_input,
-                teacher_output=traced_output,
-                latency_ms=latency_ms,
-            )
+            try:
+                call_count = db.record_trace(
+                    task_id=task_id,
+                    input_payload=traced_input,
+                    teacher_output=traced_output,
+                    latency_ms=latency_ms,
+                )
+            except Exception as exc:
+                # Fail-Open Safety: the teacher has already answered by this point --
+                # this fault must not raise into the caller. call_count stays None
+                # so step 6 below skips the compile-trigger check this round rather
+                # than acting on a fabricated count; the next successful call
+                # catches up exactly the way a step-1 routing-read fault does (see
+                # the "Note, don't fix" comment in step 6 below).
+                _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
+                call_count = None
 
             # 5. In shadow, hand the same input to the adapter off the request path.
             #    One put_nowait of a frozen dataclass: no I/O on this thread.
@@ -637,13 +716,17 @@ def compile_on_hit(
                     phase="shadow",
                     input_payload=input_payload,
                     teacher_output=teacher_output_str,
+                    # J-4: the raw, undecoded teacher value -- see the audit call
+                    # site above for the same fix on that side.
+                    raw_teacher=teacher_result,
                     teacher_latency_ms=latency_ms,
                     run_adapter=_make_adapter_runner(
                         task_id, adapter_path, response_model, active_backend
                     ),
                 )
 
-            # 6. Trigger background compilation once threshold reached.
+            # 6. Trigger background compilation once threshold reached (own fault
+            #    boundary -- J-1).
             #    The status here must be a *fresh* read, not the routing snapshot
             #    above: that snapshot predates the teacher call, which can take
             #    seconds, and a background compile finishing during it would leave the
@@ -651,17 +734,30 @@ def compile_on_hit(
             #    running shadow worker (compiler.py's duplicate guard is skipped
             #    entirely when sync=True). One extra SELECT, on a path already gated
             #    behind call_count >= threshold, is the correct price.
-            if call_count >= threshold and db.get_status(task_id) == "tracing":
-                target_adapter_path = str(Path(cache_dir) / f"{task_id}.paw")
-                _GLOBAL_COMPILER.trigger_compilation(
-                    task_id=task_id,
-                    spec=spec,
-                    db=db,
-                    backend=active_backend,
-                    output_path=target_adapter_path,
-                    sync=sync_compile,
-                    promote_to="shadow" if shadow_window else "ready",
-                )
+            #
+            #    Note, don't fix: a step-1 routing-read fault also lets steps 3-4
+            #    run once (teacher called again, a spurious trace row, call_count
+            #    bumped) before this fresh re-read correctly sees the task's real
+            #    status again and skips (or correctly takes) the trigger. That
+            #    fresh re-read is now load-bearing for J-1 too, not just for the
+            #    reason above.
+            if call_count is not None and call_count >= threshold:
+                try:
+                    current_status = db.get_status(task_id)
+                except Exception as exc:
+                    _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
+                    current_status = None
+                if current_status == "tracing":
+                    target_adapter_path = str(Path(cache_dir) / f"{task_id}.paw")
+                    _GLOBAL_COMPILER.trigger_compilation(
+                        task_id=task_id,
+                        spec=spec,
+                        db=db,
+                        backend=active_backend,
+                        output_path=target_adapter_path,
+                        sync=sync_compile,
+                        promote_to="shadow" if shadow_window else "ready",
+                    )
 
             return teacher_result
 
@@ -688,6 +784,14 @@ def compile_on_hit(
                 # running the same decorated function share the database (and therefore
                 # the promotion decision) but not these.
                 "dropped": runner_stats["dropped"],
+                # M-4b: the same total, broken down by which of the three routes
+                # through ShadowRunner.submit() a drop came from. Only
+                # `dropped_audit` delays demotion of a drifting adapter; the
+                # other two are conflated with it in `dropped` above but were
+                # never separated out until now.
+                "dropped_shadow": runner_stats["dropped_shadow"],
+                "dropped_audit": runner_stats["dropped_audit"],
+                "dropped_fail_open": runner_stats["dropped_fail_open"],
                 # How many comparisons *this process* personally skipped under the
                 # stall guard's subsampling -- distinct from `stalled` above, which is
                 # the persisted, DB-derived "has this epoch passed the stall point"

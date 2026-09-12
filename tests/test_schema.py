@@ -489,6 +489,85 @@ def test_load_wraps_unexpected_compilation_error() -> None:
         loader_module.pydantic_to_regex = original
 
 
+# --- S-13, S-14: schema loader fallback reachability and silence (bug-hunt Track C) --
+
+
+def test_s13_load_with_fallback_survives_recursive_model_grammar_failure(tmp_path) -> None:
+    """S-13: a grammar-compile failure must not take down the whole call path when
+    a fallback_provider IS configured -- it should warn, skip grammar constraining,
+    and still return a working callable that reaches the fallback on local failure."""
+    def teacher_fallback(inp: str) -> RecursiveNode:
+        return RecursiveNode(value=f"from-teacher:{inp}")
+
+    with pytest.warns(UserWarning, match="[Gg]rammar"):
+        fn = load(
+            adapter_path=str(tmp_path / "recursive.paw"),
+            response_model=RecursiveNode,
+            backend=MockPAWBackend(),
+            fallback_provider=teacher_fallback,
+        )
+
+    # The mock backend has no compiled adapter at this path, so its `[mock:...]`
+    # sentinel fails to validate against RecursiveNode -- reaching the fallback
+    # is exactly what S-13 makes possible; before the fix, `load()` itself
+    # raised before this callable ever existed.
+    result = fn("hello")
+    assert isinstance(result, RecursiveNode)
+    assert result.value == "from-teacher:hello"
+
+
+def test_s13_hard_raise_preserved_without_fallback() -> None:
+    """S-13 must not weaken the existing behaviour for every OTHER caller: with no
+    fallback_provider, a grammar-compile failure still raises at bind time
+    (test_load_wraps_recursion_error_in_paw_schema_error above pins this too;
+    this test pins it explicitly alongside S-13's new, opt-in recovery path)."""
+    with pytest.raises(PAWSchemaError, match="Recursive model detected"):
+        load(adapter_path="models/test.paw", response_model=RecursiveNode)
+
+
+def test_s14_warns_once_and_exposes_a_local_fallback_counter(tmp_path) -> None:
+    """S-14: a bound function whose local path is failing warns ONCE (not every
+    call) and exposes a counter naming the underlying exception, so a
+    permanently-broken adapter is no longer invisible while the teacher quietly
+    pays for every call."""
+    import logging
+
+    backend = MockPAWBackend()
+    adapter_path = str(tmp_path / "broken.paw")
+    backend.compile(spec="s", examples=[{"input": "x", "output": "NOT_VALID_JSON"}], output_path=adapter_path)
+
+    fallback_calls = {"n": 0}
+
+    def fallback(inp: str) -> TicketTriage:
+        fallback_calls["n"] += 1
+        return TicketTriage(ticket_id=1, priority=PriorityEnum.LOW, status="open")
+
+    fn = load(
+        adapter_path=adapter_path, response_model=TicketTriage, backend=backend,
+        fallback_provider=fallback,
+    )
+    assert fn.get_local_fallback_count() == 0
+
+    logger = logging.getLogger("paw_kit.schema.loader")
+    records = []
+    handler = logging.Handler()
+    handler.emit = lambda record: records.append(record)
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        fn("x")
+        fn("x")
+        fn("x")
+    finally:
+        logger.removeHandler(handler)
+
+    assert fallback_calls["n"] == 3
+    assert fn.get_local_fallback_count() == 3
+    warnings_emitted = [r for r in records if r.levelno == logging.WARNING]
+    assert len(warnings_emitted) == 1, f"expected exactly one WARNING, got {len(warnings_emitted)}"
+    assert "ValidationError" in warnings_emitted[0].getMessage() or "JSONDecodeError" in warnings_emitted[0].getMessage()
+
+
 def test_pydantic_to_regex_is_cached() -> None:
     """Verify repeated calls return the same object (cache hit)."""
     pydantic_to_regex.cache_clear()

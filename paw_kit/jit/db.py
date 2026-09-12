@@ -1070,13 +1070,17 @@ class TraceDB:
 
         A `teacher_error` row is not a countable comparison (the adapter is not at
         fault when the audit's teacher call raises), so it is stored with `seq = 0`
-        and never advances the window.
+        and never advances the window. J-2/C2: a `pool_exhausted` row (a shadow-path
+        deadline-pool timeout caused by a *different* task's wedged comparisons,
+        not this adapter's own drift -- see shadow.py) is excluded the same way,
+        for the same reason: it is infrastructure, not a countable comparison of
+        this adapter against the teacher.
         """
         now = datetime.now(timezone.utc).isoformat()
 
         def _do() -> Dict[str, int]:
             with self._write_txn():
-                if verdict == "teacher_error":
+                if verdict in ("teacher_error", "pool_exhausted"):
                     seq = 0
                 else:
                     cur = self._conn.execute(
@@ -1131,28 +1135,38 @@ class TraceDB:
     ) -> Dict[str, Any]:
         """Counts over the newest `window` *countable* comparisons at this epoch.
 
-        The `verdict != 'teacher_error'` filter sits **inside** the `LIMIT` subquery,
-        not outside it. Outside, teacher-error rows would still spend the window's
-        LIMIT budget, so `samples` could never reach `audit_window` once one landed in
-        the trailing window -- and `samples == audit_window` is the demotion trigger.
-        One flaky teacher call would disable drift detection for that task forever.
+        The `verdict NOT IN ('teacher_error', 'pool_exhausted')` filter sits
+        **inside** the `LIMIT` subquery, not outside it. Outside, an excluded row
+        would still spend the window's LIMIT budget, so `samples` could never
+        reach `audit_window` once one landed in the trailing window -- and
+        `samples == audit_window` is the demotion trigger. One flaky teacher call
+        (or, J-2/C2, one shadow-path deadline-pool timeout caused by a different
+        task's wedged comparisons) would disable drift detection for that task
+        forever.
 
         Finding 5: `teacher_error` is scoped to that *same* trailing window, not the
         whole epoch -- otherwise it grows unbounded next to a `window`-sized rate.
-        Simplest implementation: teacher-error rows are not countable and carry no
-        `seq` of their own (they are stored with `seq = 0`), so the boundary is the
-        `id` of the oldest of the `window` countable rows above, and a teacher-error
-        row counts if it is at least that recent -- i.e. it is interleaved with the
-        current window. With fewer than `window` countable rows so far this epoch, the
-        boundary is simply the first one recorded, so nothing is double-counted or
-        missed; with none at all yet, nothing has started, and it reads 0.
+        Simplest implementation: excluded-verdict rows are not countable and carry
+        no `seq` of their own (they are stored with `seq = 0`, see
+        `record_shadow_pair`), so the boundary is the `id` of the oldest of the
+        `window` countable rows above, and a teacher-error row counts if it is at
+        least that recent -- i.e. it is interleaved with the current window. With
+        fewer than `window` countable rows so far this epoch, the boundary is
+        simply the first one recorded, so nothing is double-counted or missed;
+        with none at all yet, nothing has started, and it reads 0.
+
+        `pool_exhausted` (J-2/C2) shares the exclusion mechanism but not this
+        reporting: only `teacher_error` gets its own named, windowed count below
+        (`stats["teacher_error"]`) -- a pool-exhaustion timeout is rare enough,
+        and purely an artifact of process-wide pool sizing rather than of this
+        task, that a second named counter was not worth adding for it here.
         """
         rows = self._conn.execute(
             """
             SELECT verdict, COUNT(*) AS n FROM (
                 SELECT verdict FROM shadow_pairs
                 WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                  AND verdict != 'teacher_error'
+                  AND verdict NOT IN ('teacher_error', 'pool_exhausted')
                 ORDER BY id DESC LIMIT ?
             ) GROUP BY verdict;
             """,
@@ -1163,7 +1177,7 @@ class TraceDB:
             SELECT MIN(id) AS boundary_id FROM (
                 SELECT id FROM shadow_pairs
                 WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                  AND verdict != 'teacher_error'
+                  AND verdict NOT IN ('teacher_error', 'pool_exhausted')
                 ORDER BY id DESC LIMIT ?
             );
             """,

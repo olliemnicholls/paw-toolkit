@@ -286,3 +286,56 @@ def test_mock_history_log_appended_once_per_compile(tmp_path: Path) -> None:
 
     # 0600, not subject to the process umask.
     assert oct(history_path.stat().st_mode)[-3:] == "600"
+
+
+# --- J-3: opt-in strict mode (bug-hunt Track C) -------------------------------
+
+def test_strict_misses_defaults_to_off(tmp_path: Path) -> None:
+    """The default constructor is byte-for-byte unaffected -- serve's warm-up
+    liveness check and Track B's CLI goldens both depend on the sentinel."""
+    backend = MockPAWBackend()
+    assert backend.strict_misses is False
+    assert backend.infer("no/such/adapter.paw", "anything") == "[mock:anything]"
+
+
+def test_strict_misses_raises_on_unmemorised_input(tmp_path: Path) -> None:
+    """With strict_misses=True, a miss raises instead of returning the sentinel --
+    this is what lets a caller's fail-open (e.g. response_model validation, or a
+    custom check) actually fire on a backend that degrades by returning a
+    plausible wrong value rather than raising (J-3)."""
+    from paw_kit.backend.mock import MockAdapterMiss
+
+    backend = MockPAWBackend(strict_misses=True)
+    adapter_path = str(tmp_path / "strict.paw")
+    backend.compile(spec="s", examples=[{"input": "known", "output": "OK"}], output_path=adapter_path)
+
+    # A memorised input still resolves normally.
+    assert backend.infer(adapter_path, "known") == "OK"
+
+    with pytest.raises(MockAdapterMiss):
+        backend.infer(adapter_path, "never seen before")
+
+
+def test_strict_misses_still_honours_rules_and_default_response(tmp_path: Path) -> None:
+    """strict_misses only changes the FINAL fallback -- a registered rule or
+    default_response must still win over raising, exactly as in non-strict mode."""
+    backend = MockPAWBackend(strict_misses=True)
+    adapter_path = str(tmp_path / "strict2.paw")
+    backend.compile(spec="s", examples=[], output_path=adapter_path)
+
+    backend.register_rule(adapter_path, "special", "RULE_HIT")
+    assert backend.infer(adapter_path, "special") == "RULE_HIT"
+
+    backend.set_default_response(adapter_path, "DEFAULT_HIT")
+    assert backend.infer(adapter_path, "anything else") == "DEFAULT_HIT"
+
+
+def test_strict_misses_message_names_the_input_and_adapter(tmp_path: Path) -> None:
+    from paw_kit.backend.mock import MockAdapterMiss
+
+    backend = MockPAWBackend(strict_misses=True)
+    adapter_path = str(tmp_path / "strict3.paw")
+    backend.compile(spec="s", examples=[], output_path=adapter_path)
+
+    with pytest.raises(MockAdapterMiss, match="mystery input"):
+        backend.infer(adapter_path, "mystery input")
