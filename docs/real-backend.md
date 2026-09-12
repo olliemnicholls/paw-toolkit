@@ -49,9 +49,9 @@ production traffic. Think about `redact_trace=True` on the decorator if you do s
 `public=True`. Note also that upstream's compile cache is keyed on the spec text and
 ignores `public` on a cache hit, so recompiling a spec that was previously compiled public
 returns that same public program regardless of what you pass this time. `compile()` warns
-when it detects this via `precheck_compile`, but it cannot change the existing program's
-visibility. Versions of paw-kit before this change compiled publicly by default; if you
-compiled anything with an earlier version, check programasweights.com for it.
+when it detects this, but it cannot change the existing program's visibility. The
+manifest's `public` field records what was requested, not what the server confirmed; if
+it matters, check the program on programasweights.com.
 
 ## Retries, and what a timeout means
 
@@ -80,9 +80,10 @@ each. Indicative, not a benchmark.
   versus CPU matters ~90x.
 - **Quality**: task-dependent and the thing to test, not assume. Structural pass rates of
   0% to 100% on the same task depending on whether the spec pins down the output format;
-  60% full agreement with a fresh teacher call on ticket triage; one clear fabricated
-  answer (`1-800-FLOWERS` → invented digits) found by the fuzzer. `paw-kit lint-spec`
-  checks a spec for the authoring mistakes those runs turned up.
+  under half of held-out tickets in full agreement with a fresh teacher call on ticket
+  triage; one clear fabricated answer (`1-800-FLOWERS` → invented digits) found by the
+  fuzzer. `paw-kit lint-spec` checks a spec for the authoring mistakes those runs turned
+  up. The numbers are on the [results page](./results.md).
 
 ## Two upstream limitations
 
@@ -90,14 +91,10 @@ each. Indicative, not a benchmark.
    with teacher models. paw-kit's traced calls and active-learning labels can only reach it
    as few-shot demonstrations appended to the spec text (`max_spec_examples`). Whether that
    helps is exactly the kind of question `paw-test` is for. It is not assumed.
-2. **No grammar-constrained decoding.** The SDK's callable has no grammar or logits hook, so
-   the FSM logits processor in `paw.schema` cannot be applied. `paw.load` validates output
-   after generation with Pydantic and falls back on failure. Whether the processor stays in
-   this package at all is an open question, pending upstream: `llama_cpp.Llama.sample()`
-   already accepts `grammar` and `logits_processor`, and the SDK's decode loop already
-   calls it, so the ask is a passthrough rather than new machinery. See the
-   [roadmap](./roadmap.md), item 5. It is **not** being kept for a future in-process
-   backend; there isn't going to be one.
+2. **No grammar-constrained decoding.** The SDK's callable has no grammar or logits hook,
+   so paw-kit cannot constrain generation to a schema. `paw.load` validates output after
+   generation with Pydantic and falls back on failure. A supported hook is on the
+   [roadmap](./roadmap.md) as an upstream request.
 
 ## Bringing your own runtime
 
@@ -105,9 +102,7 @@ each. Indicative, not a benchmark.
 and pass `backend=` to `paw.load` or `@compile_on_hit`, and paw-kit will drive whatever
 runtime you like. There is no in-process PyTorch/PEFT backend in this package and there is
 not going to be one: paw-kit is a toolkit around upstream PAW, not a reimplementation of
-it. (A `RealPAWBackend` placeholder existed through v0.1 and raised `NotImplementedError`;
-it was deleted rather than built, because shipping a class that looks like a working
-backend and is not is the exact confusion this project spent a track removing.)
+it.
 
 ## Lineage
 

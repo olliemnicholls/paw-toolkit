@@ -2274,3 +2274,31 @@ Two consequences for anything in this file that is still load-bearing:
   `--extra torch`).
 
 See `conductor/decisions.md` §3 for why an in-process runtime is out of scope by design.
+
+---
+
+## Corrections logged 2026-09-11
+
+Two corrections were first recorded on `docs/results.md`. That page now carries only
+current numbers, so the record moves here, alongside the other dated corrections in this
+file.
+
+**Fiscal-weeks frontier baseline: 85.7% → 98.0%.** Arm D (Claude Haiku zero-shot, no
+compile) in the fiscal-weeks section was silently capped at 400 output tokens, which
+truncated 39 of 300 answers into failures. Re-run uncapped at 2,000 tokens: 300/300
+answered, 0 truncated, 98.0% exact. The frontier baseline was understated, so the finetune
+compiler's 49.0% is further from it than first published, not closer. The 85.7% figures in
+the fiscal-weeks tables above are left as the dated record; read them against this note.
+
+**Programs compiled before the private-by-default fix are still public.** Compiles have
+defaulted to `public=False` since 2026-09-10 (`b47ddea`), but every program compiled
+before that is still live and public. Verified 2026-09-11: all six `program_id`s this
+project has ever compiled report `public: True` from the server and download anonymously,
+no key required, from the `hf_url` it returns. Every one predates `b47ddea` by at least a
+day. Nothing in this project's data was sensitive (the folded examples are synthetic demo
+tickets), but the mechanism is general: a manifest's `public` field records what was
+*requested*, not what the server confirmed, upstream caches by spec text and ignores
+`public` on a cache hit, and re-running any of this project's historical measurement
+scripts unchanged returns the same old public program regardless of what `public=` the
+caller passes now. Publishing this repository publishes every `program_id` it commits, and
+each one resolves, permanently. A later code fix does not reach backward.

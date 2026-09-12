@@ -1,6 +1,6 @@
 # paw-kit
 
-**PAW compiles a spec into a tiny local model. paw-kit tells you whether you can trust the one you just made.**
+**PAW compiles a spec into a tiny local model. paw-kit tells you whether you can trust the model you just made.**
 
 A reliability and migration harness for Program-as-Weights (PAW) neural functions.
 
@@ -8,18 +8,12 @@ A reliability and migration harness for Program-as-Weights (PAW) neural function
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.04199-b31b1b.svg)](https://arxiv.org/abs/2609.04199)
 
-> **Status: early alpha (v0.1), one person, one weekend.** The harness is built and
-> unit-tested, and its one real backend has been run end to end against the upstream
-> service on an RTX 3080 and an A100. What that showed: a compiled date normaliser answers
-> in ~65 ms on the 3080 and passes 71/82 of its own suite; a compiled ticket-triage adapter
-> replaced a live Claude teacher at ~11x lower latency and zero tokens billed, but agreed
-> with a fresh teacher call on only 46.7% of held-out tickets (first published as 60%,
-> before a scoring leak was found and fixed — see `docs/results.md`). Everything not labelled "measured"
-> runs on a deterministic mock, so the workflow can be tried with no GPU and no API key.
-> Read [`measurements/README.md`](./measurements/README.md) before repeating any figure
-> from this repo; several first-pass numbers were wrong and are corrected there in place.
+> **Status: early alpha, one maintainer, not on PyPI.** The real backend has been run end
+> to end against the upstream service; everything else runs on a deterministic mock, so
+> the workflow can be tried with no GPU and no API key. Every measured number is on the
+> [results page](./docs/results.md).
 
-## What PAW is, in three sentences
+## What PAW is
 
 [Deng, Nie and Shieber (2026)](https://arxiv.org/abs/2609.04199) compile a natural-language
 specification into a small LoRA adapter for a frozen 0.6B interpreter (Qwen3-0.6B). Teacher
@@ -45,13 +39,10 @@ a frontier API, and who want evidence before they trust it:
   to the original function (fail-open).
 - **`paw-test` (paw.test)**: a declarative `suite.yaml` of standard cases and assertions,
   an adversarial fuzzer, an active-learning loop that sends failing inputs to a teacher
-  for labels and recompiles, a per-case diff of two adapters, and an LLM judge with a
-  measured noise floor. Use it to find out what a compiled function gets wrong before you
-  ship it.
+  for labels and recompiles, a per-case diff of two adapters, and an LLM judge. Use it to 
+  find out what a compiled function gets wrong before you ship it.
 - **`paw.load` (paw.schema)**: bind an adapter to a Pydantic model. Output is validated
-  and, on failure, routed to a fallback. Includes a regex-to-FSM logits processor for
-  constrained decoding that no current backend can apply; see
-  [the real-backend notes](./docs/real-backend.md).
+  and, on failure, routed to a fallback.
 - **`paw-serve`**: expose any adapter as a local HTTP service speaking the OpenAI Chat
   Completions and Anthropic Messages wire formats. `paw-kit export docker` scaffolds a
   container for it.
@@ -64,8 +55,7 @@ The line between what is measured and what is mocked is drawn in
 ```bash
 git clone https://github.com/olliemnicholls/paw-toolkit
 cd paw-toolkit
-uv sync --dev          # or: pip install -e .
-uv run pytest -q       # 483 tests, no GPU, no network, no API key
+uv sync                # or: pip install -e .
 ```
 
 For a real backend: `uv sync --extra real`, set `PAW_API_KEY`, and run `paw-kit doctor`.
@@ -126,7 +116,11 @@ for i in range(1, 6):
   `paw-test compare`, `paw-test judge`, `paw-kit lint-spec`.
 - [Serve over HTTP](./docs/serving.md): `paw-serve`, `/ready`, Docker export.
 - [Results](./docs/results.md): every measured number, one page.
+- [What is real and what is mocked](./docs/what-is-real.md).
 - [Roadmap](./docs/roadmap.md).
+
+`scripts/` and `measurements/` hold the scripts and raw output behind the results page;
+`tools/` is the project's own test tooling. None of it is needed to use paw-kit.
 
 ## CLI
 
@@ -148,12 +142,12 @@ paw-clean [--dry-run]                     remove cached adapters and trace DB
 ## Relationship to upstream
 
 This is an independent project and is not affiliated with the paper's authors or
-programasweights.com. It depends on their SDK and service for anything real. If you want
-to compile and run PAW functions, start with
+programasweights.com. It depends on their SDK and service to compile and run PAW
+functions. If you only want to compile and call one, start with
 [their SDK](https://github.com/programasweights/programasweights-python); come back here
 when you want tracing, testing, fallback, or an HTTP front.
 
-## Citation
+## Citation for the Original Paper
 
 ```bibtex
 @article{deng2026compile,
