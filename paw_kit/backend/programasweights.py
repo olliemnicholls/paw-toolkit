@@ -261,7 +261,10 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                 "construct a second backend without offline=True to compile, or call "
                 "prepare_program() to populate the cache this instance reads from."
             )
-        if not self.offline and not self.has_api_key():
+        # The `not self.offline and` this condition used to carry is dropped, not
+        # overlooked: the raise above makes it unreachably false, and leaving it in would
+        # tell a reader that an offline backend can still get here.
+        if not self.has_api_key():
             raise RuntimeError(
                 "Compilation needs PAW_API_KEY in the environment "
                 "(https://programasweights.com/settings). Inference on cached programs does not."
@@ -430,14 +433,14 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
     #: a visibility claim becomes wrong rather than unknown.
     _VISIBILITY_KEYS = ("public", "is_public")
 
-    def _paw_client(self) -> Any:
+    @staticmethod
+    def _paw_client(paw: Any) -> Any:
         """A `PAWClient`-shaped object for the calls that have no module-level wrapper.
 
         `get_program_meta` is a `PAWClient` method upstream and `PAWClient` is not even
         in `programasweights.__all__`, so it is reached through the submodule. The
         `getattr` first is the test seam: an injected `sdk` supplies its own factory.
         """
-        paw = self._paw()
         factory = getattr(paw, "PAWClient", None)
         if factory is None:
             factory = importlib.import_module("programasweights.client").PAWClient
@@ -475,7 +478,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         if not self.has_api_key():
             return None, "no_api_key"
         try:
-            meta = self._paw_client().get_program_meta(str(program_id))
+            meta = self._paw_client(paw).get_program_meta(str(program_id))
         except BaseException as exc:  # noqa: BLE001 -- see docstring
             return None, f"request_failed: {type(exc).__name__}: {exc}"
         if not isinstance(meta, dict):

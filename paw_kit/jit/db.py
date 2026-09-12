@@ -763,6 +763,13 @@ class TraceDB:
         unbounded paid retry loop PAW-JIT-03 bounds on the failure path, reached by a
         different route. It is a parameter rather than an import because
         `BackgroundCompiler` owns the cap and `compiler.py` imports *this* module.
+
+        One assumption worth stating, since this is the first ordered timestamp comparison
+        in this module (everything else orders by `id`): `compiling_started_at` is compared
+        **lexicographically**, which is correct only because every writer stores
+        `datetime.now(timezone.utc).isoformat()` -- a fixed-width, fixed-offset
+        (`+00:00`) format. A writer that stored a local-offset or non-padded timestamp
+        would make this comparison silently wrong rather than raise, so keep the format.
         """
         now_dt = datetime.now(timezone.utc)
         now = now_dt.isoformat()

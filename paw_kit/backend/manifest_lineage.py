@@ -209,8 +209,17 @@ def _rotate_history_if_full(history_path: str, incoming_bytes: int) -> None:
     A process that already holds a descriptor on the rotated-away inode keeps appending
     into it; those lines live on in the `.1` file. Nothing is interleaved or truncated.
 
-    Best-effort: a sidecar that cannot be rotated is still appended to. Retention is a
-    policy, and failing a compile over it would be worse than exceeding it.
+    Best-effort, and deliberately unlocked -- the whole virtue of this append path is that
+    it takes no lock. Two consequences, both stated rather than papered over:
+
+    - Two processes that both decide to rotate will both `os.replace`. The second either
+      finds nothing there (the common case: `FileNotFoundError`, swallowed) or moves a
+      nearly-empty live file over `.1` and loses one generation of *already-capped*
+      history. That costs retained lineage, never integrity: no line is ever truncated or
+      interleaved, which is the property that actually matters and the one
+      `tests/test_manifest_lineage.py`'s concurrent-rotation test pins.
+    - The cap is therefore approximate at the margin, like `db.py`'s `_PRUNE_EVERY`. The
+      guarantee is "bounded", not "never one byte over".
     """
     try:
         size = os.stat(history_path).st_size
