@@ -1,13 +1,12 @@
-"""Neural Hardening & Active Learning Example using paw.test.
+"""Date normaliser example: paw-test suites, fuzzing and active learning.
 
 Demonstrates:
 1. Declarative testing with suite.yaml.
-2. Adversarial fuzzing: Unicode corruption, whitespace floods, and domain edge cases.
-3. The Active-Learning Self-Healing Loop:
-   - Catch failing edge cases under adversarial evaluation.
-   - Query teacher for gold labels.
-   - Recompile adapter automatically.
-   - Achieve 100% assertion compliance.
+2. Adversarial fuzzing: unicode corruption, whitespace floods, and domain edge cases.
+3. The active-learning loop: failing cases that carry an `expected` answer are sent
+   to a teacher for labels, the labels are checked against the suite, and the adapter
+   is recompiled with the ones that pass. Cases with no answer key are refused, so
+   this run ends FAILED with nothing repaired; see README.md for why that is correct.
 """
 
 import os
@@ -46,7 +45,7 @@ def date_teacher(input_text: str) -> str:
 
 def main():
     print("=" * 75)
-    print("PAW-Kit Example: Neural Hardening & Active Learning with paw.test")
+    print("PAW-Kit Example: paw-test suites, fuzzing and active learning")
     print("=" * 75)
     print(f"Loading suite: {SUITE_PATH}")
 
@@ -74,11 +73,11 @@ def main():
     print("\n[2/3] Generating adversarial fuzzer probes...")
     sample_cases = [tc.input for tc in suite.standard_cases]
     fuzzed_inputs = AdversarialFuzzer.generate(suite.fuzzing, sample_cases)
-    print(f"Generated {len(fuzzed_inputs)} synthetic mutations (Unicode, whitespace, domain probes).")
+    print(f"Generated {len(fuzzed_inputs)} synthetic mutations (unicode, whitespace).")
     print(f"Sample mutation: {repr(fuzzed_inputs[0])}")
 
-    # Step 3: Run Active Learning Auto-Repair Loop
-    print("\n[3/3] Running Active-Learning Self-Healing Loop:")
+    # Step 3: run the active-learning loop
+    print("\n[3/3] Running the active-learning loop:")
     print("-" * 75)
 
     report = run_active_learning_loop(
@@ -93,10 +92,10 @@ def main():
     print(f"Total Repaired:      {report.repaired_edge_cases} edge cases resolved by teacher")
     print(f"Recompiled Adapter:  {report.recompiled}")
     print("-" * 75)
-    print("\n[DONE] The loop converged -- on a mock adapter with a stub teacher, so this shows the")
-    print("loop's mechanics only. Against a real adapter and a real teacher it repaired 0 of 11")
-    print("failures on this same suite (see measurements/README.md, 'Active learning, for real').")
-    print("Run via CLI anytime: `uv run paw-test check examples/date_normalizer/suite.yaml`\n")
+    print("\n[DONE] FAILED with nothing repaired is the expected result: the fuzz-generated cases")
+    print("have no answer key, so the loop refuses to send them to the teacher. This is a mock")
+    print("adapter and a stub teacher; the example shows the loop's mechanics, not model quality.")
+    print("Same suite from the CLI: `uv run paw-test check examples/date_normalizer/suite.yaml`\n")
 
 
 if __name__ == "__main__":

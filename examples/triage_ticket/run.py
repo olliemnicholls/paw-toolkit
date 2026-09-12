@@ -1,7 +1,7 @@
 """Customer Support Ticket Triage Example using paw-kit @compile_on_hit.
 
 Demonstrates:
-1. Zero-friction migration: wrapping an existing LLM function with @compile_on_hit.
+1. Wrapping an existing LLM call with @compile_on_hit.
 2. Background tracing: storing real production calls in local SQLite (.paw/traces.db).
 3. Hot-swapping: transparent transition from remote API to local compiled neural function.
 4. Fail-open safety: resilient fallback if an error occurs.
@@ -118,11 +118,13 @@ def main():
     print(f"Compilation threshold: 5 hits\n")
 
     for i, ticket in enumerate(SAMPLE_TICKETS, start=1):
+        # Read the flag before the call: call 5 triggers the compile in the background,
+        # and reading it afterwards could label a teacher-served call as local.
+        is_local = triage_ticket.is_compiled()
         t0 = time.perf_counter()
         result = triage_ticket(ticket)
         duration_ms = (time.perf_counter() - t0) * 1000
 
-        is_local = triage_ticket.is_compiled()
         mode_str = "[LOCAL (mock)]" if is_local else "[REMOTE TEACHER]"
 
         print(f"Call {i:02d} | {mode_str:16} | {duration_ms:6.1f}ms")
@@ -132,14 +134,17 @@ def main():
 
         # Brief pause to allow background compilation thread to finish at hit 5
         if i == 5:
-            print("\n>>> Hit threshold (5 calls) reached! Triggering JIT background compilation...")
+            print("\n>>> Threshold (5 calls) reached; compiling in a background thread...")
             time.sleep(0.3)
-            print(">>> Local adapter compiled and hot-swapped!\n")
+            if triage_ticket.is_compiled():
+                print(">>> Local adapter compiled and hot-swapped.\n")
+            else:
+                print(">>> Compile still running; later calls swap once it finishes.\n")
 
     print("\n[SUCCESS] All 10 tickets processed.")
     print("Calls 1-5 executed via Remote Teacher and logged to SQLite trace DB.")
     print("Calls 6-10 routed to the local adapter -- here a MockPAWBackend keyword lookup, not a model.")
-    print("The timings above show the harness's own overhead, not inference; see measurements/ for real numbers.\n")
+    print("The timings above show the harness's own overhead, not inference; see docs/results.md for real numbers.\n")
 
 
 if __name__ == "__main__":

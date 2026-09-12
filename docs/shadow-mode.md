@@ -1,9 +1,8 @@
 # Shadow mode: how the adapter earns production traffic
 
-A compiled adapter that finishes compiling is not yet trusted. The project's own
-measurement showed why: a real ticket-triage adapter replaced a live Claude teacher at
-~11x lower latency and agreed with a fresh teacher call on under half of held-out tickets
-(see [results](./results.md)). Shadow mode is the gate in front of that swap. It is on by
+A compiled adapter that finishes compiling is not yet trusted: a measured adapter was
+much faster than its teacher and agreed with it on well under half of held-out inputs
+(see [results](./results.md)). Shadow mode is the gate in front of the swap. It is on by
 default.
 
 ## States
@@ -39,12 +38,12 @@ worker drains for at most two seconds.
 |---|---|---|
 | `shadow_window` | `20` | Comparisons per window. `0` disables shadow mode: the adapter is promoted as soon as the compile finishes, and a task already sitting in `shadow` is promoted on the next call. |
 | `shadow_threshold` | `0.8` | Minimum agreement over a completed window to promote. |
-| `audit_window` | `20` | Comparisons per audit window after promotion. **Size this for the drift you want to catch**: a 20-sample window from an adapter that has drifted to 60% agreement reads anywhere from 0.40 to 0.80 in nine draws out of ten, so at the shipped `demote_threshold` it demotes on only about 40% of windows (measured; see [results](./results.md)). A window of 100 makes the same drift demote reliably, at five times the teacher spend per verdict. |
+| `audit_window` | `20` | Comparisons per audit window after promotion. **Size this for the drift you want to catch**: a 20-sample window from an adapter that has drifted to 60% agreement reads anywhere from 0.40 to 0.80 in nine draws out of ten, so at the shipped `demote_threshold` it demotes on only about 40% of windows (see [results](./results.md)). A window of 100 makes the same drift demote reliably, at five times the teacher spend per verdict. |
 | `audit_rate` | `0.0` | Fraction of served calls that also run your function for comparison. **Off by default** because it spends real teacher calls after promotion and re-invokes your function on a background thread, which requires it to be thread-safe. `0.05` is the recommended value if you turn it on: one call in twenty, so about 400 served calls per completed audit window. Hard-capped at `0.5`. With `0.0` there is no post-promotion drift signal and demotion is unreachable. |
 | `demote_threshold` | `0.6` | Audit agreement below this demotes. Must be strictly below `shadow_threshold` so a task cannot flap on window noise. |
 | `agreement_fn` | `None` | `(teacher_answer, adapter_answer) -> bool`. The default is conservative: strings are compared after Unicode normalisation and whitespace stripping; Pydantic models and dicts field by field; a string against a structured value by serialising the structure; anything else by equality. `field_tolerance_agreement` is shipped for the "urgency within 1" style of comparison. An `agreement_fn` that raises counts as a disagreement. |
 | `shadow_queue_size` | `8` | Bounded work in flight per task. |
-| `shadow_max_pairs` | `500` | Retention cap on stored comparisons, oldest pruned first. Must be at least `max(shadow_window, audit_window)`. |
+| `shadow_max_pairs` | `500` | Retention cap on stored comparisons, oldest pruned first. Must be at least `2 × max(shadow_window, audit_window)`. |
 | `redact_trace` | `False` | Also governs the three text columns of each stored comparison. Comparison happens on the raw text; redaction is applied when the row is written. |
 
 The four window parameters are persisted with the task. Changing any of them between
@@ -61,13 +60,12 @@ changing any persisted shadow parameter (which starts a fresh epoch) or passing
 `shadow_window=0`. `get_agreement()["stalled"]` and the `(stalled)` marker in
 `paw-kit report` show this state.
 
-This is what makes "a weak adapter never serves" true rather than merely likely, with one
-residual: a window of 20 draws from an adapter that agrees on a random 60% of inputs
-reaches 16 of 20 with probability 5.1%, so over the five windows before the stall point
-the chance of one lucky promotion is about 23%. That is inherent to any sampling gate.
-Raise `shadow_window` if that residual matters for your task; at 50 the per-window chance
-falls below 0.3%. In practice an adapter's disagreements tend to be fixed per input rather
-than random, which makes the gate stricter than the random-draw arithmetic suggests.
+The gate is statistical: a window of 20 draws from an adapter that agrees on a random 60%
+of inputs reaches 16 of 20 with probability 5.1%, so over the five windows before the
+stall point the chance of one lucky promotion is about 23%. Raise `shadow_window` if that
+residual matters for your task; at 50 the per-window chance falls below 0.3%. In practice
+an adapter's disagreements tend to be fixed per input rather than random, which makes
+the gate stricter than the random-draw arithmetic suggests.
 
 ## What is stored, and where
 
@@ -96,8 +94,8 @@ paw-kit report --db .paw/traces.db            # every task: state, agreement, fa
 paw-kit report --task <id> -n 10 --json       # one task, ten disagreements, JSON
 ```
 
-`paw-kit report` opens the database with the library's own code, so it migrates an older
-file in place; it writes. Two things it shows loosely: for a stalled task the agreement
+`paw-kit report` writes to the database (it migrates the schema in place). Two things it
+shows loosely: for a stalled task the agreement
 rate is estimated from the sparse post-stall sample, not from the full windows that were
 scored; and the call count freezes at promotion. Dropped comparisons are only visible
 in-process, through `get_agreement()["dropped"]`. When the teacher is faster than the
@@ -106,7 +104,8 @@ bounded queue fills; the window still completes, it just takes more calls.
 
 ## Demos
 
-The mock quickstart, `paw-kit demo` and the three examples all pass `shadow_window=0`: a
-five-call demo has nowhere near enough calls to fill a window. Shadow mode itself has been
+The mock quickstart, `paw-kit demo` and the triage example pass `shadow_window=0`: a
+five-call demo has nowhere near enough calls to fill a window. (The other two examples do
+not use `@compile_on_hit`.) Shadow mode itself has been
 measured against a real adapter, including what `audit_rate=0.05` costs in teacher calls;
 see the safety table on the [results page](./results.md).

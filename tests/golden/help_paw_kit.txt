@@ -13,7 +13,7 @@ exit code: 0
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ demo       Run an interactive zero-hardware demo showcasing JIT compilation or schema enforcement.                   │
-│ check      Run test suite assertions and active-learning self-healing loop on a .paw adapter.                        │
+│ check      Run test suite assertions and the active-learning loop on a .paw adapter.                                 │
 │ inspect    Inspect metadata, task spec, and file properties of a .paw adapter artifact.                              │
 │ history    Print the append-only compile lineage log for an adapter.                                                 │
 │ lint-spec  Lint a spec for failure modes measured against real compiled PAW adapters.                                │

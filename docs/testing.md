@@ -71,9 +71,8 @@ as a mock manifest, so a real compiled adapter cannot be destroyed by a stray ru
 
 ## Why the loop made no progress
 
-`ActiveLearningReport.stuck_reason` tells you *why* a repair iteration made no progress,
-instead of leaving `is_success=False, repaired_edge_cases=0` to mean either "the model is
-hopeless" or "the harness correctly refused every teacher label". It is one of
+`ActiveLearningReport.stuck_reason` says why a repair iteration made no progress. It is
+one of
 `"all_labels_rejected"` (the teacher answered, but every answer failed the suite's own
 assertions), `"teacher_errors"` (the teacher call itself raised or returned nothing), or
 `"no_failures"` (there was nothing to query). The report's `rejected_labels` lists each
@@ -97,7 +96,7 @@ upstream's two compilers: per-case differences are often more telling than the a
 pass rates, which can sit inside the judge's own noise (next section).
 
 Three things to know. `--backend real` is read-only here too: `compare` never calls
-`compile()`. Both adapters stay loaded for the whole run, two ~600 MB llama.cpp models
+`compile()`. Both adapters stay loaded for the whole run, two copies of the base model
 under `--backend real`, and the first row's latencies include that cold load. A case
 on which an adapter could not run at all is reported as an execution error, counted in
 the summary and reflected in a non-zero exit, never as agreement between two adapters
@@ -112,9 +111,8 @@ can account for most of a diff.
 outputs with an independent LLM judge and persists a per-case verdict and reason, keyed
 by a stable hash of (input, output) so two runs can be diffed later
 (`paw-test judge --diff old.json new.json`, which also reads compare-shaped reports and
-diffs each side). This exists because the judge itself is noisy: at the API's default
-sampling temperature, re-judging byte-identical input/output pairs flipped the YES/NO
-verdict on a few percent of cases, run to run (see [results](./results.md)). The shipped
+diffs each side). The judge is noisy: at the API's default temperature, re-judging
+identical pairs flips some verdicts run to run (see [results](./results.md)). The shipped
 `anthropic_judge` therefore pins `temperature=0.0`. That alone does not guarantee
 bit-identical judging, and `--diff` is how you check whether it held for your own prompt
 and judge model.
