@@ -1,13 +1,12 @@
-"""High-Throughput PII Scrubber Example using paw.schema & paw.load.
+"""PII scrubber example: paw.load with a Pydantic schema.
 
 Demonstrates:
-1. Schema binding: paw.load compiles a Pydantic model to a regex grammar and validates every output.
-2. Fail-open fallback: transparent recovery if an exception or malformed output occurs.
-3. Streaming loop shape for a local processing pipeline.
+1. Schema binding: paw.load validates every output against a nested Pydantic model.
+2. Fail-open fallback: an output that fails validation is replaced by the fallback's.
 
-The adapter here is a MockPAWBackend subclass (a rule-based stub, no model). It does NOT
-perform token-level grammar masking; the "0.0% syntax error" property of paw.schema's FSM
-logits processor only applies when a backend actually uses it, and none does yet.
+The adapter here is a MockPAWBackend subclass (a rule-based stub, no model). No shipped
+backend applies the schema's regex grammar during decoding; validation happens after
+generation.
 """
 
 import json
@@ -93,9 +92,9 @@ class PIIMockBackend(MockPAWBackend):
 
 def main():
     print("=" * 75)
-    print("PAW-Kit Example: High-Throughput PII Scrubber with paw.schema & paw.load")
+    print("PAW-Kit Example: PII scrubber with paw.load")
     print("=" * 75)
-    print(f"Schema: {PIIScrubResult.__name__} (Pydantic constrained decoding)")
+    print(f"Schema: {PIIScrubResult.__name__} (validated after generation)")
 
     if os.path.exists(CACHE_DIR):
         shutil.rmtree(CACHE_DIR)
@@ -138,7 +137,7 @@ def main():
     )
 
     # 3. Process stream through the (mock) local adapter
-    print("\n[3/3] Processing high-throughput text stream locally:")
+    print("\n[3/3] Processing five strings through the bound function:")
     print("-" * 75)
 
     total_time = 0.0

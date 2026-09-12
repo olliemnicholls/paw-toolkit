@@ -139,7 +139,7 @@ def main():
     print("\n[SUCCESS] All 10 tickets processed.")
     print("Calls 1-5 executed via Remote Teacher and logged to SQLite trace DB.")
     print("Calls 6-10 routed to the local adapter -- here a MockPAWBackend keyword lookup, not a model.")
-    print("The timings above show the harness's own overhead, not inference; see measurements/ for real numbers.\n")
+    print("The timings above show the harness's own overhead, not inference; see docs/results.md for real numbers.\n")
 
 
 if __name__ == "__main__":

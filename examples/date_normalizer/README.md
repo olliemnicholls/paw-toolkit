@@ -1,38 +1,41 @@
-# Example 3: Test-Driven Neural Hardening & Active Learning (`paw.test`)
+# Date normaliser: `paw-test` suites, fuzzing and active learning
 
-This example shows the loop `paw-kit` uses to go after **adversarial edge cases, strange formatting, and distribution drift** in a small neural function: fuzz, find failures, ask a teacher for labels, recompile. Whether it helps is task-dependent — see the note at the end.
+Runs a declarative test suite against a compiled adapter, fuzzes it, and drives the
+active-learning loop that sends repairable failures to a teacher for labels.
 
-## What It Does
-
-1. **Declarative Test Suite (`suite.yaml`)**:
-   - Outlines expected behavior on standard in-distribution cases.
-   - Sets strict invariant assertions (e.g. `regex_match`, `min_length`, `max_length`, `not_contains`).
-   - Configures synthetic mutation generators (`fuzzing`).
-2. **Adversarial Fuzzing (`AdversarialFuzzer`)**:
-   - Generates synthetic test inputs containing zero-width spaces, RTL overrides, whitespace floods, and specialized domain probes (e.g. CJK date characters, em-dashes).
-3. **Active-Learning Self-Healing Loop (`run_active_learning_loop`)**:
-   - Evaluates the adapter against the adversarial inputs.
-   - Flags assertion failures.
-   - Automatically queries the frontier teacher model for gold labels on failing inputs.
-   - Recompiles the adapter with the augmented dataset.
-   - Repeats until every assertion passes or `max_iterations` is reached.
-
-**Note:** in this example both the "teacher" and the adapter are deterministic Python stubs
-(`MockPAWBackend`), so the loop always converges. That demonstrates the loop's mechanics, not
-that active learning improves a real compiled function. Run for real against this same
-suite with a live Claude teacher, the loop repaired nothing, and correctly so: every
-teacher label failed the suite's own assertions, because the suite had no "not a date"
-case for whitespace-only input. See the [results page](../../docs/results.md). The loop is
-bounded and best-effort; it does not promise 100%.
-
-## Running the Example
-
-Run the Python script:
 ```bash
-uv run python examples/date_normalizer/run.py
+uv run python examples/date_normalizer/run.py                    # in code
+uv run paw-test check examples/date_normalizer/suite.yaml         # same suite, from the CLI
 ```
 
-Run the suite directly from the CLI:
-```bash
-uv run paw-test check examples/date_normalizer/suite.yaml
-```
+## What it runs
+
+`suite.yaml` holds seven standard cases, each with an `expected` answer, four assertions
+on the output shape (a `YYYY-MM-DD` regex, exact length, no `ERROR`), and fuzzing
+settings that mutate the standard inputs with unicode corruption and whitespace floods.
+
+The script compiles a baseline adapter from the seven standard cases, generates the fuzz
+cases, and calls `run_active_learning_loop` with a stub teacher. The loop evaluates the
+adapter on every case, sends failing cases that carry an `expected` value to the teacher,
+checks the returned labels against the suite's assertions and against `expected`, and
+recompiles with any label that passes.
+
+## What to expect from the output
+
+The run ends `[FAILED]` at a pass rate around 5%, with nothing repaired and no
+recompile. That is the correct result. The seven standard cases pass; the roughly 120
+fuzz-generated cases fail, and none of them can be repaired because a fuzz mutation has
+no answer key. A teacher label for it could not be checked against anything, so the loop
+declines to send it and reports how many cases it declined. To make an edge case
+repairable, add it to `standard_cases` with its `expected` value; the three unicode and
+whitespace cases at the bottom of the standard list were added that way.
+
+## What it does not show
+
+The adapter is `MockPAWBackend`, a dictionary lookup, and the teacher is a few lines of
+regex. The example demonstrates the loop's mechanics: what gets sent to the teacher, what
+gets refused, and why. It says nothing about whether active learning improves a real
+compiled function. On a real adapter with a live teacher, this suite repaired nothing
+for the same reason: every failing input was whitespace-only garbage the suite gave no
+legal answer for. Setting the suite's `abstain_value` is how to teach a model that "no
+valid date" is the right answer there; see [testing](../../docs/testing.md).
