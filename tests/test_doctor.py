@@ -26,6 +26,7 @@ def strip_ansi(text: str) -> str:
 
 
 def test_sdk_importable_pass() -> None:
+    pytest.importorskip("programasweights")
     result = doctor.check_sdk_importable()
     assert result.status == "PASS"
     assert "version" in result.detail
@@ -50,6 +51,7 @@ def test_llama_cpp_not_importable_is_fail(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_llama_cpp_gpu_offload_true_is_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("llama_cpp")
     import llama_cpp
 
     monkeypatch.setattr(llama_cpp, "llama_supports_gpu_offload", lambda: True)
@@ -59,6 +61,7 @@ def test_llama_cpp_gpu_offload_true_is_pass(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_llama_cpp_gpu_offload_false_is_warn_not_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("llama_cpp")
     import llama_cpp
 
     monkeypatch.setattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)
@@ -70,6 +73,7 @@ def test_llama_cpp_gpu_offload_false_is_warn_not_fail(monkeypatch: pytest.Monkey
 
 
 def test_llama_cpp_gpu_offload_raises_is_warn(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("llama_cpp")
     import llama_cpp
 
     def _boom():
@@ -308,6 +312,7 @@ def test_health_warn_when_gpu_services_empty_remedy_is_softened() -> None:
 
 
 def test_base_model_cached_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    pytest.importorskip("programasweights")
     from programasweights import cache as paw_cache
 
     fake_path = tmp_path / "qwen3-0.6b-q6_k.gguf"
@@ -322,6 +327,7 @@ def test_base_model_cached_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 
 def test_base_model_not_cached_is_warn(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("programasweights")
     from programasweights import cache as paw_cache
 
     monkeypatch.setattr(paw_cache, "get_base_runtime_manifest", lambda interpreter: {"fake": True})
@@ -336,6 +342,7 @@ def test_base_model_not_cached_is_warn(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cached_programs_count_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("programasweights")
     import programasweights as paw
 
     monkeypatch.setattr(paw, "list_cached_programs", lambda: [{"program_id": "a"}, {"program_id": "b"}])
@@ -347,6 +354,7 @@ def test_cached_programs_count_only(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cached_programs_with_adapter_offline_ready(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    pytest.importorskip("programasweights")
     import programasweights as paw
 
     manifest_path = tmp_path / "a.paw"
@@ -365,6 +373,7 @@ def test_cached_programs_with_adapter_offline_ready(
 def test_cached_programs_with_adapter_not_offline_ready_is_warn(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    pytest.importorskip("programasweights")
     import programasweights as paw
 
     manifest_path = tmp_path / "a.paw"
@@ -388,6 +397,7 @@ def test_cached_programs_with_mock_adapter_is_warn_not_fail(
     raises `ValueError` for any manifest whose `backend` isn't "programasweights", and
     offline readiness simply does not apply to a mock adapter -- it is not a broken
     environment."""
+    pytest.importorskip("programasweights")
     import programasweights as paw
     from paw_kit.backend.mock import MockPAWBackend
 
@@ -436,6 +446,7 @@ def fast_cached_programs(monkeypatch: pytest.MonkeyPatch) -> None:
     on each call, which is real (if slow, ~1s/program) SDK behaviour, not something
     under test here -- stub it so `run_checks()` tests stay fast regardless of how many
     programs happen to be cached on the machine running the suite."""
+    pytest.importorskip("programasweights")
     import programasweights as paw
 
     monkeypatch.setattr(paw, "list_cached_programs", lambda: [])
