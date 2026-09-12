@@ -4,7 +4,7 @@ exit code: 0
 
  Usage: paw-test check [OPTIONS] {suite_path}
 
- Run test suite assertions and active-learning self-healing loop on a .paw adapter.
+ Run test suite assertions and the active-learning loop on a .paw adapter.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ *    suite_path      <path>  Path to declarative suite.yaml specification [required]                                 │

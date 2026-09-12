@@ -58,13 +58,13 @@ def _e(value: object) -> str:
 _MAX_INSPECT_FILE_BYTES = 50 * 1024 * 1024
 
 app = typer.Typer(help="paw-kit: reliability and migration harness for Program-as-Weights (PAW) neural functions")
-test_app = typer.Typer(help="paw-test: Test runner and active-learning self-healing suite")
+test_app = typer.Typer(help="paw-test: Test runner and active-learning suite")
 test_app.__test__ = False  # Prevent pytest from treating Typer instance as a test suite
 
 
 @test_app.callback()
 def test_app_main() -> None:
-    """paw-test: Test runner and active-learning self-healing suite."""
+    """paw-test: Test runner and active-learning suite."""
 
 
 # PAW-CLI-06 applies the same reasoning to `paw-inspect`: a `.paw` path is user-supplied
@@ -494,7 +494,7 @@ def check(
         "the suite's own adapter_path (PAW-TEST-02).",
     ),
 ) -> None:
-    """Run test suite assertions and active-learning self-healing loop on a .paw adapter."""
+    """Run test suite assertions and the active-learning loop on a .paw adapter."""
     if not suite_path.exists():
         console.print(f"[bold red]Error:[/bold red] Suite file '{_e(suite_path)}' does not exist.")
         raise typer.Exit(code=1)

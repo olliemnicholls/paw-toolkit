@@ -5,10 +5,10 @@ SDK. Compilation goes to the upstream service; inference runs locally through th
 llama.cpp runtime (GPU if available). The `.paw` file paw-kit writes is a small JSON
 manifest pointing at the upstream program ID; the weights live in the SDK's cache.
 
-Run `paw-kit doctor` first: most `--backend real` failures (a CPU-only `llama-cpp-python`
-wheel, an un-downloaded base model, an upstream compile service that returns a healthy
-`200` with no GPU workers behind it) are environment problems `doctor` catches up front,
-with a one-line remedy, rather than a confusing failure deep inside `compile()`/`infer()`.
+Run `paw-kit doctor` first. Most `--backend real` failures (a CPU-only `llama-cpp-python`
+wheel, an un-downloaded base model, an upstream compile service that is up but has no GPU
+workers behind it) are environment problems `doctor` catches up front, with a one-line
+remedy.
 
 ```python
 from pydantic import BaseModel
@@ -55,36 +55,32 @@ it matters, check the program on programasweights.com.
 
 ## Retries, and what a timeout means
 
-A compile submission is a POST that is not idempotent: if the server received it, it is
-compiling, and sending it again queues a second compile and spends a second unit of the
-rate-limited quota. So `compile()` retries only when the connection provably never
-reached the server (a connect error or connect timeout) or on a 5xx other than 504, up to
-`compile_retries` times with a short backoff. A read timeout, a 504, or any 4xx is raised
-immediately with the response body in the message. After a read timeout, re-running the
-same spec hits upstream's compile cache once the first compile finishes, instead of
-paying for a second one. Status polling for the finetune compiler is idempotent and does
-tolerate transient failures; after five consecutive failures it raises with the `job_id`
-so you can poll it later.
+Resending a compile the server already received queues a second compile and spends a
+second unit of the rate-limited quota. So `compile()` retries only when the connection
+provably never reached the server (a connect error or connect timeout) or on a 5xx other
+than 504, up to `compile_retries` times with a short backoff. A read timeout, a 504, or
+any 4xx is raised immediately with the response body in the message. After a read
+timeout, re-running the same spec hits upstream's compile cache once the first compile
+finishes, instead of paying for a second one. Status polling for the finetune compiler
+does tolerate transient failures; after five consecutive failures it gives up and raises
+with the `job_id` so you can poll it later.
 
 ## What to expect
 
-From the runs in [`measurements/`](../measurements/README.md), one machine each, one run
-each. Indicative, not a benchmark.
+The measured figures are on the [results page](./results.md). The shape of them:
 
-- **Compile**: 1–5 s wall time with the default fast compiler; ~3 min with `paw-ft-bs48`.
-  On easy tasks the two produce near-identical adapters; on tasks that need an arbitrary
-  mapping from the spec, only the finetune compiler learns it.
-- **First call**: 2 s to ~110 s, depending on whether the base model and program are
-  already in the SDK cache.
-- **Steady state**: ~65 ms per call on an RTX 3080, ~89 ms on a shared A100, ~5.9 s on
-  the CPU-only PyPI wheel. The model is small enough that GPU class barely matters; GPU
-  versus CPU matters ~90x.
-- **Quality**: task-dependent and the thing to test, not assume. Structural pass rates of
-  0% to 100% on the same task depending on whether the spec pins down the output format;
-  under half of held-out tickets in full agreement with a fresh teacher call on ticket
-  triage; one clear fabricated answer (`1-800-FLOWERS` → invented digits) found by the
-  fuzzer. `paw-kit lint-spec` checks a spec for the authoring mistakes those runs turned
-  up. The numbers are on the [results page](./results.md).
+- **Compile** takes seconds with the default fast compiler and minutes with
+  `paw-ft-bs48`. On easy tasks the two produce near-identical adapters; on tasks that
+  need an arbitrary mapping from the spec, only the finetune compiler learns it.
+- **The first call** can take a couple of minutes if the base model and program are not
+  yet in the SDK cache.
+- **Steady-state latency** is tens of milliseconds on any CUDA GPU. The model is small
+  enough that GPU class barely matters; GPU versus CPU is what matters.
+- **Quality** is task-dependent and the thing to test, not assume. Whether the spec pins
+  down the output format can swing structural pass rate from nothing to everything on
+  the same task; a swapped-in adapter can disagree with its teacher on most inputs; and
+  the fuzzer has found a fabricated answer. `paw-kit lint-spec` checks a spec for the
+  common authoring mistakes.
 
 ## Two upstream limitations
 
@@ -100,8 +96,7 @@ each. Indicative, not a benchmark.
 
 `AbstractPAWBackend` is three methods: `compile`, `infer`, `is_available`. Implement them
 and pass `backend=` to `paw.load` or `@compile_on_hit`, and paw-kit will drive whatever
-runtime you like. paw-kit ships no in-process PyTorch backend of its own; it is a toolkit
-around upstream PAW, not a reimplementation of it.
+runtime you like. paw-kit ships no in-process PyTorch backend of its own.
 
 ## Lineage
 

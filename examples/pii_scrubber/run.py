@@ -108,7 +108,7 @@ def main():
         "Extract all PII (EMAIL, PHONE, SSN, CREDIT_CARD) from the input string, "
         "replace PII occurrences with [REDACTED], and return a validated PIIScrubResult."
     )
-    print(f"\n[1/3] Compiling local neural adapter to {adapter_path}...")
+    print(f"\n[1/3] Compiling mock adapter to {adapter_path}...")
     backend.compile(
         spec=spec,
         examples=[

@@ -9,8 +9,8 @@ A reliability and migration harness for Program-as-Weights (PAW) neural function
 [![arXiv](https://img.shields.io/badge/arXiv-2609.04199-b31b1b.svg)](https://arxiv.org/abs/2609.04199)
 
 > **Status: early alpha, one maintainer, not on PyPI.** The real backend has been run end
-> to end against the upstream service; everything else runs on a deterministic mock, so
-> the workflow can be tried with no GPU and no API key. Every measured number is on the
+> to end against the upstream service. The demo and examples run on a deterministic mock,
+> so the workflow can be tried with no GPU and no API key. Every measured number is on the
 > [results page](./docs/results.md).
 
 ## What PAW is
@@ -100,7 +100,7 @@ def triage_ticket(ticket_body: str) -> SupportTriage:
 
 ticket = "Invoice refund needed for charge #1!"  # same input every call, on purpose:
 # MockPAWBackend only matches input it has seen verbatim. Vary the text and every
-# post-threshold call falls open to `triage_ticket`'s own body, silently.
+# post-threshold call falls open to `triage_ticket`'s own body, with a logged warning.
 for i in range(1, 6):
     state = triage_ticket.db.get_status(triage_ticket.task_id)  # "tracing" / "compiling" / "shadow" / "ready" / "failed"
     print(i, state, triage_ticket(ticket), triage_ticket.get_fail_open_count())
@@ -146,7 +146,7 @@ functions. If you only want to compile and call one, start with
 [their SDK](https://github.com/programasweights/programasweights-python); come back here
 when you want tracing, testing, fallback, or an HTTP front.
 
-## Citation for the Original Paper
+## Citing the paper
 
 ```bibtex
 @article{deng2026compile,

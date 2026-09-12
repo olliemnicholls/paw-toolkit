@@ -73,10 +73,10 @@ def main():
     print("\n[2/3] Generating adversarial fuzzer probes...")
     sample_cases = [tc.input for tc in suite.standard_cases]
     fuzzed_inputs = AdversarialFuzzer.generate(suite.fuzzing, sample_cases)
-    print(f"Generated {len(fuzzed_inputs)} synthetic mutations (Unicode, whitespace, domain probes).")
+    print(f"Generated {len(fuzzed_inputs)} synthetic mutations (unicode, whitespace).")
     print(f"Sample mutation: {repr(fuzzed_inputs[0])}")
 
-    # Step 3: Run Active Learning Auto-Repair Loop
+    # Step 3: run the active-learning loop
     print("\n[3/3] Running the active-learning loop:")
     print("-" * 75)
 

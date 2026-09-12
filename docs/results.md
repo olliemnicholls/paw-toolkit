@@ -1,18 +1,17 @@
 # Results: what has been measured, and what it showed
 
 Every number here comes from one machine and one run, recorded with the exact commands
-in [`measurements/README.md`](../measurements/README.md). That file is the lab notebook:
-it keeps the raw output, the provenance of every figure, and a dated record of every
-correction made along the way. This page carries only the current numbers. Nothing below
-was produced on the mock backend.
+in [`measurements/README.md`](../measurements/README.md). That file is the lab notebook
+and keeps the raw output and the provenance of every figure. This page carries the
+numbers. Nothing below was produced on the mock backend.
 
 **The short version.** PAW compiles a spec into a tiny local model that answers in about
 65 ms on a consumer GPU, and paw-kit can swap it in for a frontier API call at 11x lower
 latency. Whether you should is a different question: the first model swapped in this way
-agreed with Claude on 46.7% of held-out tickets. paw-kit's value is in that gap. The test
-tools found it, and shadow mode now stops it from reaching users. The same tools then
-located the difference between upstream's two compilers: the fast one cannot put a
-mapping stated in the spec into an adapter, and the finetune one can.
+agreed with Claude on 46.7% of held-out tickets. Shadow mode is the gate that keeps such
+an adapter from reaching users by default. The same test tools located the difference
+between upstream's two compilers: the fast one cannot put a mapping stated in the spec
+into an adapter, and the finetune one can.
 
 ## Speed
 
@@ -34,7 +33,7 @@ work is latency-bound, so a consumer GPU is the realistic target. GPU versus CPU
 | Does the swapped-in triage model agree with a fresh Claude call? | 7 of 15 held-out tickets, 46.7% |
 | Semantic correctness of three one-sentence specs, judged by Claude | 70% to 90% depending on the task |
 | Structural pass rate of the same specs | 0% to 100% depending on whether the spec pinned the output format |
-| Date normaliser test suite | 71 of 82; the 11 failures are whitespace-only inputs the suite gave no legal answer for |
+| Date normaliser test suite (82 cases) | 71 of 82; the 11 failures are whitespace-only inputs the suite gave no legal answer for |
 | Fabrications found by the fuzzer | `1-800-FLOWERS` became invented digits |
 | Judge noise | Re-judging identical input/output pairs at the API's default temperature flipped 4.5% of verdicts (6 of 134). The shipped judge pins temperature to zero; `paw-test judge --diff` shows whether that held |
 

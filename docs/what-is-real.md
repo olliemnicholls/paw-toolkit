@@ -13,7 +13,8 @@ commands are in [`measurements/`](../measurements/README.md).
 | `paw-test compare`, `paw-test judge` | Yes | Yes. Both were used to produce the compiler comparison and judge-noise figures |
 | Pydantic-to-regex compiler and FSM logits processor | Yes | Yes, in measurement scripts only. **No shipped backend applies it**; `paw.load` validates after generation instead |
 | `ProgramAsWeightsBackend` (official upstream SDK) | Yes, against a fake SDK | Yes. Real compile and inference on an RTX 3080 (CPU and CUDA) and an A100, with both upstream compilers |
-| HTTP server, Docker export, dataset export, `doctor`, CLI | Yes | No. Exercised with `MockPAWBackend` only |
+| `paw-kit doctor` | Yes, against a fake SDK | Not measured; it is a diagnostic, not a model path |
+| HTTP server, Docker export, dataset export, CLI | Yes | No. Exercised with `MockPAWBackend` only |
 | `MockPAWBackend` | n/a | A dictionary lookup that returns canned strings. It is a test double, not a model |
 
 The demo command and the three examples all run on the mock. When they print "local
