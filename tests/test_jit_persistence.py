@@ -20,6 +20,7 @@ import sqlite3
 import stat
 import threading
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Tuple
 
 import pytest
@@ -1304,7 +1305,11 @@ class _FilesystemCountingBackend:
 
     def compile(self, spec: str, examples: Any, output_path: str) -> str:
         self._counter_dir.mkdir(parents=True, exist_ok=True)
-        marker = self._counter_dir / f"{os.getpid()}-{len(list(self._counter_dir.iterdir()))}"
+        # uuid4, not a count of existing markers: with the bug present, six processes
+        # race here, and a name derived from the current file count could collide and
+        # make O_EXCL crash the worker. The test would still go red, but on "a worker
+        # process crashed" instead of on the count -- and the count is the finding.
+        marker = self._counter_dir / f"{os.getpid()}-{uuid.uuid4().hex}"
         fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         time.sleep(0.3)
