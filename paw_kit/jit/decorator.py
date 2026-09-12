@@ -31,6 +31,20 @@ logger = logging.getLogger("paw_kit.jit")
 
 _GLOBAL_COMPILER = BackgroundCompiler()
 
+# J-5: how long a `compiling` status may stand before the compile holding it is
+# presumed dead and the task is handed back to `tracing` (see
+# `TraceDB.reclaim_stale_compile`, and the call site in step 6 below).
+#
+# Deliberately far longer than any legitimate compile, because the two mistakes are not
+# symmetric: reclaiming too late costs some extra teacher calls on a task that was going
+# to make them anyway, while reclaiming too early yanks a *running*, already-billed
+# compile out from under itself and buys a second one. The slowest compiler this package
+# supports is the finetune path, measured at 96-223s and capped by the backend's own
+# `compile_timeout_s` (default 3600s), so two hours cannot overlap a live compile even at
+# that ceiling. It is a module constant rather than a decorator parameter because no
+# finding asked for a new public knob.
+_COMPILE_LEASE_SECONDS = 7200.0
+
 # J-2: a single, process-wide bounded pool of daemon worker threads for every
 # *served* (`ready`-state) adapter call, across every decorated task -- not one
 # pool per task and not a per-call thread. See paw_kit.jit.deadline's module
@@ -747,6 +761,30 @@ def compile_on_hit(
                 except Exception as exc:
                     _record_fail_open(task_id, exc, db, shadow_window, db_path, shadow_queue_size)
                     current_status = None
+                # J-5: a compile whose process was killed leaves `status` at `compiling`
+                # forever -- nothing clears it on a crash -- and the gate below requires
+                # `tracing`. So the teacher is paid on every call from then on, with no
+                # compile in flight and none ever going to complete.
+                #
+                # The reclaim has to live *here*, not in `compiler.py`: with the status
+                # wedged, the gate below means `trigger_compilation` is never called at
+                # all, so a reclaim inside it would be dead code.
+                #
+                # Its own fault boundary, for the same reason the status read above has
+                # one (J-1): this is bookkeeping on a request path whose teacher has
+                # already answered, and a database fault here must not reach the caller.
+                if current_status == "compiling":
+                    try:
+                        if db.reclaim_stale_compile(
+                            task_id,
+                            _COMPILE_LEASE_SECONDS,
+                            max_attempts=BackgroundCompiler._MAX_COMPILE_ATTEMPTS,
+                        ):
+                            current_status = db.get_status(task_id)
+                    except Exception as exc:
+                        _record_fail_open(
+                            task_id, exc, db, shadow_window, db_path, shadow_queue_size
+                        )
                 if current_status == "tracing":
                     target_adapter_path = str(Path(cache_dir) / f"{task_id}.paw")
                     _GLOBAL_COMPILER.trigger_compilation(

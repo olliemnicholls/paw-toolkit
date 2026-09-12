@@ -1367,9 +1367,19 @@ _INSPECT_FIELD_ORDER = [
     "examples_count",
     "examples_folded_into_spec",
     "folded_example_ids",
+    # A-2 split the old `public` field -- which recorded what was *requested* under a
+    # name every reader took for what the program's visibility *is* -- into a requested
+    # value, the server's confirmed answer, and the reason the answer is unknown. Legacy
+    # `public` stays in this list, immediately after them: a manifest written before
+    # b47ddea has no `public` key at all and one written between b47ddea and A-2 has only
+    # `public`, and neither should drop into the alphabetical "unknown extras" tail.
+    "public_requested",
+    "public_confirmed",
+    "public_confirmed_reason",
     "public",
     "ephemeral",
     "cache_hit",
+    "cached_program_id",
     "parent_program_id",
     "parent_manifest_sha256",
     "compile_wall_s",
@@ -1469,10 +1479,17 @@ def history(
     """Print the append-only compile lineage log for an adapter.
 
     Every `compile()` call (on any `AbstractPAWBackend` shipped by paw-kit) appends
-    one line to `<adapter>.history.jsonl` -- the compiled manifest minus its spec
-    text. A manifest itself only ever points at its immediate parent (an overwritten
-    file cannot be read back), so this sidecar is the only place the full compile
-    lineage of a repeatedly-recompiled adapter survives.
+    one line to `<adapter>.history.jsonl`. A manifest itself only ever points at its
+    immediate parent (an overwritten file cannot be read back), so this sidecar is the
+    only place the full compile lineage of a repeatedly-recompiled adapter survives.
+
+    D-4: each line is the manifest's **lineage fields** -- ids, hashes, counts,
+    visibility provenance, parent pointers, timings -- and not, as this docstring used
+    to say, "the manifest minus its spec text". That described a one-key deny-list the
+    mock backend's traced `examples` walked straight past; it is an allow-list now (see
+    `paw_kit.backend.manifest_lineage._HISTORY_ALLOWED_FIELDS`). The sidecar is also
+    capped and rotated, so a long-lived adapter's oldest lines move to
+    `<adapter>.history.jsonl.1`, which this command does not read.
     """
     log_path = _history_path(adapter_path)
     if not log_path.is_file():

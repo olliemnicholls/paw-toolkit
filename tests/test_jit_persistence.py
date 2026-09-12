@@ -12,12 +12,15 @@ single-process tests passed against the broken code for the whole of its life.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 import multiprocessing
 import os
 from pathlib import Path
 import sqlite3
 import stat
 import threading
+import time
+import uuid
 from typing import Any, Callable, Dict, List, Tuple
 
 import pytest
@@ -1264,3 +1267,700 @@ def test_a_scored_window_is_not_rescored_on_every_comparison_J_12() -> None:
     )
     runner._maybe_transition(job, 40)
     assert db.stats_calls == 2, "the next completed window was not evaluated"
+
+
+# --- D-2 / J-6: exactly one paid compile per `tracing` -> `compiling` transition ---
+#
+# `BackgroundCompiler.trigger_compilation` read `db.get_status(task_id)`, decided, and
+# then wrote `db.set_status(task_id, "compiling")` -- a textbook TOCTOU that its own
+# `threading.RLock` cannot close, because the lock is per process and the traces.db is
+# shared. N processes crossing the compile threshold together therefore bought N paid
+# compiles. The fix is `TraceDB.try_begin_compile`, a compare-and-set.
+#
+# Phase 0 measured that a *bare* single-statement `UPDATE ... WHERE status='tracing'` is
+# not sufficient here and is strictly worse than the bug: under
+# `isolation_level="IMMEDIATE"` the DML opens a transaction and leaves it open, so the
+# caller sees `rowcount == 1` and starts paying while every other process still reads
+# `tracing` and can win the same CAS -- and the row reverts on a crash, after the money
+# is spent. Atomicity was never the missing property; commit was.
+# `test_try_begin_compile_is_committed_before_it_returns_D_2` below is that measurement
+# turned into an assertion.
+
+
+class _FilesystemCountingBackend:
+    """Counts `compile()` calls in the FILESYSTEM, deliberately.
+
+    An in-memory counter is worthless for this finding: each of the K processes holds
+    its own backend instance and its own integer, so every process would count 1 and the
+    test would pass vacuously against the very cross-process race it exists to detect.
+    One `O_EXCL` file per call, in a shared directory, is a counter all K processes share.
+
+    The sleep is load-bearing too. A real paid compile takes seconds to minutes; an
+    instantaneous one narrows the decide-then-write window so far that the race becomes
+    hard to observe even where it exists.
+    """
+
+    def __init__(self, counter_dir: str) -> None:
+        self._counter_dir = Path(counter_dir)
+
+    def compile(self, spec: str, examples: Any, output_path: str) -> str:
+        self._counter_dir.mkdir(parents=True, exist_ok=True)
+        # uuid4, not a count of existing markers: with the bug present, six processes
+        # race here, and a name derived from the current file count could collide and
+        # make O_EXCL crash the worker. The test would still go red, but on "a worker
+        # process crashed" instead of on the count -- and the count is the finding.
+        marker = self._counter_dir / f"{os.getpid()}-{uuid.uuid4().hex}"
+        fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        time.sleep(0.3)
+        Path(output_path).write_text('{"backend": "mock", "examples": []}', encoding="utf-8")
+        return output_path
+
+    def infer(self, adapter_path: str, input_text: str, grammar_constraint: Any = None) -> str:
+        return "x"
+
+    def is_available(self) -> bool:
+        return True
+
+
+def _w_trigger_compilation(
+    db_path: str, task_id: str, counter_dir: str, start_at: float, sync: bool
+) -> None:
+    """One process crossing the compile trigger. Module-level so it is picklable.
+
+    The barrier is a shared wall-clock deadline rather than a `multiprocessing.Barrier`
+    so it does not depend on the start method.
+    """
+    from paw_kit.jit.compiler import BackgroundCompiler
+
+    db = TraceDB(db_path=db_path)
+    compiler = BackgroundCompiler()
+    backend = _FilesystemCountingBackend(counter_dir)
+    out_path = str(Path(db_path).with_name(f"{task_id}.paw"))
+    while time.time() < start_at:
+        time.sleep(0.002)
+    thread = compiler.trigger_compilation(
+        task_id=task_id, spec="spec", db=db, backend=backend,  # type: ignore[arg-type]
+        output_path=out_path, sync=sync,
+    )
+    if thread is not None:
+        thread.join(timeout=60)
+    db.close()
+
+
+@pytest.mark.parametrize("sync", [False, True])
+def test_exactly_one_paid_compile_across_six_processes_D_2_J_6(
+    tmp_path: Path, sync: bool
+) -> None:
+    """The report's own bar: a counting backend's `compile()` runs exactly once when K
+    processes trigger concurrently.
+
+    `sync=False` is D-2 (the TOCTOU across the guard). `sync=True` is J-6: the guard was
+    `... and not sync`, so it was skipped *wholesale* on that path -- the hunt measured
+    duplicate compiles in 18 of 20 runs, up to 24 for one task, against 0 of 20 with
+    `sync=False`. Both paths now go through the same compare-and-set, which is what lets
+    `and not sync` be dropped: the CAS *is* the guard, and the in-process RLock is no
+    longer load-bearing for correctness.
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    task_id = "dedup"
+    _seed(db_path, task_id)
+    counter_dir = tmp_path / "compiles"
+
+    start_at = time.time() + 1.0
+    workers = [
+        multiprocessing.Process(
+            target=_w_trigger_compilation,
+            args=(db_path, task_id, str(counter_dir), start_at, sync),
+        )
+        for _ in range(6)
+    ]
+    for p in workers:
+        p.start()
+    for p in workers:
+        p.join(timeout=120)
+        assert p.exitcode == 0, "a worker process crashed"
+
+    compiles = sorted(p.name for p in counter_dir.iterdir()) if counter_dir.exists() else []
+    assert len(compiles) == 1, (
+        f"{len(compiles)} paid compiles for one task across 6 processes "
+        f"(sync={sync}): {compiles}"
+    )
+
+    # The audit trail has to agree with the money. One won transition, not six.
+    began = _rows(
+        db_path,
+        "SELECT id FROM state_transitions WHERE task_id = ? AND to_status = 'compiling';",
+        (task_id,),
+    )
+    assert len(began) == 1, f"{len(began)} 'compiling' transitions recorded for one compile"
+    assert _rows(db_path, "SELECT status FROM tasks WHERE task_id = ?;", (task_id,)) == [("ready",)]
+
+
+def test_try_begin_compile_wins_exactly_once_from_tracing_D_2(tmp_path: Path) -> None:
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert db.try_begin_compile("t") is True
+        assert db.get_status("t") == "compiling"
+        assert db.try_begin_compile("t") is False, "the second caller must not also pay"
+    finally:
+        db.close()
+
+
+def test_try_begin_compile_upserts_when_there_is_no_task_row_D_2(tmp_path: Path) -> None:
+    """The D-7 regression this CAS must not reintroduce, and the reason it is an *upsert*.
+
+    A bare `UPDATE ... WHERE status='tracing'` affects **zero** rows when no `tasks` row
+    exists yet -- and today's guard *wins* in that case, because `get_status` returns
+    `"tracing"` for a missing row and `set_status` upserts. A bare UPDATE would therefore
+    silently refuse the first-ever compile: verbatim the D-7 defect this repo already
+    paid for ("a bare UPDATE against a missing tasks row affecting zero rows and
+    reporting success").
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        assert _rows(str(tmp_path / "paw" / "traces.db"), "SELECT task_id FROM tasks;") == []
+        assert db.try_begin_compile("never-seen") is True, (
+            "the first-ever compile for a task with no row was refused"
+        )
+        assert db.get_status("never-seen") == "compiling"
+        assert db.try_begin_compile("never-seen") is False
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("status", ["compiling", "shadow", "ready", "failed"])
+def test_try_begin_compile_refuses_every_other_persisted_status_D_2(
+    tmp_path: Path, status: str
+) -> None:
+    """The deny-list -> allow-list inversion, pinned.
+
+    The old guard was a deny-list (`compiling|shadow|ready|failed`); the CAS is an
+    allow-list of one. Persisted statuses are exactly
+    `tracing|compiling|shadow|ready|failed` (`stalled` is derived in `get_task_report`
+    and never stored), so the complement of the deny-list is `{tracing}` plus the no-row
+    case -- which is why the inversion is equivalent, *given* the upsert above. This
+    parametrisation is the enumeration that keeps it equivalent.
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        db.set_status("t", status)
+        assert db.try_begin_compile("t") is False
+        assert db.get_status("t") == status
+    finally:
+        db.close()
+
+
+def test_try_begin_compile_is_committed_before_it_returns_D_2(tmp_path: Path) -> None:
+    """Phase 0 F2, as an assertion rather than a measurement.
+
+    A bare single-statement CAS reports `rowcount == 1` while leaving the transaction
+    **open** under `isolation_level="IMMEDIATE"`. That is strictly worse than the TOCTOU
+    D-2 set out to fix: the caller believes it won and starts paying, every other process
+    still reads `tracing` and can win the same CAS, and the row reverts on a crash after
+    the money is spent. A second, independent connection is the only way to see the
+    difference -- the winning connection reads its own uncommitted write either way.
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert db.try_begin_compile("t") is True
+        assert db._conn.in_transaction is False, (
+            "try_begin_compile returned with its transaction still open: the caller is "
+            "about to pay for a compile whose status write no other process can see"
+        )
+        assert _rows(db_path, "SELECT status FROM tasks WHERE task_id = 't';") == [("compiling",)], (
+            "an independent connection does not see 'compiling', so the CAS was never "
+            "committed and another process can win it too"
+        )
+    finally:
+        db.close()
+
+
+def test_try_begin_compile_keeps_set_status_parity_D_2(tmp_path: Path) -> None:
+    """Epoch bump, audit row and invalidation hook, all of which `set_status` does today.
+
+    Skipping any of them would silently drop the `state_transitions` audit row, the
+    epoch bump that shadow-window arithmetic depends on, or the adapter-cache
+    invalidation listener -- three regressions hidden behind a correct-looking CAS.
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    fired: List[str] = []
+    db.register_status_listener(fired.append)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        _, _, epoch_before = db.get_task_routing("t")
+        assert db.try_begin_compile("t") is True
+        _, _, epoch_after = db.get_task_routing("t")
+        assert epoch_after == epoch_before + 1, "state_epoch was not bumped"
+        assert _rows(
+            db_path,
+            "SELECT from_status, to_status, state_epoch FROM state_transitions "
+            "WHERE task_id = 't';",
+        ) == [("tracing", "compiling", epoch_after)]
+        assert fired == ["t"], "the PAW-JIT-05 invalidation listener did not fire"
+        # A loser writes nothing at all: no epoch bump, no audit row, no listener.
+        assert db.try_begin_compile("t") is False
+        assert db.get_task_routing("t")[2] == epoch_after
+        assert len(_rows(db_path, "SELECT id FROM state_transitions WHERE task_id = 't';")) == 1
+        assert fired == ["t"]
+    finally:
+        db.close()
+
+
+def _w_try_begin_compile(db_path: str, task_id: str, n: int) -> None:
+    """Winners append a marker file next to the database; see `_FilesystemCountingBackend`."""
+    db = TraceDB(db_path=db_path)
+    wins = Path(db_path).parent / "wins"
+    wins.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        if db.try_begin_compile(task_id):
+            fd = os.open(str(wins / f"{os.getpid()}-{i}"), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+    db.close()
+
+
+def test_try_begin_compile_has_exactly_one_winner_across_processes_D_2(tmp_path: Path) -> None:
+    """The CAS itself, isolated from `BackgroundCompiler`: 6 processes x 20 attempts,
+    one `tracing` to claim, exactly one winner."""
+    db_path = str(tmp_path / "paw" / "traces.db")
+    _seed(db_path, "cas")
+    _run_procs(_w_try_begin_compile, db_path, "cas", procs=6, per=20)
+    wins = list((Path(db_path).parent / "wins").iterdir())
+    assert len(wins) == 1, f"{len(wins)} processes each believed they had won the CAS: {wins}"
+
+
+# --- J-5: a process killed mid-compile must not wedge the task forever ------------
+#
+# `status` is set to `compiling` before the worker runs and nothing clears it on a
+# crash, while the decorator's trigger gate requires `status == 'tracing'`. So a task
+# whose compiling process was killed is paid for on every subsequent call -- the teacher
+# answers, forever -- with no compile ever in flight and no compile ever completing.
+#
+# The reclaim is a compare-and-set for the same reason D-2 is: two processes both
+# noticing the same wedged task must not both reclaim it and both pay.
+
+_V1_SCHEMA_FOR_LEASE = """
+CREATE TABLE tasks (
+    task_id TEXT PRIMARY KEY, call_count INTEGER DEFAULT 0, adapter_path TEXT,
+    status TEXT DEFAULT 'tracing', compile_attempts INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+    input_payload TEXT NOT NULL, teacher_output TEXT NOT NULL,
+    latency_ms REAL NOT NULL, timestamp TEXT NOT NULL);
+"""
+
+
+def _wedge(db: TraceDB, task_id: str, age_seconds: float) -> None:
+    """Put `task_id` in `compiling` with a lease stamp `age_seconds` in the past.
+
+    Written through SQL rather than by killing a process mid-compile: the state is the
+    subject, and a real `os.kill` would make the test a timing experiment.
+    """
+    stamp = (
+        datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+    ).isoformat()
+    db._conn.execute(
+        "UPDATE tasks SET status = 'compiling', compiling_started_at = ? WHERE task_id = ?;",
+        (stamp, task_id),
+    )
+    db._conn.commit()
+
+
+def test_wedged_compile_is_reclaimed_after_the_lease_expires_J_5(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        db.try_begin_compile("t")
+        _wedge(db, "t", age_seconds=10_000)
+        attempts_before = db.get_compile_attempts("t")
+
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0) is True
+        assert db.get_status("t") == "tracing", "the wedged task is retryable again"
+        assert db.get_compile_attempts("t") == attempts_before + 1, (
+            "the reclaim must count as an attempt, or the retry cap does not bound it"
+        )
+        # The lease stamp is cleared, so the next winner's stamp is its own.
+        assert _rows(
+            db_path, "SELECT compiling_started_at FROM tasks WHERE task_id = 't';"
+        ) == [(None,)]
+        # And the task really is claimable again.
+        assert db.try_begin_compile("t") is True
+    finally:
+        db.close()
+
+
+def test_reclaim_writes_an_audit_row_and_bumps_the_epoch_J_5(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    fired: List[str] = []
+    db.register_status_listener(fired.append)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        db.try_begin_compile("t")
+        _wedge(db, "t", age_seconds=10_000)
+        epoch_before = db.get_task_routing("t")[2]
+        fired.clear()  # try_begin_compile above legitimately fired it once already
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0) is True
+        assert db.get_task_routing("t")[2] == epoch_before + 1
+        assert ("compiling", "tracing", "stale_compile_lease") in [
+            (r[0], r[1], r[2])
+            for r in _rows(
+                db_path,
+                "SELECT from_status, to_status, reason FROM state_transitions "
+                "WHERE task_id = 't';",
+            )
+        ]
+        assert fired == ["t"]
+    finally:
+        db.close()
+
+
+def test_reclaim_refuses_a_lease_that_has_not_expired_J_5(tmp_path: Path) -> None:
+    """The one thing this must never do is reclaim a compile that is still running --
+    that would buy a second compile rather than rescuing a lost one."""
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert db.try_begin_compile("t") is True  # stamps the lease now
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0) is False
+        assert db.get_status("t") == "compiling"
+        assert db.get_compile_attempts("t") == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("status", ["tracing", "shadow", "ready", "failed"])
+def test_reclaim_refuses_a_task_that_is_not_compiling_J_5(tmp_path: Path, status: str) -> None:
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        db.set_status("t", status)
+        assert db.reclaim_stale_compile("t", lease_seconds=0.0) is False
+        assert db.get_status("t") == status
+    finally:
+        db.close()
+
+
+def test_reclaim_refuses_a_task_with_no_row_J_5(tmp_path: Path) -> None:
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        assert db.reclaim_stale_compile("never-seen", lease_seconds=0.0) is False
+    finally:
+        db.close()
+
+
+def test_reclaim_honours_the_retry_cap_across_the_reclaim_J_5(tmp_path: Path) -> None:
+    """The retry cap has to survive the reclaim, or a task that wedges on every attempt
+    becomes the unbounded paid retry loop PAW-JIT-03 exists to prevent -- reached by a
+    different route than a failing compile, but spending the same money.
+
+    `max_attempts` is passed in rather than imported, because `BackgroundCompiler` is the
+    thing that owns the cap and `db.py` cannot import it back.
+    """
+    from paw_kit.jit.compiler import BackgroundCompiler
+
+    cap = BackgroundCompiler._MAX_COMPILE_ATTEMPTS
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        for attempt in range(1, cap + 1):
+            assert db.try_begin_compile("t") is True
+            _wedge(db, "t", age_seconds=10_000)
+            assert db.reclaim_stale_compile("t", lease_seconds=3600.0, max_attempts=cap) is True
+            assert db.get_compile_attempts("t") == attempt
+            if attempt < cap:
+                assert db.get_status("t") == "tracing", "must stay retryable below the cap"
+            else:
+                assert db.get_status("t") == "failed", (
+                    "the reclaim must go terminal at the cap, not hand out another "
+                    "paid compile forever"
+                )
+        assert db.try_begin_compile("t") is False
+    finally:
+        db.close()
+
+
+def _w_reclaim(db_path: str, task_id: str, n: int) -> None:
+    db = TraceDB(db_path=db_path)
+    wins = Path(db_path).parent / "reclaims"
+    wins.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        if db.reclaim_stale_compile(task_id, lease_seconds=1.0):
+            fd = os.open(str(wins / f"{os.getpid()}-{i}"), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+    db.close()
+
+
+def test_reclaim_has_exactly_one_winner_across_processes_J_5(tmp_path: Path) -> None:
+    """Same class of race as D-2, on the other end of the lease: two processes both
+    noticing the same wedged task must not both reclaim it and both pay."""
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    db.record_trace("wedged", "i", "o", 1.0)
+    db.try_begin_compile("wedged")
+    _wedge(db, "wedged", age_seconds=10_000)
+    db.close()
+
+    _run_procs(_w_reclaim, db_path, "wedged", procs=6, per=10)
+    wins = list((Path(db_path).parent / "reclaims").iterdir())
+    assert len(wins) == 1, f"{len(wins)} processes each reclaimed the same wedged task: {wins}"
+    assert _rows(db_path, "SELECT compile_attempts FROM tasks WHERE task_id = 'wedged';") == [(1,)]
+
+
+def test_migration_adds_the_lease_column_and_bumps_the_marker_J_5(tmp_path: Path) -> None:
+    """`compiling_started_at` is a schema migration: another `PRAGMA table_info` probe,
+    another `ALTER TABLE`, and `_SCHEMA_VERSION` 2 -> 3."""
+    from paw_kit.jit.db import _SCHEMA_VERSION
+
+    assert _SCHEMA_VERSION == 3, (
+        "J-5 adds a tasks column, so the forward marker has to move with it"
+    )
+    db_file = tmp_path / "v1" / "traces.db"
+    db_file.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(db_file))
+    conn.executescript(_V1_SCHEMA_FOR_LEASE)
+    conn.execute(
+        "INSERT INTO tasks VALUES ('legacy', 5, NULL, 'tracing', 0, '2026-01-01', '2026-01-01');"
+    )
+    conn.commit()
+    conn.close()
+
+    db = TraceDB(db_path=str(db_file))
+    try:
+        cols = {r[0] for r in _rows(str(db_file), "SELECT name FROM pragma_table_info('tasks');")}
+        assert "compiling_started_at" in cols
+        assert _rows(str(db_file), "PRAGMA user_version;") == [(_SCHEMA_VERSION,)]
+        assert db.get_call_count("legacy") == 5, "the migration must not lose rows"
+    finally:
+        db.close()
+    # Idempotent: an unguarded ALTER TABLE on an existing column raises.
+    again = TraceDB(db_path=str(db_file))
+    again.close()
+
+
+def test_migration_backfills_the_lease_for_an_already_wedged_task_J_5(tmp_path: Path) -> None:
+    """The users who actually have this bug have a database that predates the column.
+
+    Without a backfill their wedged task has `compiling_started_at IS NULL` forever, and
+    the reclaim -- which deliberately requires a stamp, so that a `compiling` row of
+    unknown age is never yanked out from under a live compile -- could never rescue it.
+    `updated_at` is when the status was last written, i.e. when the lease began.
+    """
+    db_file = tmp_path / "wedged-v1" / "traces.db"
+    db_file.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(db_file))
+    conn.executescript(_V1_SCHEMA_FOR_LEASE)
+    conn.execute(
+        "INSERT INTO tasks VALUES "
+        "('stuck', 99, NULL, 'compiling', 0, '2026-01-01T00:00:00', '2026-01-02T00:00:00');"
+    )
+    conn.commit()
+    conn.close()
+
+    db = TraceDB(db_path=str(db_file))
+    try:
+        assert _rows(
+            str(db_file), "SELECT compiling_started_at FROM tasks WHERE task_id = 'stuck';"
+        ) == [("2026-01-02T00:00:00",)]
+        assert db.reclaim_stale_compile("stuck", lease_seconds=60.0) is True
+        assert db.get_status("stuck") == "tracing"
+    finally:
+        db.close()
+
+
+def test_schema_forward_marker_is_never_rolled_backwards_J_5(tmp_path: Path) -> None:
+    """The case that was hypothetical at v2 and is real at v3.
+
+    `PRAGMA user_version` is a forward marker: an older paw-kit opening a newer
+    database must not stamp its own lower number, or the newer version re-runs a
+    migration it has already applied. The write is `if current < _SCHEMA_VERSION`, and
+    this is what keeps it that way.
+    """
+    from paw_kit.jit.db import _SCHEMA_VERSION
+
+    db_file = tmp_path / "future" / "traces.db"
+    db_file.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(db_file))
+    conn.executescript(_V1_SCHEMA_FOR_LEASE)
+    conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION + 7};")
+    conn.commit()
+    conn.close()
+
+    db = TraceDB(db_path=str(db_file))
+    try:
+        assert _rows(str(db_file), "PRAGMA user_version;") == [(_SCHEMA_VERSION + 7,)]
+    finally:
+        db.close()
+
+
+# --- gate-3 follow-ups: behaviour the mutation gate found unasserted --------------
+#
+# Each of these closes a specific surviving mutant in code this track added. They are
+# not metric-gaming: every one asserts a property the finding's fix depends on and that
+# nothing else pinned -- which is exactly what a surviving mutant means.
+
+
+def test_try_begin_compile_names_the_previous_status_in_a_first_ever_compile_D_2(
+    tmp_path: Path,
+) -> None:
+    """The audit row for a task that had no row at all still reads `tracing -> compiling`.
+
+    `previous or "tracing"` is load-bearing here and only here: for every other task
+    `previous` is already `"tracing"`, so a mutant that drops the fallback is invisible
+    unless the no-row case checks the row it writes. The epoch is asserted against the
+    task row for the same reason -- the transition row carries its own copy, and nothing
+    else compared the two.
+
+    (Kills `db.py bool or->and  previous or "tracing"` and the `state_epoch or 0` int
+    mutant in `try_begin_compile`, both of which the gate-3 run found alive.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        assert db.try_begin_compile("first-ever") is True
+        _, _, epoch = db.get_task_routing("first-ever")
+        assert _rows(
+            db_path,
+            "SELECT from_status, to_status, state_epoch FROM state_transitions "
+            "WHERE task_id = 'first-ever';",
+        ) == [("tracing", "compiling", epoch)]
+    finally:
+        db.close()
+
+
+def test_reclaim_audit_row_carries_the_epoch_it_created_J_5(tmp_path: Path) -> None:
+    """The reclaim's `state_transitions` row must name the epoch the reclaim produced.
+
+    The task row's epoch is computed in SQL (`state_epoch + 1`); the transition row's is
+    computed in Python. Nothing compared them, so a mutant in either arithmetic left the
+    audit trail pointing at an epoch that never existed -- and shadow-window arithmetic is
+    scoped by exactly that number.
+
+    (Kills `db.py bool or->and  new_epoch = (row["state_epoch"] or 0) + 1`, alive at
+    gate 3.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        # Several transitions first, so the epoch under test is not 0 or 1 by luck.
+        db.set_status("t", "shadow")
+        db.set_status("t", "tracing")
+        assert db.try_begin_compile("t") is True
+        _wedge(db, "t", age_seconds=10_000)
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0) is True
+        _, _, task_epoch = db.get_task_routing("t")
+        reclaim_rows = _rows(
+            db_path,
+            "SELECT state_epoch FROM state_transitions "
+            "WHERE task_id = 't' AND reason = 'stale_compile_lease';",
+        )
+        assert reclaim_rows == [(task_epoch,)], (
+            f"the reclaim's audit row says epoch {reclaim_rows}, the task says "
+            f"{task_epoch}"
+        )
+        assert task_epoch > 1, "the fixture must not make epoch 1 a passing accident"
+    finally:
+        db.close()
+
+
+def test_set_status_maintains_the_compile_lease_stamp_J_5(tmp_path: Path) -> None:
+    """Entering `compiling` stamps the lease; leaving it clears the stamp.
+
+    This is the invariant the reclaim rests on -- it deliberately refuses to act on a
+    `compiling` row with no stamp, so a writer that failed to set one would make a wedged
+    task permanently unreclaimable, and a writer that failed to *clear* one would let a
+    later wedge inherit an already-expired lease and be reclaimed instantly, out from
+    under a live compile.
+
+    (Kills `db.py cmp ==->!=  lease = now if status == "compiling" else None`, alive at
+    gate 3.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+
+    def stamp() -> object:
+        return _rows(db_path, "SELECT compiling_started_at FROM tasks WHERE task_id='t';")[0][0]
+
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert stamp() is None
+        db.set_status("t", "compiling")
+        assert stamp() is not None, "entering `compiling` must start the lease"
+        db.set_status("t", "tracing")
+        assert stamp() is None, "leaving `compiling` must clear the lease"
+        db.set_status("t", "compiling")
+        assert stamp() is not None
+        db.set_status("t", "ready", adapter_path="/tmp/x.paw")
+        assert stamp() is None, "the adapter_path branch must clear it too"
+    finally:
+        db.close()
+
+
+def test_first_reclaim_is_not_immediately_terminal_at_a_cap_of_two_J_5(tmp_path: Path) -> None:
+    """A task's *first* stale-lease reclaim must hand it back to `tracing`, not fail it.
+
+    `attempts = (row["compile_attempts"] or 0) + 1` is the count the cap is compared
+    against, and at `max_attempts=3` (the shipped cap) an off-by-one in that fallback
+    happens to produce the same three outcomes -- so the retry-cap test above cannot see
+    it. At a cap of 2 it is the difference between "reclaimed once, still retryable" and
+    "reclaimed once, terminally failed", which is a compile the user would never get.
+
+    (Kills `db.py int 0->1  attempts = (row["compile_attempts"] or 0) + 1`, which the
+    gate-3 fingerprint reconciliation found alive.)
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert db.try_begin_compile("t") is True
+        _wedge(db, "t", age_seconds=10_000)
+        assert db.get_compile_attempts("t") == 0, "the fixture must start from zero attempts"
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0, max_attempts=2) is True
+        assert db.get_compile_attempts("t") == 1
+        assert db.get_status("t") == "tracing", (
+            "the first reclaim of a two-attempt budget went terminal: that spends the "
+            "whole budget on one crash and the task never compiles again"
+        )
+    finally:
+        db.close()
+
+
+def test_reclaim_epoch_is_right_when_the_task_never_left_epoch_zero_J_5(
+    tmp_path: Path,
+) -> None:
+    """The `state_epoch or 0` fallback, exercised where it is actually reachable.
+
+    `set_status` bumps `state_epoch` only on a *change*, and a write against a task with
+    **no row at all** has no previous status to differ from -- so it upserts
+    `status='compiling'` with `state_epoch` left at **0**. That is reachable in practice:
+    it is the D-7 scenario, a `.paw/traces.db` (documented as a cache) deleted while a
+    process still holds a live wrapper. So a task can genuinely be `compiling` at epoch 0,
+    and that is the only input under which this fallback's value matters.
+    `test_reclaim_audit_row_carries_the_epoch_it_created_J_5` above deliberately sets up a
+    non-zero epoch, which makes the `or` short-circuit and hides it.
+
+    (Kills `db.py int 0->1  new_epoch = (row["state_epoch"] or 0) + 1`, alive at gate 3.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        db.set_status("t", "compiling")  # no prior row: upserts at epoch 0
+        assert db.get_task_routing("t")[2] == 0, "the fixture must start at epoch 0"
+        _wedge(db, "t", age_seconds=10_000)
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0) is True
+        _, _, task_epoch = db.get_task_routing("t")
+        assert task_epoch == 1
+        assert _rows(
+            db_path,
+            "SELECT state_epoch FROM state_transitions WHERE task_id = 't' "
+            "AND reason = 'stale_compile_lease';",
+        ) == [(1,)], "the audit row names an epoch the task never had"
+    finally:
+        db.close()

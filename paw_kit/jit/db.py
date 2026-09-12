@@ -1,7 +1,7 @@
 """Thread-safe SQLite tracing database for paw.jit."""
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -42,7 +42,8 @@ T = TypeVar("T")
 _DB_RETRY_ATTEMPTS = 5
 _DB_RETRY_BASE_DELAY_SECONDS = 0.05
 
-# Track 14 (shadow mode), schema v2.
+# Schema v3. v2 was Track 14 (shadow mode); v3 adds `tasks.compiling_started_at`, the
+# compile lease stamp J-5 needs to tell a running compile apart from a wedged one.
 #
 # `PRAGMA user_version` is a *forward marker only*. It reads 0 on every pre-v2
 # traces.db AND on a brand-new one, so it is ambiguous and nothing branches v1->v2 on
@@ -54,7 +55,7 @@ _DB_RETRY_BASE_DELAY_SECONDS = 0.05
 # marker exists to prevent. `PRAGMA user_version` takes no bind parameter, which is
 # why this is an int module constant interpolated into the SQL and never
 # caller-supplied.
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 # Per-task retention cap on `state_transitions`. `shadow_pairs`' cap is the caller's
 # `shadow_max_pairs` (decorator.py), passed in per write.
@@ -427,9 +428,29 @@ class TraceDB:
                     # `shadow_window`/`shadow_threshold` between runs instead of
                     # re-slicing an existing epoch's history under new arithmetic.
                     ("shadow_config", "shadow_config TEXT"),
+                    # --- schema v3 (J-5) --------------------------------------
+                    # When the current `compiling` lease began. Its whole job is to
+                    # let `reclaim_stale_compile` tell a compile that is *running*
+                    # from one whose process was killed: without it, a task wedged in
+                    # `compiling` is indistinguishable from a healthy one and the
+                    # teacher is paid on every call forever.
+                    ("compiling_started_at", "compiling_started_at TEXT"),
                 ):
                     if column not in existing_cols:
                         self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {ddl};")
+                        if column == "compiling_started_at":
+                            # Backfill, because the databases that actually have J-5's
+                            # bug are the ones that predate this column. The reclaim
+                            # deliberately requires a stamp -- a `compiling` row of
+                            # unknown age must never be yanked out from under a live
+                            # compile -- so without this an already-wedged task would
+                            # stay wedged forever after the upgrade. `updated_at` is
+                            # when the status was last written, i.e. when the lease
+                            # began, which is exactly the value wanted here.
+                            self._conn.execute(
+                                "UPDATE tasks SET compiling_started_at = updated_at "
+                                "WHERE status = 'compiling' AND compiling_started_at IS NULL;"
+                            )
 
                 self._conn.execute(
                     """
@@ -572,6 +593,12 @@ class TraceDB:
         as a cache) while a process holds a live wrapper.
         """
         now = datetime.now(timezone.utc).isoformat()
+        # J-5: every status writer maintains the compile lease, so the invariant
+        # "status == 'compiling' implies compiling_started_at is set" has no holes --
+        # and leaving `compiling` clears the stamp, so a later wedge cannot inherit an
+        # old one. Without this, a direct `set_status(task_id, 'compiling')` would
+        # produce exactly the NULL-stamp row the reclaim cannot act on.
+        lease = now if status == "compiling" else None
 
         def _do() -> bool:
             with self._write_txn():
@@ -582,28 +609,31 @@ class TraceDB:
                     self._conn.execute(
                         """
                         INSERT INTO tasks (task_id, call_count, status, adapter_path,
-                                           state_epoch, created_at, updated_at)
-                        VALUES (?, 0, ?, ?, ?, ?, ?)
+                                           state_epoch, compiling_started_at,
+                                           created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             status = excluded.status,
                             adapter_path = excluded.adapter_path,
                             state_epoch = excluded.state_epoch,
+                            compiling_started_at = excluded.compiling_started_at,
                             updated_at = excluded.updated_at;
                         """,
-                        (task_id, status, adapter_path, new_epoch, now, now),
+                        (task_id, status, adapter_path, new_epoch, lease, now, now),
                     )
                 else:
                     self._conn.execute(
                         """
                         INSERT INTO tasks (task_id, call_count, status, state_epoch,
-                                           created_at, updated_at)
-                        VALUES (?, 0, ?, ?, ?, ?)
+                                           compiling_started_at, created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             status = excluded.status,
                             state_epoch = excluded.state_epoch,
+                            compiling_started_at = excluded.compiling_started_at,
                             updated_at = excluded.updated_at;
                         """,
-                        (task_id, status, new_epoch, now, now),
+                        (task_id, status, new_epoch, lease, now, now),
                     )
                 if changed:
                     self._record_transition_locked(
@@ -617,6 +647,186 @@ class TraceDB:
 
         for listener in list(self._status_listeners):
             listener(task_id)
+
+    def try_begin_compile(self, task_id: str) -> bool:
+        """Compare-and-set `tracing` -> `compiling`. True only for the writer that won.
+
+        D-2. `BackgroundCompiler.trigger_compilation` read `get_status`, decided, and
+        then called `set_status(..., "compiling")`. Its own `threading.RLock` cannot
+        close that window: the lock is per process and `traces.db` is shared, so N
+        processes crossing the compile threshold together each read `tracing`, each
+        decide to compile, and each buy a paid compile. Measured at 6 of 6 processes on
+        both the sync and async paths. This method is the claim those callers branch on.
+
+        **Why this is not the one-line `UPDATE` the finding's first draft described.**
+        Atomicity was never the missing property; *commit* was. Under
+        `isolation_level="IMMEDIATE"` sqlite3 emits `BEGIN IMMEDIATE` before a DML
+        statement and then leaves the transaction **open**. A bare
+        `self._conn.execute("UPDATE ... WHERE status='tracing'")` would therefore report
+        `rowcount == 1` to a caller that is about to spend money, while every other
+        process still reads `tracing` and can win the same CAS, while holding the write
+        lock so every other writer burns its whole `_with_write_retry` budget, and while
+        leaving the row to revert to `tracing` if this process dies -- after the money
+        was spent. That is strictly worse than the race it would be fixing. Hence
+        `_with_write_retry` + `_write_txn()`, exactly like every other read-modify-write
+        on this class.
+
+        **Why it is an upsert and not an UPDATE.** A bare UPDATE affects **zero** rows
+        when no `tasks` row exists yet -- and today's guard *wins* in that case, because
+        `get_status` returns `"tracing"` for a missing row and `set_status` upserts. An
+        UPDATE-only CAS would silently refuse the first-ever compile for every task:
+        verbatim the D-7 defect this repo has already paid for once.
+
+        **Why an allow-list of one is equivalent to the deny-list it replaces.** The old
+        guard refused `compiling|shadow|ready|failed`. The statuses this module ever
+        *persists* are exactly `tracing|compiling|shadow|ready|failed` -- `stalled` is
+        derived in `get_task_report` and never stored -- so the complement of that
+        deny-list is `{tracing}` plus the no-row case, which is what this method accepts.
+        The equivalence holds *because* of the upsert above; without it the no-row case
+        would change behaviour.
+
+        Parity with `set_status` is deliberate and load-bearing: a win bumps
+        `state_epoch`, writes the `state_transitions` audit row, advances that task's
+        prune clock and fires `_status_listeners`. Skipping any of them would drop the
+        audit trail, the epoch bump shadow-window arithmetic depends on, or the
+        adapter-cache invalidation hook -- three regressions behind a correct-looking CAS.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+
+        def _do() -> Optional[int]:
+            with self._write_txn():
+                previous, _ = self._get_status_and_epoch_locked(task_id)
+                cur = self._conn.execute(
+                    """
+                    INSERT INTO tasks (task_id, call_count, status, state_epoch,
+                                       compiling_started_at, created_at, updated_at)
+                    VALUES (?, 0, 'compiling', 1, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        status = 'compiling',
+                        state_epoch = tasks.state_epoch + 1,
+                        -- J-5: the lease starts here, on the transition that actually
+                        -- claims the compile.
+                        compiling_started_at = excluded.compiling_started_at,
+                        updated_at = excluded.updated_at
+                    WHERE tasks.status = 'tracing';
+                    """,
+                    (task_id, now, now, now),
+                )
+                if cur.rowcount == 0:
+                    return None
+                # Re-read rather than recompute: on the insert branch the epoch is 1, on
+                # the conflict branch it is whatever SQLite incremented it to, and the
+                # `state_transitions` row has to name the epoch that was actually stored.
+                _, new_epoch = self._get_status_and_epoch_locked(task_id)
+                self._record_transition_locked(
+                    task_id, previous or "tracing", "compiling", None, None, new_epoch, now
+                )
+                # The epoch, not a tuple. This used to also hand back
+                # `previous or "tracing"`, which no caller read -- the mutation gate found
+                # that second copy of the fallback unkillable, which is what dead data in
+                # a return value looks like from the outside. The one copy that matters is
+                # in the audit row above, pinned by
+                # `test_try_begin_compile_names_the_previous_status_in_a_first_ever_compile_D_2`.
+                return new_epoch
+
+        won = self._with_write_retry(_do)
+        if won is None:
+            return False
+        self._after_transition_write(task_id)
+        for listener in list(self._status_listeners):
+            listener(task_id)
+        return True
+
+    def reclaim_stale_compile(
+        self,
+        task_id: str,
+        lease_seconds: float,
+        max_attempts: Optional[int] = None,
+    ) -> bool:
+        """Release a `compiling` lease older than `lease_seconds`. True only for the winner.
+
+        J-5. `status` is written `compiling` *before* the compile worker runs and nothing
+        clears it if that process dies, while the decorator's trigger gate requires
+        `status == 'tracing'`. So a task whose compiling process was killed is stuck:
+        the teacher answers every subsequent call -- and is paid for every one -- with no
+        compile in flight and none ever going to complete. This is the way out.
+
+        A compare-and-set, for exactly D-2's reason: two processes both noticing the same
+        wedged task must not both reclaim it and both pay. Same
+        `_with_write_retry` + `_write_txn()` shape, with the `compile_attempts` bump in
+        the **same transaction** as the status write.
+
+        `compiling_started_at IS NOT NULL` is required, deliberately. A `compiling` row
+        of unknown age must never be reclaimed: doing so would yank a *running*,
+        already-billed compile out from under itself and buy a second one. Every writer
+        of `compiling` stamps the lease (`set_status`, `try_begin_compile`), and
+        `_init_db` backfills pre-v3 rows from `updated_at`, so in practice a NULL here
+        means nothing this module wrote.
+
+        `max_attempts`, when given, makes the reclaim terminal (`failed`) rather than
+        retryable (`tracing`) once the bumped count reaches it. Without that, a task that
+        wedges on every attempt would be handed another paid compile forever -- the same
+        unbounded paid retry loop PAW-JIT-03 bounds on the failure path, reached by a
+        different route. It is a parameter rather than an import because
+        `BackgroundCompiler` owns the cap and `compiler.py` imports *this* module.
+
+        One assumption worth stating, since this is the first ordered timestamp comparison
+        in this module (everything else orders by `id`): `compiling_started_at` is compared
+        **lexicographically**, which is correct only because every writer stores
+        `datetime.now(timezone.utc).isoformat()` -- a fixed-width, fixed-offset
+        (`+00:00`) format. A writer that stored a local-offset or non-padded timestamp
+        would make this comparison silently wrong rather than raise, so keep the format.
+        """
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        cutoff = (now_dt - timedelta(seconds=lease_seconds)).isoformat()
+
+        def _do() -> Optional[Tuple[str, int]]:
+            with self._write_txn():
+                cur = self._conn.execute(
+                    "SELECT state_epoch, compile_attempts FROM tasks WHERE task_id = ?;",
+                    (task_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                attempts = (row["compile_attempts"] or 0) + 1
+                target = (
+                    "failed"
+                    if max_attempts is not None and attempts >= max_attempts
+                    else "tracing"
+                )
+                new_epoch = (row["state_epoch"] or 0) + 1
+                updated = self._conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = ?,
+                        state_epoch = state_epoch + 1,
+                        compile_attempts = COALESCE(compile_attempts, 0) + 1,
+                        compiling_started_at = NULL,
+                        updated_at = ?
+                    WHERE task_id = ?
+                      AND status = 'compiling'
+                      AND compiling_started_at IS NOT NULL
+                      AND compiling_started_at < ?;
+                    """,
+                    (target, now, task_id, cutoff),
+                )
+                if updated.rowcount == 0:
+                    return None
+                self._record_transition_locked(
+                    task_id, "compiling", target, None, None, new_epoch, now,
+                    reason="stale_compile_lease",
+                )
+                return (target, new_epoch)
+
+        won = self._with_write_retry(_do)
+        if won is None:
+            return False
+        self._after_transition_write(task_id)
+        for listener in list(self._status_listeners):
+            listener(task_id)
+        return True
 
     def get_compile_attempts(self, task_id: str) -> int:
         """Retrieve the number of compilation attempts made so far for task_id (PAW-JIT-03).

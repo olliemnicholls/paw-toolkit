@@ -241,7 +241,15 @@ def test_triage_summary_carries_a_heldout_denominator(triage_run: dict) -> None:
     assert summary["leak_flags"]["folding_pool_disjoint_from_eval"] is True
     assert summary["leak_flags"]["scored_rows_folded_into_spec"] == 0
     # Visibility and identity of the adapter are recorded, not assumed (A-2 / Phase 0 #9).
-    assert summary["public"] is False
+    # A-2 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    # `summary["public"]` became `summary["public_requested"]`, because the manifest key
+    # it mirrors recorded the *request* under a name that read as the confirmed fact.
+    # The fixture manifest above deliberately still uses the legacy `public` key, so this
+    # also pins the legacy fallback: a summary built from a pre-rename manifest must
+    # still report the value rather than silently None.
+    assert summary["public_requested"] is False
+    # Never checked is never "private": an old manifest carries no confirmation at all.
+    assert summary["public_confirmed"] is None
     assert summary["program_id"] == "deadbeef"
 
     # And the same summariser over B-1's arrangement reports the leak instead of hiding it.
@@ -1021,3 +1029,37 @@ def test_fail_open_writes_an_artifact_naming_every_check() -> None:
     assert "result == TEACHER_MARKER" not in src
     assert "out != TEACHER_MARKER" not in src
     assert "live != TEACHER_MARKER" not in src
+
+
+# ================================================================================  A-6
+#
+# `examples_folded_into_spec` was `min(len(examples), max_spec_examples)` while the spec
+# renderer filtered to usable dicts first, so any malformed example inflated the count --
+# and the count is mirrored into every published measurement artifact, which is where a
+# wrong number stops being a library bug and becomes a published claim. Only one of the
+# four scripts that mirror the count also mirrored `folded_example_ids`, so three of them
+# reported *how many* examples were folded with no way to check *which*.
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "measure_finetune_triage",
+        "measure_semantic_correctness",
+        "measure_finetune_lookup",
+        "measure_triage_semantic_agreement",
+    ],
+)
+def test_summary_mirrors_folded_example_ids_beside_the_count_A_6(script: str) -> None:
+    """Every script that publishes the folded *count* also publishes the folded *ids*.
+
+    Additive -- it changes no published number. The ids are SHA-256 digests of
+    input+output, so this names what was folded without republishing any traced text,
+    which is the whole reason ids are the right thing to mirror here.
+    """
+    src = (_SCRIPTS / f"{script}.py").read_text()
+    assert '"examples_folded_into_spec"' in src, f"{script} does not report the count at all"
+    assert '"folded_example_ids"' in src, (
+        f"{script} publishes `examples_folded_into_spec` but not `folded_example_ids`, so "
+        "a reader of its artifact cannot check which examples the count refers to"
+    )

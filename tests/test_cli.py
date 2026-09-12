@@ -1530,7 +1530,17 @@ def test_cli_report_migrates_v1_db_in_place(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(db_file))
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")}
     assert {"shadow_pairs", "state_transitions"} <= tables
-    assert conn.execute("PRAGMA user_version;").fetchone()[0] == 2
+    # J-5 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    # this asserted the literal `2`. J-5 adds a `tasks.compiling_started_at` column, so
+    # `_SCHEMA_VERSION` moves 2 -> 3 and the literal had to change with it. Pinned
+    # against the module constant rather than a new literal: the subject here is "the
+    # forward marker was stamped by this migration", not its numeric value, and the
+    # value itself is pinned separately (with an explanation of what a bump means) by
+    # `test_migration_adds_the_lease_column_and_bumps_the_marker_J_5` in
+    # tests/test_jit_persistence.py.
+    from paw_kit.jit.db import _SCHEMA_VERSION
+
+    assert conn.execute("PRAGMA user_version;").fetchone()[0] == _SCHEMA_VERSION
     conn.close()
 
 

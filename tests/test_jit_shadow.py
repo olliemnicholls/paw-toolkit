@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import pytest
 
 from paw_kit import MockPAWBackend, TraceDB, compile_on_hit
+from paw_kit.jit.db import _SCHEMA_VERSION
 import paw_kit.jit.decorator as decorator_module
 import paw_kit.jit.shadow as shadow_module
 from paw_kit.jit.shadow import _GLOBAL_SHADOW_RUNNER
@@ -791,7 +792,15 @@ def test_migration_from_v1_schema_adds_shadow_tables_and_columns(tmp_path: Path)
         for row in _query(db, "SELECT name FROM sqlite_master WHERE type = 'table';")
     }
     assert {"tasks", "traces", "shadow_pairs", "state_transitions"} <= tables
-    assert _query(db, "PRAGMA user_version;")[0]["user_version"] == 2
+    # J-5 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    # this asserted the literal `2`. J-5 adds a `tasks.compiling_started_at` column, so
+    # `_SCHEMA_VERSION` moves 2 -> 3 and the literal had to change with it. Pinned
+    # against the module constant rather than a new literal: the subject here is "the
+    # forward marker was stamped by this migration", not its numeric value, and the
+    # value itself is pinned separately (with an explanation of what a bump means) by
+    # `test_migration_adds_the_lease_column_and_bumps_the_marker_J_5` in
+    # tests/test_jit_persistence.py.
+    assert _query(db, "PRAGMA user_version;")[0]["user_version"] == _SCHEMA_VERSION
 
     report = db.get_task_report("legacy-task")
     assert report["state_epoch"] == 0
@@ -810,7 +819,15 @@ def test_migration_is_idempotent_on_second_open(tmp_path: Path) -> None:
     second = TraceDB(db_path=str(db_file))
     second.record_trace("legacy-task", "again", "teacher:again", 1.0)
     assert second.get_call_count("legacy-task") == 4
-    assert _query(second, "PRAGMA user_version;")[0]["user_version"] == 2
+    # J-5 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    # this asserted the literal `2`. J-5 adds a `tasks.compiling_started_at` column, so
+    # `_SCHEMA_VERSION` moves 2 -> 3 and the literal had to change with it. Pinned
+    # against the module constant rather than a new literal: the subject here is "the
+    # forward marker was stamped by this migration", not its numeric value, and the
+    # value itself is pinned separately (with an explanation of what a bump means) by
+    # `test_migration_adds_the_lease_column_and_bumps_the_marker_J_5` in
+    # tests/test_jit_persistence.py.
+    assert _query(second, "PRAGMA user_version;")[0]["user_version"] == _SCHEMA_VERSION
     second.close()
 
 

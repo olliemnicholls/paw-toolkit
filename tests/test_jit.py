@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import threading
 import time
 from typing import List
 from pydantic import BaseModel
@@ -574,10 +575,23 @@ def test_compile_on_hit_sync_recompile_of_ready_task_bypasses_stale_cache_PAW_JI
     svc("x")  # cache hit expected: load must NOT be called again
     assert load_call_count["n"] == 0
 
-    # Recompile the already-"ready" task via the public API surface, exactly as
-    # BackgroundCompiler.trigger_compilation(sync=True) allows (compiler.py's
-    # status-guard is skipped entirely when sync=True).
+    # Recompile the already-"ready" task via the public API surface.
+    #
+    # J-6 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    # this test used to reach its recompile by exploiting the defect J-6 fixes. The
+    # comment here read "exactly as BackgroundCompiler.trigger_compilation(sync=True)
+    # allows (compiler.py's status-guard is skipped entirely when sync=True)" -- i.e. it
+    # recompiled a `ready` task through the `and not sync` hole that let 8 concurrent
+    # sync triggers buy 8 paid compiles. With the hole closed, `trigger_compilation`
+    # correctly returns None here and no recompile happens.
+    #
+    # Re-pointed, not deleted: this test's actual subject is PAW-JIT-05 cache
+    # invalidation, which is unrelated to the duplicate guard. The recompile is now
+    # driven through a legitimately-allowed path -- returning the task to `tracing`
+    # first, which is what any real recompile does -- and every invalidation assertion
+    # below is unchanged.
     out_path = svc.db.get_adapter_path(svc.task_id)  # type: ignore[attr-defined]
+    svc.db.set_status(svc.task_id, "tracing")  # type: ignore[attr-defined]
     decorator_module._GLOBAL_COMPILER.trigger_compilation(
         task_id=svc.task_id,  # type: ignore[attr-defined]
         spec="JIT-05 stale-recompile test",
@@ -750,3 +764,143 @@ def test_shipped_backend_compiles_route_through_atomic_write_PAW_JIT_05() -> Non
 
     assert "atomic_write_text" in inspect.getsource(MockPAWBackend.compile)
     assert "atomic_write_text" in inspect.getsource(ProgramAsWeightsBackend.compile)
+
+
+def test_sync_trigger_compilation_is_also_deduplicated_J_6(tmp_path: Path) -> None:
+    """J-6: `sync_compile=True` dropped the duplicate guard wholesale.
+
+    `compiler.py`'s guard was `status in (...) and not sync`, so the `sync=True` path was
+    not guarded at all -- the comment claimed protection came from "the fresh status read
+    at the decorator's compile trigger", which is not atomic with `set_status`. The hunt
+    measured duplicate compiles in 18 of 20 runs (max 24 for one task) against 0 of 20
+    with `sync_compile=False`. Each duplicate also bumps `state_epoch` and can burn the
+    retry cap in one burst.
+
+    In-process threads here; the cross-process half is
+    `test_exactly_one_paid_compile_across_six_processes_D_2_J_6` in
+    tests/test_jit_persistence.py, which is the one that actually proves the CAS.
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    compiler = BackgroundCompiler()
+    calls: List[str] = []
+    lock = threading.Lock()
+
+    class _CountingBackend(MockPAWBackend):
+        def compile(self, spec: str, examples: object, output_path: str) -> str:  # type: ignore[override]
+            with lock:
+                calls.append(output_path)
+            time.sleep(0.05)
+            return super().compile(spec, examples, output_path)  # type: ignore[arg-type]
+
+    backend = _CountingBackend()
+    out_path = str(tmp_path / "t.paw")
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [
+                pool.submit(
+                    compiler.trigger_compilation,
+                    task_id="t", spec="spec", db=db, backend=backend,
+                    output_path=out_path, sync=True,
+                )
+                for _ in range(8)
+            ]
+            for f in futures:
+                f.result()
+        assert len(calls) == 1, f"{len(calls)} compiles for one task from 8 sync triggers"
+    finally:
+        db.close()
+
+
+def _wedge_in_compiling(db: "TraceDB", task_id: str, age_seconds: float) -> None:
+    """Leave `task_id` in `compiling` with a lease stamp `age_seconds` old."""
+    from datetime import datetime, timedelta, timezone
+
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
+    db._conn.execute(
+        "UPDATE tasks SET status = 'compiling', compiling_started_at = ? WHERE task_id = ?;",
+        (stamp, task_id),
+    )
+    db._conn.commit()
+
+
+def test_decorator_reclaims_a_wedged_compile_and_retries_it_J_5(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """J-5 end to end, and the reason the reclaim lives in `decorator.py`.
+
+    With `status` wedged at `compiling`, `decorator.py`'s own gate
+    (`if current_status == "tracing"`) means `trigger_compilation` is **never called at
+    all** -- so a reclaim placed inside `compiler.py` would be dead code and this test
+    would stay red against it. The teacher is paid on every subsequent call, forever,
+    with no compile in flight and none ever completing.
+    """
+    import paw_kit.jit.decorator as decorator_module
+
+    monkeypatch.setattr(decorator_module, "_COMPILE_LEASE_SECONDS", 60.0)
+    cache_dir = str(tmp_path / "wedged_cache")
+    backend = MockPAWBackend()
+    teacher_calls = {"n": 0}
+
+    @compile_on_hit(
+        spec="J-5 wedged-compile test",
+        threshold=2,
+        response_model=SentimentOutput,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(text: str) -> SentimentOutput:
+        teacher_calls["n"] += 1
+        return SentimentOutput(sentiment="teacher", confidence=1.0)
+
+    svc("first")  # call_count 1, below threshold: registers the task, no compile
+    assert teacher_calls["n"] == 1
+    task_id = svc.task_id  # type: ignore[attr-defined]
+    _wedge_in_compiling(svc.db, task_id, age_seconds=10_000)  # type: ignore[attr-defined]
+    assert svc.db.get_status(task_id) == "compiling"  # type: ignore[attr-defined]
+
+    svc("second")  # crosses the threshold and finds the task wedged
+
+    assert svc.db.get_status(task_id) == "ready", (  # type: ignore[attr-defined]
+        f"still {svc.db.get_status(task_id)!r}: the stale lease was never reclaimed, so "  # type: ignore[attr-defined]
+        "the teacher is paid on every call from here on with no compile in flight"
+    )
+    assert svc.db.get_compile_attempts(task_id) == 1, (  # type: ignore[attr-defined]
+        "the reclaim must count as an attempt so the retry cap still bounds it"
+    )
+    assert svc.is_compiled()  # type: ignore[attr-defined]
+
+
+def test_decorator_does_not_reclaim_a_compile_still_inside_its_lease_J_5(
+    tmp_path: Path,
+) -> None:
+    """Negative control, and the expensive failure mode: a compile that is genuinely
+    running must not be reclaimed out from under itself, because the reclaim hands out a
+    second paid compile. The shipped lease is hours precisely so that a finetune compile
+    (96-223s, capped by `compile_timeout_s` at an hour) can never be mistaken for a
+    wedge."""
+    cache_dir = str(tmp_path / "live_cache")
+    backend = MockPAWBackend()
+
+    @compile_on_hit(
+        spec="J-5 live-compile test",
+        threshold=2,
+        response_model=SentimentOutput,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(text: str) -> SentimentOutput:
+        return SentimentOutput(sentiment="teacher", confidence=1.0)
+
+    svc("first")
+    task_id = svc.task_id  # type: ignore[attr-defined]
+    _wedge_in_compiling(svc.db, task_id, age_seconds=5.0)  # type: ignore[attr-defined]
+
+    svc("second")
+
+    assert svc.db.get_status(task_id) == "compiling"  # type: ignore[attr-defined]
+    assert svc.db.get_compile_attempts(task_id) == 0  # type: ignore[attr-defined]

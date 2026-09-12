@@ -548,9 +548,24 @@ def main() -> int:
             "manifest": arm["manifest"],
             "program_id": arm["manifest_data"].get("program_id"),
             "compiler_snapshot": arm["manifest_data"].get("compiler_snapshot"),
+            # A-6: `examples_folded_into_spec` is now the count of examples that actually
+            # reached the spec text, not the number offered to compile() (a malformed example
+            # used to inflate it, and this artifact is where that inflated number was
+            # published). `folded_example_ids` is mirrored alongside it so the artifact names
+            # *which* examples those were, not just how many -- the ids are SHA-256 digests of
+            # input+output, so this publishes no traced text.
             "examples_folded_into_spec": arm["manifest_data"].get("examples_folded_into_spec"),
+            "folded_example_ids": arm["manifest_data"].get("folded_example_ids"),
             "compile_wall_s": arm["manifest_data"].get("compile_wall_s"),
-            "public": arm["manifest_data"].get("public"),
+            # A-2: the manifest key that records the *requested* visibility was renamed
+            # `public` -> `public_requested`, and `public_confirmed` (three-state: True /
+            # False / None-with-a-reason) now carries what the server actually reported.
+            # Read the new name with a legacy fallback so a summary built from a manifest
+            # written before the rename still reports the value instead of silently None.
+            "public_requested": arm["manifest_data"].get(
+                "public_requested", arm["manifest_data"].get("public")),
+            "public_confirmed": arm["manifest_data"].get("public_confirmed"),
+            "public_confirmed_reason": arm["manifest_data"].get("public_confirmed_reason"),
             "cache_hit": arm["manifest_data"].get("cache_hit"),
             # Mirrored so the arms stay checkable without the gitignored .paw files.
             # full_spec_sha256 is the load-bearing one: it covers spec + folded

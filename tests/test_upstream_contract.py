@@ -31,14 +31,73 @@ def _params(fn):
     return inspect.signature(fn).parameters
 
 
-# `ProgramAsWeightsBackend` calls exactly these four module-level functions. If a name
+# `ProgramAsWeightsBackend` calls exactly these module-level functions. If a name
 # disappears, `_paw().<name>` raises AttributeError at runtime, inside a user's compile.
-@pytest.mark.parametrize("name", ["compile", "compile_async", "get_compile_status", "function"])
+#
+# A-3: `precheck_compile` was missing from this list, which is how an upstream rename
+# of it could have silently disabled the cache-hit leak warning forever with nothing in
+# CI noticing. It belongs here (and not with `get_program_meta` below) because it *does*
+# have a module-level wrapper -- `programasweights/__init__.py`.
+# A-5: `cancel_compile` joins it, for the poll-loop timeout path.
+@pytest.mark.parametrize(
+    "name",
+    [
+        "compile",
+        "compile_async",
+        "get_compile_status",
+        "function",
+        "precheck_compile",
+        "cancel_compile",
+    ],
+)
 def test_sdk_still_exposes_called_function(name):
     assert hasattr(paw, name), (
         f"upstream SDK no longer exposes `programasweights.{name}`, which "
         f"paw_kit/backend/programasweights.py calls directly."
     )
+
+
+def test_compile_accepts_the_public_keyword_A_3():
+    """A-3: nothing asserted that `public=` is even an accepted keyword.
+
+    `compile()` forwards `public=self.public` to both submission functions, and
+    upstream's own default is `public=True`. If the keyword were renamed or dropped,
+    `paw.compile(..., public=False)` would raise TypeError -- or, worse, if it became
+    `**kwargs`-absorbed, every paw-kit compile would silently revert to upstream's
+    public default. That is the exact leak `ProgramAsWeightsBackend`'s `public=False`
+    default exists to prevent, so it gets an assertion of its own.
+    """
+    assert "public" in _params(paw.compile), "`public=` keyword dropped from compile()"
+    assert "public" in _params(paw.compile_async), (
+        "`public=` keyword dropped from compile_async()"
+    )
+
+
+def test_precheck_compile_accepts_spec_and_compiler_A_3():
+    """`paw.precheck_compile(full_spec, compiler=self.compiler)` -- the cache-hit check."""
+    p = _params(paw.precheck_compile)
+    assert "spec" in p or list(p)[0] == "spec"
+    assert "compiler" in p, "`compiler=` keyword dropped from precheck_compile()"
+
+
+def test_paw_client_still_exposes_get_program_meta_A_2():
+    """A-2's `verify_visibility` reaches the server's confirmed visibility through
+    `PAWClient.get_program_meta`.
+
+    Deliberately a separate assertion from the parametrisation above, which covers
+    *module-level* functions only: `get_program_meta` has no module-level wrapper, and
+    `PAWClient` is not even in `programasweights.__all__`, so it is reached as
+    `programasweights.client.PAWClient`. If that moves, visibility silently stops being
+    confirmable -- and `public_confirmed` would go permanently `None`, which is the
+    honest failure but still one worth lead time on.
+    """
+    from programasweights.client import PAWClient
+
+    assert hasattr(PAWClient, "get_program_meta"), (
+        "PAWClient.get_program_meta is gone; ProgramAsWeightsBackend(verify_visibility=True) "
+        "can no longer confirm a compiled program's visibility."
+    )
+    assert len(_params(PAWClient.get_program_meta)) >= 2  # self + program_id
 
 
 def test_compile_accepts_spec_and_compiler():

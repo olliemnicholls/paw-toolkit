@@ -39,6 +39,19 @@ program unchanged, regardless of what `public` is passed this time (`compile()` 
 checks for this via `precheck_compile` and warns; it cannot change the existing program's
 visibility).
 
+**What the manifest can and cannot tell you about visibility (A-2).** `public_requested`
+is what this backend *asked* the service for. It is not, and has never been, evidence of
+what the compiled program's visibility actually is -- a cache hit ignores `public=`
+entirely, and the precheck that detects a cache hit exposes no visibility field at all.
+`public_confirmed` is the separate, three-state record of what the server answered when
+asked directly: `True`, `False`, or `None` with `public_confirmed_reason` saying why there
+is no answer. It is `None` unless the backend was constructed with
+`verify_visibility=True`, and an unanswered question is never reported as "private".
+Confirmed live on 2026-09-11: six programs this project compiled report `public: True`
+from the server, and their local manifests recorded no visibility at all. Note also that
+visibility is not retroactive -- nothing in this module can make an already-compiled
+public program private.
+
 Nothing in this module is imported at package import time except the standard library
 and paw-kit's own helpers; `programasweights` is imported lazily so the rest of paw-kit
 keeps working (and its test suite keeps running) without it installed.
@@ -66,6 +79,7 @@ from paw_kit.backend.manifest_lineage import (
     extract_snapshot,
     folded_example_ids,
     read_parent_lineage,
+    select_folded_examples,
     sha256_text,
 )
 
@@ -99,12 +113,19 @@ def _sdk_installed() -> bool:
 
 
 def _render_spec_with_examples(spec: str, examples: List[Dict[str, str]], limit: int) -> str:
-    """Append up to `limit` input/output pairs to the spec as few-shot demonstrations."""
-    usable = [ex for ex in examples if isinstance(ex, dict) and "input" in ex and "output" in ex]
-    if limit <= 0 or not usable:
+    """Append up to `limit` input/output pairs to the spec as few-shot demonstrations.
+
+    A-6: the "usable" filter used to be re-implemented here, a second copy of
+    `select_folded_examples`'s predicate (Pattern 2 waiting to happen -- the count and the
+    content could drift apart with nothing noticing). There is one predicate now, and
+    `select_folded_examples` is it, so `examples_folded_into_spec` and the spec text can
+    no longer disagree about what was folded.
+    """
+    folded = select_folded_examples(examples, limit)
+    if not folded:
         return spec
     lines = [spec.rstrip(), "", "Examples of correct behaviour:"]
-    for ex in usable[:limit]:
+    for ex in folded:
         lines.append(f"Input: {ex['input']}")
         lines.append(f"Output: {ex['output']}")
         lines.append("")
@@ -131,14 +152,28 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             hub with their full spec text (including any folded traced examples) readable
             by anyone, unauthenticated. Upstream defaults this to `True`; paw-kit defaults
             it to `False` (see module docstring, Privacy). Pass `True` to opt in.
+            **Only the literal `True` opts in** (A-9): anything else is coerced to
+            `False` in `__init__`, because `public=None` used to forward
+            `{"public": null}` to a service whose own default is `True` -- a leak out of
+            a falsy-looking argument.
+        verify_visibility: After a successful compile, ask the service what the compiled
+            program's visibility actually *is* and record the answer in the manifest
+            (A-2). Off by default because it costs one extra authenticated GET per
+            compile. The recorded `public_confirmed` is deliberately three-state --
+            `True`/`False`/`None` -- and never collapses an unanswered question into
+            "private"; see `_confirm_visibility`.
         ephemeral: Forwarded to upstream `compile`/`compile_async` as-is; see the SDK's
             own documentation for its effect.
         compile_retries: Extra attempts for the actual `paw.compile`/`paw.compile_async`
             HTTP call, after a connect failure (`httpx.ConnectTimeout`/`ConnectError` --
-            the request provably never reached the server) or a 5xx other than 504
-            (server-side, transient), with a short backoff between attempts. A read
-            timeout, a 504, or a 4xx (bad request, invalid API key, rate limit) is never
-            retried -- see `_invoke_compile`'s docstring for why. `0` disables retrying.
+            the request provably never reached the server), with a short backoff between
+            attempts. A 5xx other than 504 is additionally retried on the **synchronous**
+            `paw.compile` path only; `compile_async` (the paid finetune submission) never
+            retries a 5xx, because a duplicate there both double-bills and orphans the
+            first attempt's `job_id` (A-1). A read timeout, a 504, or a 4xx (bad request,
+            invalid API key, rate limit) is never retried on either path -- see
+            `_invoke_compile`'s docstring for the full policy and its residual risk.
+            `0` disables retrying.
         sdk: Test seam. Any object exposing `compile`, `compile_async`,
             `get_compile_status` and `function` with the upstream signatures. Defaults to
             the real `programasweights` module, imported lazily on first use.
@@ -159,6 +194,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         poll_interval_s: float = 5.0,
         compile_timeout_s: float = 3600.0,
         public: bool = False,
+        verify_visibility: bool = False,
         ephemeral: bool = False,
         compile_retries: int = 1,
         sdk: Any = None,
@@ -171,7 +207,13 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         self.max_spec_examples = max_spec_examples
         self.poll_interval_s = poll_interval_s
         self.compile_timeout_s = compile_timeout_s
-        self.public = public
+        # A-9: validate rather than trust. `public` is forwarded verbatim to a service
+        # whose own default is `True`, so every value that is not the literal `True`
+        # must resolve to `False` *here* -- not at the request, and not via `bool()`,
+        # which would publish on `1` or `"true"`. Coercing in `__init__` also makes the
+        # manifest record `False` instead of echoing back whatever was passed.
+        self.public = public is True
+        self.verify_visibility = verify_visibility
         self.ephemeral = ephemeral
         self.compile_retries = compile_retries
         self._sdk = sdk
@@ -205,14 +247,43 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
 
     def compile(self, spec: str, examples: List[Dict[str, str]], output_path: str) -> str:
         paw = self._paw()
-        if not self.offline and not self.has_api_key():
+        # A-9: `offline=True` documents "never touch the network", and it skipped the
+        # API-key guard below and then POSTed to the compile service anyway. Raising
+        # here -- at the top, beside the existing API-key raise, before any paid work
+        # and on nothing the request path depends on -- is the only placement that does
+        # not weaken the campaign's fail-open invariant. The one in-repo construction of
+        # `offline=True` (scripts/measure_constrained_decoding_upstream.py) is
+        # inference-only and never calls compile().
+        if self.offline:
+            raise RuntimeError(
+                "ProgramAsWeightsBackend was constructed with offline=True, which means "
+                "never contact the compile service. Compilation is a network operation: "
+                "construct a second backend without offline=True to compile, or call "
+                "prepare_program() to populate the cache this instance reads from."
+            )
+        # The `not self.offline and` this condition used to carry is dropped, not
+        # overlooked: the raise above makes it unreachably false, and leaving it in would
+        # tell a reader that an offline backend can still get here.
+        if not self.has_api_key():
             raise RuntimeError(
                 "Compilation needs PAW_API_KEY in the environment "
                 "(https://programasweights.com/settings). Inference on cached programs does not."
             )
 
         full_spec = _render_spec_with_examples(spec, examples, self.max_spec_examples)
-        folded_count = min(len(examples), self.max_spec_examples)
+        # A-6: what was actually folded, not what was offered. This was
+        # `min(len(examples), self.max_spec_examples)`, which counted every example handed
+        # in -- including malformed ones the renderer silently skipped -- and that inflated
+        # number was mirrored into every published measurement artifact.
+        #
+        # `len(folded_ids)` is the plausible wrong answer and is rejected deliberately:
+        # `select_folded_examples` requires only that the `input`/`output` *keys* exist,
+        # which is exactly what the renderer folds, while `example_id` additionally
+        # requires both *values* be `str`. So `{"input": 3, "output": 4}` reaches the spec
+        # but yields no id, and counting ids would **under**-report what was published.
+        # Two honest numbers, not one guess: this is what went in, `folded_example_ids` is
+        # the subset that could be identified.
+        folded_count = len(select_folded_examples(examples, self.max_spec_examples))
         folded_ids = folded_example_ids(examples, self.max_spec_examples)
 
         # Read whatever manifest already sits at output_path *before* it is
@@ -237,28 +308,60 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         # existing *public* program, unchanged. Best-effort check; never let a precheck
         # failure block the compile itself.
         cache_hit: Optional[bool] = None
+        cached_program_id: Optional[str] = None
         if not self.public:
             try:
                 precheck = paw.precheck_compile(full_spec, compiler=self.compiler)
                 cache_hit = bool(precheck.get("cached")) if isinstance(precheck, dict) else bool(
                     getattr(precheck, "cached", False)
                 )
-            except Exception:
+                # A-2, the free half: `CompilePrecheck` is a plain dict at runtime and
+                # `program_id` is a real key on it -- the id of the existing program a
+                # cache hit will hand back. The old code fetched this and discarded it,
+                # leaving a warning that said "an existing program will be returned"
+                # without ever naming which one. No extra request.
+                raw_id = (
+                    precheck.get("program_id") if isinstance(precheck, dict)
+                    else getattr(precheck, "program_id", None)
+                )
+                cached_program_id = raw_id if isinstance(raw_id, str) and raw_id else None
+            # A-3: narrowed from a bare `except Exception`. `APIError` subclasses
+            # `httpx.HTTPStatusError`, so `httpx.HTTPError` covers every way the
+            # *service* can decline this request while still letting a broken contract
+            # through -- an upstream rename of `precheck_compile` raises AttributeError,
+            # which the bare except absorbed, silently disabling the cache-hit leak
+            # warning forever with nothing in the suite noticing.
+            except httpx.HTTPError as exc:
                 cache_hit = None
-            if cache_hit:
+                # Distinct from the cache-hit warning below, per the finding: silence
+                # was indistinguishable from "checked, and there is no cache hit",
+                # which is the opposite conclusion.
                 warnings.warn(
-                    "ProgramAsWeights already has a compiled program for this exact spec "
-                    "and will return it instead of compiling a new one. paw-kit cannot "
+                    "ProgramAsWeights could not check whether this spec is already "
+                    f"compiled ({type(exc).__name__}: {exc}). If it is, that existing "
+                    "program is returned unchanged and public=False cannot make it "
+                    "private -- proceeding without that warning, not without that risk.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if cache_hit:
+                named = f" ({cached_program_id})" if cached_program_id else ""
+                warnings.warn(
+                    f"ProgramAsWeights already has a compiled program{named} for this "
+                    "exact spec and will return it instead of compiling a new one. "
+                    "paw-kit cannot "
                     "change that existing program's public/private visibility -- if it was "
                     "compiled public, it stays public regardless of public=False here. "
                     "Rephrase the spec (or its folded examples) if you need a fresh, "
-                    "private compile.",
+                    "private compile. Pass verify_visibility=True to record what the "
+                    "server actually reports for it.",
                     UserWarning,
                     stacklevel=2,
                 )
 
         compile_started = time.monotonic()
         if self.compiler == FINETUNE_COMPILER:
+            # A-1: no `retry_5xx=True` here, deliberately. See `_invoke_compile`.
             job = self._invoke_compile(
                 paw.compile_async,
                 full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral,
@@ -268,6 +371,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             program = self._invoke_compile(
                 paw.compile,
                 full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral,
+                retry_5xx=True,
             )
             program_id = getattr(program, "id", None) or (program.get("id") if isinstance(program, dict) else None)
             slug = getattr(program, "slug", None) or (program.get("slug") if isinstance(program, dict) else None)
@@ -277,6 +381,12 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                 raise RuntimeError(f"ProgramAsWeights compile failed (status={status!r}): {err!r}")
             compiler_snapshot = extract_snapshot(program)
         compile_wall_s = time.monotonic() - compile_started
+
+        # A-2: ask the server what this program's visibility actually is. Everything
+        # about this call is arranged so that no outcome of it can prevent the manifest
+        # write below -- at this point the compile has been *billed* and `program_id` is
+        # the only record of it.
+        public_confirmed, public_confirmed_reason = self._confirm_visibility(paw, program_id)
 
         manifest = {
             "backend": MANIFEST_BACKEND_NAME,
@@ -291,9 +401,18 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             "examples_folded_into_spec": folded_count,
             "examples_count": len(examples),
             "folded_example_ids": folded_ids,
-            "public": self.public,
+            # A-2: `public` used to sit here, recording `self.public` -- i.e. what was
+            # *asked for* -- under a name every reader took for what the program's
+            # visibility *is*. Confirmed live (parent track doc, §"Report §16 live
+            # verification"): all six historical programs report `public: True` from the
+            # server. The two are now separate keys, and the confirmed one is
+            # three-state so that "never checked" can never be mistaken for "private".
+            "public_requested": self.public,
+            "public_confirmed": public_confirmed,
+            "public_confirmed_reason": public_confirmed_reason,
             "ephemeral": self.ephemeral,
             "cache_hit": cache_hit,
+            "cached_program_id": cached_program_id,
             "parent_program_id": parent_program_id,
             "parent_manifest_sha256": parent_manifest_sha256,
             "compile_wall_s": compile_wall_s,
@@ -308,7 +427,75 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             self._functions.pop(output_path, None)
         return output_path
 
-    def _invoke_compile(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    #: Keys `get_program_meta`'s JSON may carry the program's visibility under, in
+    #: preference order. Only a real `bool` is accepted: a string `"true"` or an int `1`
+    #: is a shape this code has never seen from the service, and guessing at one is how
+    #: a visibility claim becomes wrong rather than unknown.
+    _VISIBILITY_KEYS = ("public", "is_public")
+
+    @staticmethod
+    def _paw_client(paw: Any) -> Any:
+        """A `PAWClient`-shaped object for the calls that have no module-level wrapper.
+
+        `get_program_meta` is a `PAWClient` method upstream and `PAWClient` is not even
+        in `programasweights.__all__`, so it is reached through the submodule. The
+        `getattr` first is the test seam: an injected `sdk` supplies its own factory.
+        """
+        factory = getattr(paw, "PAWClient", None)
+        if factory is None:
+            factory = importlib.import_module("programasweights.client").PAWClient
+        kwargs: Dict[str, Any] = {}
+        for name, key in (("get_api_url", "api_url"), ("get_api_key", "api_key")):
+            getter = getattr(paw, name, None)
+            if callable(getter):
+                kwargs[key] = getter()
+        return factory(**kwargs)
+
+    def _confirm_visibility(
+        self, paw: Any, program_id: Optional[str]
+    ) -> "tuple[Optional[bool], str]":
+        """A-2: `(public_confirmed, reason)` -- the server's answer, or why there isn't one.
+
+        Three states, never two. `None` means *unknown*, and a missing answer must never
+        render as "private": that is Pattern 5 (a control degrading silently into a
+        reassuring value) and it is the entire shape of A-2, whose own finding is a
+        manifest field recording a request while reading as a fact.
+
+        **Nothing this method does can propagate.** It runs after the compile has been
+        billed and before the manifest is written, so an expired key, a 404, a transient
+        5xx or an upstream rename must not cost the caller the `program_id` of a compile
+        they have already paid for (Phase 0 F8). The blanket `except BaseException` is
+        deliberate and is the narrow case where one is correct: the alternative to
+        swallowing is losing money.
+        """
+        if not self.verify_visibility:
+            return None, "not_attempted"
+        # Belt for A-9's raise: an offline backend may never make this request either.
+        if self.offline:
+            return None, "offline"
+        if not program_id:
+            return None, "no_program_id"
+        if not self.has_api_key():
+            return None, "no_api_key"
+        try:
+            meta = self._paw_client(paw).get_program_meta(str(program_id))
+        except BaseException as exc:  # noqa: BLE001 -- see docstring
+            return None, f"request_failed: {type(exc).__name__}: {exc}"
+        if not isinstance(meta, dict):
+            return None, "no_visibility_key"
+        for key in self._VISIBILITY_KEYS:
+            value = meta.get(key)
+            if isinstance(value, bool):
+                return value, "server"
+        return None, "no_visibility_key"
+
+    def _invoke_compile(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        retry_5xx: bool = False,
+        **kwargs: Any,
+    ) -> Any:
         """Call `fn` (`paw.compile` or `paw.compile_async`), converting an httpx
         connect failure or HTTP error response into a `RuntimeError` naming the
         service and what happened -- rather than letting a raw httpx exception (whose
@@ -319,19 +506,37 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         that is *not idempotent*. Resubmitting it after the server has already seen the
         request queues a second compile, spends a second unit of the rate-limited
         quota, and (on the finetune path) discards the first attempt's `job_id`, making
-        that job unpollable. So only `httpx.ConnectTimeout`/`httpx.ConnectError` (the
-        TCP handshake itself failed or timed out -- the request provably never reached
-        the server) are retried, up to `self.compile_retries` additional times with a
-        short backoff. Every other timeout (`httpx.ReadTimeout` and friends: the
-        request was sent and the server may already be compiling) is raised
-        immediately, *not* retried -- the message explains that the compile may still
-        be running server-side and that re-running with the same spec will hit the
-        compile cache once it finishes, instead of paying for a second compile. A 5xx
-        response is retried the same way as a connect failure, *except* 504 (gateway
-        timeout), which carries the same "already landed, still working" ambiguity as
-        a read timeout and so is also never retried. A 4xx (bad request, invalid API
-        key, rate limit) is never retried either -- retrying it wastes a rate-limited
-        attempt on something that will fail again identically.
+        that job unpollable and uncancellable. So only
+        `httpx.ConnectTimeout`/`httpx.ConnectError` (the TCP handshake itself failed or
+        timed out -- the request provably never reached the server) are retried
+        unconditionally, up to `self.compile_retries` additional times with a short
+        backoff. Every other timeout (`httpx.ReadTimeout` and friends: the request was
+        sent and the server may already be compiling) is raised immediately, *not*
+        retried -- the message explains that the compile may still be running
+        server-side and that re-running with the same spec will hit the compile cache
+        once it finishes, instead of paying for a second compile. A 4xx (bad request,
+        invalid API key, rate limit) is never retried either -- retrying it wastes a
+        rate-limited attempt on something that will fail again identically.
+
+        **A-1: a 5xx is retried only when the caller opts in with `retry_5xx=True`,
+        and only the synchronous `paw.compile` call site does.** A non-504 5xx (a
+        gateway 502, or a 500 raised while serialising the response for a job that was
+        already enqueued) proves nothing about whether the compile landed, so retrying
+        it can buy a second compile. `compile_async` is reachable only via
+        `FINETUNE_COMPILER`, where a duplicate compile is 96-223s of paid GPU *and*
+        orphans the first `job_id` -- unpollable and uncancellable -- so it never
+        retries a 5xx. The unsafe direction requires an explicit opt-in precisely so a
+        future third call site cannot inherit the retry silently. 504 (gateway timeout)
+        stays excluded even when `retry_5xx=True`: it carries the same "already landed,
+        still working" ambiguity as a read timeout.
+
+        **Residual risk on the sync path, stated rather than hidden:** upstream's
+        compile cache is keyed on spec text, so a resubmitted identical spec usually
+        returns the program the first attempt created -- but only once that program is
+        actually cached. If the first POST landed and the retry arrives before it is,
+        the retry buys a second *fast* compile. That is bounded to the fast compiler and
+        to `self.compile_retries` (default 1) extra attempts, and there is no `job_id`
+        to orphan. The cache does not make the retry free.
         """
         attempt = 0
         while True:
@@ -361,7 +566,10 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                 status_code = exc.response.status_code if exc.response is not None else None
                 body = exc.response.text[:300] if exc.response is not None else ""
                 retryable_5xx = (
-                    status_code is not None and 500 <= status_code < 600 and status_code != 504
+                    retry_5xx
+                    and status_code is not None
+                    and 500 <= status_code < 600
+                    and status_code != 504
                 )
                 if retryable_5xx and attempt < self.compile_retries:
                     attempt += 1
@@ -407,6 +615,22 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         raises a `RuntimeError` naming `job_id` so the caller can poll the job again
         later by hand -- the compile itself may well still be running. The overall
         `compile_timeout_s` wall-clock cap still applies on top of this.
+
+        A-5: upstream publishes no enum of job states, so `_SUCCESS_STATES` and
+        `_FAILED_STATES` are both guesses about a vocabulary that can grow. Anything
+        outside them used to fall through to the sleep loop and be polled for the whole
+        `compile_timeout_s` -- 720 GETs at the defaults -- while the server's own `error`
+        string sat in the response unread. A status *with a non-null `error` and no
+        `program_id`* is therefore treated as terminal failure whatever it is called
+        (`infrastructure_error`, `redis_unavailable`, or a `completed` that named no
+        program), with `error` surfaced verbatim. A status this code does not recognise
+        and that carries **no** error is still polled: a server is free to introduce a
+        new *transient* state, and failing a compile the user has already paid for
+        because its status string is unfamiliar would be strictly worse than waiting.
+
+        When the poll loop itself times out, `cancel_compile` is attempted once
+        (best-effort, never masking the timeout) -- the job is queued and billable, and
+        nothing else in this process is ever going to come back for it.
         """
         job_id = job.get("job_id") if isinstance(job, dict) else getattr(job, "job_id", None)
         if not job_id:
@@ -439,6 +663,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                         f"later with this job_id: {job_id}"
                     ) from failure_exc
                 if time.monotonic() >= deadline:
+                    self._cancel_job_best_effort(paw, job_id)
                     raise TimeoutError(
                         f"ProgramAsWeights compile {job_id} still unreachable after "
                         f"{self.compile_timeout_s}s"
@@ -451,15 +676,49 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             get = status_obj.get if isinstance(status_obj, dict) else lambda k, d=None: getattr(status_obj, k, d)
             status = str(get("status") or "").lower()
             program_id = get("program_id")
+            error = get("error")
             if status in _FAILED_STATES:
-                raise RuntimeError(f"ProgramAsWeights finetune compile {job_id} {status}: {get('error')!r}")
+                raise RuntimeError(f"ProgramAsWeights finetune compile {job_id} {status}: {error!r}")
             if program_id and (status in _SUCCESS_STATES or get("completed_at")):
                 return str(program_id), get("slug"), status, extract_snapshot(status_obj)
+            # A-5: the job reported a problem and named no program. Whatever the status
+            # string is, there is nothing left to wait for -- fail now, with the
+            # server's own explanation, instead of polling until compile_timeout_s.
+            if error is not None and not program_id:
+                raise RuntimeError(
+                    f"ProgramAsWeights finetune compile {job_id} reported status "
+                    f"{status!r} with no program_id and an error, so it is treated as "
+                    f"terminal rather than polled further: {error!r}"
+                )
             if time.monotonic() >= deadline:
+                self._cancel_job_best_effort(paw, job_id)
                 raise TimeoutError(
                     f"ProgramAsWeights compile {job_id} still {status!r} after {self.compile_timeout_s}s"
                 )
             time.sleep(self.poll_interval_s)
+
+    @staticmethod
+    def _cancel_job_best_effort(paw: Any, job_id: str) -> None:
+        """A-5: ask the service to cancel a job this process has stopped waiting for.
+
+        Strictly best-effort. The caller is already raising, and the reasons this can
+        fail are all ones that must not replace the timeout the caller needs to see: an
+        SDK too old to expose `cancel_compile`, a 409 because the job has already
+        started (upstream documents that response), or the same network fault that
+        caused the timeout in the first place.
+        """
+        cancel = getattr(paw, "cancel_compile", None)
+        if not callable(cancel):
+            return
+        try:
+            cancel(job_id)
+        except Exception:
+            warnings.warn(
+                f"ProgramAsWeights compile {job_id} timed out and could not be "
+                "cancelled; it may still be running (and billable) server-side.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # ------------------------------------------------------------------ infer
 
