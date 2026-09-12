@@ -233,7 +233,12 @@ def _rotate_history_if_full(history_path: str, incoming_bytes: int) -> None:
         pass
 
 
-def append_history_entry(output_path: Union[str, Path], manifest: Dict[str, Any]) -> None:
+def append_history_entry(
+    output_path: Union[str, Path],
+    manifest: Dict[str, Any],
+    *,
+    fsync: bool = True,
+) -> None:
     """Append one line of **lineage** to `<output_path>.history.jsonl`.
 
     The line is `manifest` filtered through `_HISTORY_ALLOWED_FIELDS` -- ids, hashes,
@@ -253,10 +258,22 @@ def append_history_entry(output_path: Union[str, Path], manifest: Dict[str, Any]
     case for every compile after the first.
 
     Two additions from D-4 beyond the filter: the file is rotated rather than grown
-    without limit (see `_rotate_history_if_full`), and the append is `fsync`ed. A compile
-    takes seconds to minutes, so one fsync costs nothing measurable at this call site, and
-    without it the lineage record of a compile can be lost to a power cut the compile
-    itself survived.
+    without limit (see `_rotate_history_if_full`), and the append is `fsync`ed.
+
+    **`fsync` is a parameter because Phase 0's rationale for it -- "compiles are slow, one
+    fsync is free" -- is true of one shipped backend and measurably false of the other.**
+    A ProgramAsWeights compile is seconds (fast) to minutes (finetune) of billed,
+    irreversible server-side work whose only local record is this line: ~11 ms of disk sync
+    is free and what it protects is irreplaceable. A `MockPAWBackend` compile is ~0.2 ms of
+    in-memory simulation, so the same fsync is a ~160x slowdown -- on a path that
+    `@compile_on_hit(sync_compile=True)` runs on the caller's own request thread -- to
+    protect something reproducible for nothing. Measured, not assumed: 0.22 ms -> 35 ms p50,
+    against a documented 50 ms budget that `atomic_write_text`'s own two fsyncs (Track G's
+    D-3) had already taken ~23 ms of.
+
+    The default is `True`, so durability is what a new or third-party backend gets without
+    asking; declining it is the explicit, commented choice of a caller that knows its
+    compile is free to repeat.
     """
     history_path = str(output_path) + ".history.jsonl"
     entry = {k: v for k, v in manifest.items() if k in _HISTORY_ALLOWED_FIELDS}
@@ -266,8 +283,9 @@ def append_history_entry(output_path: Union[str, Path], manifest: Dict[str, Any]
     try:
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(line)
-            f.flush()
-            os.fsync(f.fileno())
+            if fsync:
+                f.flush()
+                os.fsync(f.fileno())
     except BaseException:
         # os.fdopen took ownership of fd; on the (unlikely) chance it fails before
         # that handoff completes, avoid leaking the raw descriptor.

@@ -157,7 +157,14 @@ class MockPAWBackend(AbstractPAWBackend):
         # across it would serialize every concurrent infer()/compile() call against
         # any other adapter_path behind it too.
         atomic_write_text(output_path, json.dumps(adapter_data, indent=2))
-        append_history_entry(output_path, adapter_data)
+        # D-4: `fsync=False`, deliberately. A mock "compile" is ~0.2 ms of in-memory
+        # simulation, reproducible for free, and `@compile_on_hit(sync_compile=True)` runs
+        # it on the caller's own request thread -- so an fsync here is a ~160x slowdown
+        # buying durability for something nothing would miss. It would also spend the rest
+        # of this method's documented 50 ms budget (`test_mock_compilation_creates_artifact`),
+        # which `atomic_write_text`'s own two fsyncs already use ~23 ms of. The real
+        # backend, whose compiles are billed and irreversible, keeps the default.
+        append_history_entry(output_path, adapter_data, fsync=False)
 
         return output_path
 
