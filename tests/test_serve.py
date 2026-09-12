@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 from paw_kit.backend.mock import MockPAWBackend
 from paw_kit.cli import app
 from paw_kit.jit.db import TraceDB
-from paw_kit.serve.docker import export_docker_scaffold, _PYTHON_BASE_IMAGE
+from paw_kit.serve.docker import export_docker_scaffold
 from paw_kit.serve.server import ServerState, create_app
 
 
@@ -552,7 +552,13 @@ def test_serve_throttled_client_oversized_body_gets_429_not_413_X_1(mock_adapter
 
     assert client.post("/invoke", json={"input": "Urgent payment failure"}).status_code == 200
 
-    large_payload = b"a" * (5 * 1024 * 1024)  # bigger than the new lower body cap
+    # Bigger than *both* the new lower body cap (2MB) and the old 10MB one -- must
+    # stay oversized regardless of which cap is in effect, so this genuinely
+    # exercises the ordering (RateLimit ahead of PayloadSizeLimit), not just the cap
+    # value: at `main`, an 11MB body is caught by the (there, outermost)
+    # PayloadSizeLimitMiddleware before RateLimitMiddleware (there, innermost) ever
+    # runs, giving 413 regardless of the caller's rate-limit state.
+    large_payload = b"a" * (11 * 1024 * 1024)
     res = client.post("/invoke", content=large_payload)
     assert res.status_code == 429
 
@@ -1177,6 +1183,8 @@ def test_docker_exporter_scaffold(mock_adapter: Path, tmp_path: Path) -> None:
     # note): a bare "FROM python:3.12-slim" substring check would keep passing by
     # accident once a digest is appended, so this asserts the actual pinned
     # reference explicitly instead.
+    from paw_kit.serve.docker import _PYTHON_BASE_IMAGE
+
     assert f"FROM {_PYTHON_BASE_IMAGE}" in dockerfile
     assert "USER app" in dockerfile
     assert "paw-serve" in dockerfile
