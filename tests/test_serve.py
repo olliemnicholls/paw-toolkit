@@ -631,6 +631,71 @@ def test_serve_body_read_timeout_returns_408_on_stall_X_3() -> None:
     assert start["status"] == 408
 
 
+def test_serve_body_read_deadline_boundary_at_exactly_zero_X_3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify X-3's deadline pre-check (`if remaining <= 0`, at the top of the
+    buffering loop) is inclusive of exactly zero remaining time, not just strictly
+    negative -- distinct from the test above, which only exercises the
+    `asyncio.wait_for(...)` timeout path (a few lines further down) and never hits
+    this specific comparison with `remaining == 0`. Deterministic: only
+    `paw_kit.serve.server`'s *own* module-level `time` name is replaced (not the
+    global `time` module `sys.modules['time']` holds, which asyncio's event loop
+    also relies on for its own scheduling) with a fake whose `monotonic()` returns
+    a fixed two-value sequence chosen so `remaining` computes to exactly 0.0 on the
+    loop's first pass -- real wall-clock timing could never reliably land on that
+    exact boundary."""
+    import paw_kit.serve.server as server_module
+    from paw_kit.serve.server import PayloadSizeLimitMiddleware
+
+    # Call 1: `deadline = time.monotonic() + body_read_timeout` (body_read_timeout
+    # is 0.0, so deadline == 100.0). Call 2: the loop's `remaining = deadline -
+    # time.monotonic()` -- also 100.0, so remaining == 0.0 exactly.
+    clock_calls = iter([100.0, 100.0])
+    fake_time = type("FakeTime", (), {"monotonic": staticmethod(lambda: next(clock_calls))})()
+    monkeypatch.setattr(server_module, "time", fake_time)
+
+    receive_calls = 0
+
+    async def receive() -> Dict[str, Any]:
+        nonlocal receive_calls
+        receive_calls += 1
+        raise AssertionError("receive() must not be called once the deadline is reached")
+
+    sent: list = []
+
+    async def send(message: Dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def inner_app(scope: object, receive: object, send: object) -> None:
+        raise AssertionError("downstream app must not be reached")
+
+    scope = {"type": "http", "headers": []}
+    middleware = PayloadSizeLimitMiddleware(
+        inner_app, max_body_bytes=10 * 1024 * 1024, body_read_timeout=0.0
+    )
+
+    asyncio.run(middleware(scope, receive, send))
+
+    assert receive_calls == 0
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 408
+
+
+def test_format_max_body_message_integer_vs_fractional_mb_X_2() -> None:
+    """Verify X-2's dynamic 413 message text pins both branches of
+    `if mb == int(mb)`: an exact-megabyte cap renders as a bare integer ("2MB"),
+    not "2.00MB", while a non-exact cap renders with two decimal places. Without
+    this, a mutant flipping the comparison (or a future refactor) could silently
+    start showing "2.00MB" for the default 2MB cap and nothing would notice --
+    exactly the "message describes a limit other than the one enforced" class of
+    bug X-2's own docstring calls out."""
+    from paw_kit.serve.server import _format_max_body_message
+
+    assert _format_max_body_message(2 * 1024 * 1024) == "Payload Too Large (maximum 2MB)"
+    assert _format_max_body_message(int(1.5 * 1024 * 1024)) == "Payload Too Large (maximum 1.50MB)"
+
+
 def test_serve_invoke_returns_503_when_inference_busy_PAW_SERVE_04(
     mock_adapter: Path,
 ) -> None:
@@ -1153,6 +1218,180 @@ def test_serve_rate_limit_non_integer_env_value_falls_back_X_8(
     assert "PAW_RATE_LIMIT_PER_MINUTE" in caplog.text
 
 
+def test_int_env_with_fallback_zero_is_not_negative_X_8(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify the exact boundary in X-8's `_int_env_with_fallback`: `if value < 0`
+    must not treat 0 itself as negative. 0 is a legitimate, intentional value here
+    (PAW_RATE_LIMIT_PER_MINUTE=0 explicitly disables the limiter, see
+    test_serve_rate_limit_disabled_when_zero_PAW_SERVE_10) -- a mutant widening the
+    comparison to `<=` would additionally clamp 0 to 0 (a no-op on the return value)
+    but log the same "is negative" warning for a value that was never negative,
+    which is exactly the false-positive this test would catch even though the
+    *return value* is identical either way."""
+    from paw_kit.serve.server import _int_env_with_fallback
+
+    monkeypatch.setenv("PAW_RATE_LIMIT_PER_MINUTE", "0")
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+
+    result = _int_env_with_fallback("PAW_RATE_LIMIT_PER_MINUTE", 120)
+
+    assert result == 0
+    assert "is negative" not in caplog.text
+
+
+def test_serve_rate_limit_global_bucket_allows_exactly_one_token_X_4() -> None:
+    """Verify the exact boundary in X-4's global ceiling: `if self._global_tokens <
+    1.0` must allow a consume when exactly 1.0 token is available (not just when
+    strictly more than 1.0 is), and correctly deny once it drops to 0.0. A mutant
+    widening this to `<=` would reject a caller with a perfectly full one-token
+    budget, which no request-level test above catches (they only ever observe the
+    limiter through many requests, never pin the single-token boundary case
+    directly)."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(_noop_app, requests_per_minute=60, global_requests_per_minute=1)
+    now = middleware._global_last_refill  # same instant: refill contributes exactly 0
+
+    assert middleware._consume_global_locked(now) is True  # exactly 1.0 tokens -> allowed
+    assert middleware._consume_global_locked(now) is False  # now 0.0 tokens -> denied
+
+
+def test_serve_rate_limit_eviction_boundary_at_epsilon_X_5() -> None:
+    """Verify the exact boundary in X-5's eviction guard: `if projected >=
+    self.capacity - 1e-9` must still evict a bucket sitting *exactly* at that
+    epsilon-tolerance threshold (the "approximately full" case the epsilon exists
+    for), not only one strictly above it. A mutant narrowing this to `>` would
+    refuse to evict a bucket parked exactly on the boundary, which
+    `test_serve_rate_limit_eviction_preserves_throttled_bucket_X_5` cannot detect:
+    that test only ever produces buckets far from this exact floating-point
+    boundary."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(
+        _noop_app, requests_per_minute=60, global_requests_per_minute=10**9
+    )
+    now = time.monotonic()
+    # Token count placed exactly on the tolerance boundary, with last_refill == now
+    # so the projection adds zero refill -- `projected` is exactly
+    # `capacity - 1e-9`, the precise value the comparison tests against.
+    middleware._buckets["idle-at-boundary"] = (60.0 - 1e-9, now)
+
+    assert middleware._evict_one_full_bucket_locked(now) is True
+    assert "idle-at-boundary" not in middleware._buckets
+
+
+def test_serve_rate_limit_real_client_does_not_log_none_warning_X_4(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify X-4's log-once guard is a genuine `and`, not `or`:
+    `if client_was_none and not self._warned_no_client` must stay silent for a
+    request with a real (non-None) client address, even on a fresh middleware
+    instance where `_warned_no_client` is still False. A mutant widening this to
+    `or` would fire the "scope['client'] is None" warning on literally the first
+    request handled by any middleware instance, real client address or not --
+    undetectable by the existing client=None test, which never checks the
+    negative case."""
+    from paw_kit.serve.server import RateLimitMiddleware
+
+    caplog.set_level(logging.WARNING, logger="paw_kit.serve")
+
+    async def _noop_app(scope: object, receive: object, send: object) -> None:
+        pass
+
+    middleware = RateLimitMiddleware(_noop_app, requests_per_minute=60)
+    scope = {"type": "http", "path": "/invoke", "client": ("10.0.0.1", 12345)}
+
+    assert asyncio.run(_rate_limit_allows(middleware, scope)) is True
+    assert caplog.records == []
+
+
+def test_serve_execution_timeout_returns_exactly_503_X_7(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify the execution-timeout path in `_execute_with_telemetry` (X-7) returns
+    exactly 503, pinned as a literal rather than merely "not 200" -- distinct from
+    the admission-overflow 503 the busy-inference tests above exercise (a
+    different call site in the same function): this specifically forces an
+    *admitted* inference to overrun `_INFERENCE_SLOT_TIMEOUT_SECONDS`, which no
+    existing test reaches (they all use sub-second sleeps well under the 20s
+    default)."""
+    import paw_kit.serve.server as server_module
+
+    monkeypatch.setattr(server_module, "_INFERENCE_SLOT_TIMEOUT_SECONDS", 0.05)
+
+    class SlowBackend(MockPAWBackend):
+        def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
+            time.sleep(0.3)
+            return super().infer(adapter_path, input_text, grammar_constraint)
+
+    fastapi_app = create_app(mock_adapter, backend=SlowBackend(), allow_anonymous=True)
+    client = TestClient(fastapi_app)
+
+    res = client.post("/invoke", json={"input": "Urgent payment failure"})
+    assert res.status_code == 503
+    assert "execution bound" in res.json()["detail"]
+
+
+def test_serve_trust_proxy_header_env_var_gates_xff_trust_X_4(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify X-4's `PAW_TRUST_PROXY_HEADER` env-var parsing in create_app
+    (`... in ("1", "true", "yes", "on")`) actually gates whether
+    X-Forwarded-For is trusted, end to end through the real middleware stack --
+    the existing X-4 tests construct RateLimitMiddleware directly with an explicit
+    `trust_proxy_header=` kwarg and never exercise this env-var-parsing line at
+    all. A mutant flipping `in` to `not in` would invert the opt-in entirely."""
+    monkeypatch.setenv("PAW_TRUST_PROXY_HEADER", "1")
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, allow_anonymous=True, requests_per_minute=1
+    )
+    client = TestClient(fastapi_app)
+
+    res1 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.5"}
+    )
+    assert res1.status_code == 200
+    # Different spoofed address, same real TestClient peer -- trusted, so this is a
+    # fresh bucket rather than sharing the first request's exhausted one.
+    res2 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.9"}
+    )
+    assert res2.status_code == 200
+
+
+def test_serve_trust_proxy_header_disabled_by_default_ignores_xff_X_4(
+    mock_adapter: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion to the test above: with PAW_TRUST_PROXY_HEADER unset (the
+    default), X-Forwarded-For must be ignored -- both requests key on the real
+    (identical) TestClient peer address and share one budget. Together the two
+    tests bracket both sides of the `in` boundary that a `not in` mutant would
+    invert."""
+    monkeypatch.delenv("PAW_TRUST_PROXY_HEADER", raising=False)
+    backend = MockPAWBackend()
+    fastapi_app = create_app(
+        mock_adapter, backend=backend, allow_anonymous=True, requests_per_minute=1
+    )
+    client = TestClient(fastapi_app)
+
+    res1 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.5"}
+    )
+    assert res1.status_code == 200
+    res2 = client.post(
+        "/invoke", json={"input": "x"}, headers={"X-Forwarded-For": "203.0.113.9"}
+    )
+    assert res2.status_code == 429
+
+
 def test_server_state_metrics_calculation() -> None:
     """Verify ServerState percentile calculation across request latencies."""
     state = ServerState()
@@ -1281,6 +1520,49 @@ def test_docker_exporter_pinned_requirements_txt_PAW_DOCKER_03(
     assert "COPY requirements.txt /app/requirements.txt" in dockerfile
     assert "uv pip install --system -r requirements.txt" in dockerfile
     assert "uv pip install --system paw-kit fastapi uvicorn httpx" not in dockerfile
+
+
+def test_resolved_dependency_names_reads_real_environment_metadata_X_10() -> None:
+    """Verify `_resolved_dependency_names` itself returns the actual names resolved
+    from this environment's installed `paw-kit` metadata (non-empty, and matching
+    known [project.dependencies] entries) -- called directly, not through
+    `_requirements_txt_content`'s own `or list(_FALLBACK_DEPENDENCY_NAMES)`
+    fallback, which happens to contain the same names in this environment and so
+    cannot by itself distinguish "resolved from the environment" from "silently
+    fell back to the hardcoded tuple" (see the mutant `_pkg_requires(package) or
+    []` -> `and []`, which makes this function always return `[]` whenever the
+    package genuinely has requirements -- masked at the `_requirements_txt_content`
+    level by that same fallback, but not here)."""
+    from paw_kit.serve.docker import _resolved_dependency_names
+
+    names = _resolved_dependency_names("paw-kit")
+
+    assert names, "expected paw-kit's installed metadata to yield a non-empty list"
+    assert "fastapi" in names
+    assert "pydantic" in names
+
+
+def test_requirements_txt_uses_resolved_names_over_fallback_when_present_X_10(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify `_requirements_txt_content`'s `_resolved_dependency_names("paw-kit")
+    or list(_FALLBACK_DEPENDENCY_NAMES)` actually prefers a non-empty resolved
+    list over the fallback -- a mutant flipping `or` to `and` would silently
+    discard any real resolved list and substitute the hardcoded fallback tuple
+    instead whenever resolution succeeds (i.e. always, in practice), which the
+    test above cannot catch on its own since it only inspects
+    `_resolved_dependency_names` in isolation, not how its result is actually
+    used. Distinguished here by monkeypatching resolution to a name that is not
+    in the fallback tuple at all."""
+    import paw_kit.serve.docker as docker_module
+
+    monkeypatch.setattr(docker_module, "_resolved_dependency_names", lambda package: ["pytest"])
+
+    content = docker_module._requirements_txt_content("mock")
+
+    assert "pytest==" in content
+    assert "fastapi==" not in content
+    assert "uvicorn==" not in content
 
 
 def test_docker_exporter_pins_full_dependency_set_and_no_latest_tags_X_10(

@@ -89,8 +89,11 @@ def _resolved_dependency_names(package: str) -> "list[str]":
     `"programasweights<0.5.0,>=0.4.4; extra == 'real'"`) are excluded -- this is the
     *bare* install's dependency set; `--backend real`'s extra is folded into the
     `paw-kit[real]==` line separately by the caller, matching the pre-existing
-    behaviour, and `programasweights` itself is pinned directly, best-effort, only
-    when this environment actually has it installed (see `_requirements_txt_content`).
+    behaviour. `programasweights` itself is not pinned by name here even for
+    `--backend real`: it is an optional extra, not a `[project.dependencies]`
+    entry, and X-10 does not ask for a new pin beyond the four names it names by
+    name -- `paw-kit[real]==` already constrains pip to pyproject.toml's declared
+    range for it.
     """
     try:
         requirement_strings = _pkg_requires(package) or []
@@ -100,7 +103,15 @@ def _resolved_dependency_names(package: str) -> "list[str]":
     for requirement in requirement_strings:
         if ";" in requirement:
             continue
-        name = re.split(r"[<>=!~\s\[]", requirement, maxsplit=1)[0].strip()
+        # No `maxsplit=` here: only index [0] (the name before the first
+        # version/extra delimiter) is ever used below, and that value is provably
+        # identical regardless of how many *further* splits are permitted after
+        # the first one -- `maxsplit=1` was a meaningless-but-harmless leftover
+        # that a mutation-testing pass correctly flagged as unasserted (changing
+        # it to any other positive number cannot change this line's output for
+        # any input), so it is removed rather than pinned by a test that would
+        # only be testing that a no-op stayed a no-op.
+        name = re.split(r"[<>=!~\s\[]", requirement)[0].strip()
         if name:
             names.append(name)
     return sorted(set(names))
