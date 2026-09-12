@@ -1184,3 +1184,131 @@ def test_precheck_http_failure_warns_distinctly_A_3(key: None, tmp_path: Path) -
     manifest = json.loads(out.read_text())
     assert manifest["cache_hit"] is None
     assert manifest["program_id"] == "prog-fast"
+
+
+# ============================================== A-6: the folded-example count
+#
+# `examples_folded_into_spec` was `min(len(examples), max_spec_examples)` while the spec
+# renderer filtered to usable dicts first. Any malformed example therefore inflated the
+# reported count above what actually reached the spec -- and that count is mirrored into
+# every published measurement artifact.
+
+
+def _rendered_inputs(spec_text: str) -> List[str]:
+    """The `Input:` lines `_render_spec_with_examples` actually emitted -- the ground
+    truth `examples_folded_into_spec` is supposed to report."""
+    return [line[len("Input: "):] for line in spec_text.splitlines() if line.startswith("Input: ")]
+
+
+def test_folded_count_matches_what_was_actually_rendered_A_6(
+    key: None, tmp_path: Path
+) -> None:
+    """The count is what reached the spec, not what was offered."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, max_spec_examples=8)
+    out = tmp_path / "a.paw"
+    examples = [
+        {"input": "a", "output": "1"},
+        {"bad": 1},                      # no input/output keys: never rendered
+        {"input": "b"},                  # half an example: never rendered
+        {"input": "c", "output": "3"},
+        "not even a dict",               # type: ignore[list-item]
+    ]
+
+    backend.compile("Classify.", examples, str(out))  # type: ignore[arg-type]
+
+    manifest = json.loads(out.read_text())
+    rendered = _rendered_inputs(sdk.compile_calls[0]["spec"])
+    assert rendered == ["a", "c"]
+    assert manifest["examples_folded_into_spec"] == len(rendered), (
+        f"manifest claims {manifest['examples_folded_into_spec']} examples were folded "
+        f"into the spec, but {len(rendered)} actually were -- and that claim is mirrored "
+        "into every published artifact"
+    )
+    assert manifest["examples_count"] == len(examples), "the offered count is still reported"
+
+
+def test_folded_count_includes_a_non_str_example_that_still_renders_A_6(
+    key: None, tmp_path: Path
+) -> None:
+    """The case that separates the right fix from the plausible wrong one.
+
+    `len(folded_example_ids)` looks like the obvious denominator and is wrong here.
+    `select_folded_examples` (and the renderer) require only that the `input`/`output`
+    **keys** exist, and the renderer formats the values through an f-string -- so
+    `{"input": 3, "output": 4}` *is* folded into the spec. `example_id` additionally
+    requires both values be `str`, so it yields no id for it. Counting ids would
+    therefore **under**-report what was published, which is the same class of wrong
+    answer as over-reporting it.
+
+    So the two numbers are deliberately different, and the manifest is honest about
+    both: `examples_folded_into_spec` is what reached the spec, `folded_example_ids` is
+    the subset that could be identified.
+    """
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, max_spec_examples=8)
+    out = tmp_path / "a.paw"
+    examples = [{"input": "a", "output": "1"}, {"input": 3, "output": 4}]
+
+    backend.compile("Classify.", examples, str(out))  # type: ignore[arg-type]
+
+    manifest = json.loads(out.read_text())
+    rendered = _rendered_inputs(sdk.compile_calls[0]["spec"])
+    assert rendered == ["a", "3"], "the non-str example is rendered into the spec"
+    assert manifest["examples_folded_into_spec"] == 2 == len(rendered)
+    assert len(manifest["folded_example_ids"]) == 1, (
+        "an unidentifiable example must not get a lineage id -- but it was still "
+        "published, so it must still be counted"
+    )
+
+
+def test_folded_count_respects_the_cap_after_filtering_A_6(key: None, tmp_path: Path) -> None:
+    """The cap applies to the *usable* examples, so malformed ones do not consume slots."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, max_spec_examples=2)
+    out = tmp_path / "a.paw"
+    examples = [{"bad": 1}, {"input": "a", "output": "1"}, {"input": "b", "output": "2"},
+                {"input": "c", "output": "3"}]
+    backend.compile("Classify.", examples, str(out))  # type: ignore[arg-type]
+    assert _rendered_inputs(sdk.compile_calls[0]["spec"]) == ["a", "b"]
+    assert json.loads(out.read_text())["examples_folded_into_spec"] == 2
+
+
+def test_public_leak_warning_stops_firing_when_nothing_was_folded_A_6(
+    key: None, tmp_path: Path
+) -> None:
+    """A-6's knock-on. The public-leak warning is gated on `folded_count > 0`, so an
+    inflated count made it warn about publishing traced examples when none were
+    published. A warning that fires when it should not is how a warning stops being
+    read."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk, public=True, max_spec_examples=8)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        backend.compile("Classify.", [{"bad": 1}, {"input": "x"}], str(tmp_path / "a.paw"))  # type: ignore[arg-type]
+
+
+def test_renderer_and_selector_share_one_predicate_A_6() -> None:
+    """Pattern 2, closed: `_render_spec_with_examples` used to re-implement
+    `select_folded_examples`'s "usable" filter, so the count and the content could drift
+    apart silently. They are now one predicate, and this pins that they agree -- including
+    on the inputs where a hand-copied duplicate would most plausibly have diverged.
+    """
+    from paw_kit.backend.manifest_lineage import select_folded_examples
+
+    cases: List[Any] = [
+        [],
+        [{"input": "a", "output": "b"}],
+        [{"bad": 1}],
+        [{"input": "a"}, {"output": "b"}],
+        [{"input": None, "output": None}],
+        [{"input": 3, "output": 4}],
+        ["string", 7, None, {"input": "a", "output": "b"}],
+        [{"input": "a", "output": "b", "extra": "kept"}],
+    ]
+    for examples in cases:
+        for limit in (0, 1, 5):
+            selected = select_folded_examples(examples, limit)
+            rendered = _rendered_inputs(_render_spec_with_examples("S", examples, limit))
+            assert len(rendered) == len(selected), (examples, limit)
+            assert rendered == [f"{ex['input']}" for ex in selected], (examples, limit)

@@ -217,6 +217,12 @@ def build_summary(label: str, adapter_path: str, manifest: dict, rows: list,
         "public_requested": manifest.get("public_requested", manifest.get("public")),
         "public_confirmed": manifest.get("public_confirmed"),
         "public_confirmed_reason": manifest.get("public_confirmed_reason"),
+        # A-6: `examples_folded_into_spec` is now the count of examples that actually
+        # reached the spec text, not the number offered to compile() (a malformed example
+        # used to inflate it, and this artifact is where that inflated number was
+        # published). `folded_example_ids` is mirrored alongside it so the artifact names
+        # *which* examples those were, not just how many -- the ids are SHA-256 digests of
+        # input+output, so this publishes no traced text.
         "examples_folded_into_spec": manifest.get("examples_folded_into_spec"),
         "folded_example_ids": manifest.get("folded_example_ids"),
         "n": all_scored["n"],

@@ -79,6 +79,7 @@ from paw_kit.backend.manifest_lineage import (
     extract_snapshot,
     folded_example_ids,
     read_parent_lineage,
+    select_folded_examples,
     sha256_text,
 )
 
@@ -112,12 +113,19 @@ def _sdk_installed() -> bool:
 
 
 def _render_spec_with_examples(spec: str, examples: List[Dict[str, str]], limit: int) -> str:
-    """Append up to `limit` input/output pairs to the spec as few-shot demonstrations."""
-    usable = [ex for ex in examples if isinstance(ex, dict) and "input" in ex and "output" in ex]
-    if limit <= 0 or not usable:
+    """Append up to `limit` input/output pairs to the spec as few-shot demonstrations.
+
+    A-6: the "usable" filter used to be re-implemented here, a second copy of
+    `select_folded_examples`'s predicate (Pattern 2 waiting to happen -- the count and the
+    content could drift apart with nothing noticing). There is one predicate now, and
+    `select_folded_examples` is it, so `examples_folded_into_spec` and the spec text can
+    no longer disagree about what was folded.
+    """
+    folded = select_folded_examples(examples, limit)
+    if not folded:
         return spec
     lines = [spec.rstrip(), "", "Examples of correct behaviour:"]
-    for ex in usable[:limit]:
+    for ex in folded:
         lines.append(f"Input: {ex['input']}")
         lines.append(f"Output: {ex['output']}")
         lines.append("")
@@ -260,7 +268,19 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             )
 
         full_spec = _render_spec_with_examples(spec, examples, self.max_spec_examples)
-        folded_count = min(len(examples), self.max_spec_examples)
+        # A-6: what was actually folded, not what was offered. This was
+        # `min(len(examples), self.max_spec_examples)`, which counted every example handed
+        # in -- including malformed ones the renderer silently skipped -- and that inflated
+        # number was mirrored into every published measurement artifact.
+        #
+        # `len(folded_ids)` is the plausible wrong answer and is rejected deliberately:
+        # `select_folded_examples` requires only that the `input`/`output` *keys* exist,
+        # which is exactly what the renderer folds, while `example_id` additionally
+        # requires both *values* be `str`. So `{"input": 3, "output": 4}` reaches the spec
+        # but yields no id, and counting ids would **under**-report what was published.
+        # Two honest numbers, not one guess: this is what went in, `folded_example_ids` is
+        # the subset that could be identified.
+        folded_count = len(select_folded_examples(examples, self.max_spec_examples))
         folded_ids = folded_example_ids(examples, self.max_spec_examples)
 
         # Read whatever manifest already sits at output_path *before* it is

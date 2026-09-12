@@ -275,7 +275,14 @@ def main() -> int:
         # B-6(b): the adapter's identity, mirrored into every artifact, so which adapter
         # produced which table is recoverable without the gitignored .paw file.
         "program_id": manifest.get("program_id"),
+        # A-6: `examples_folded_into_spec` is now the count of examples that actually
+        # reached the spec text, not the number offered to compile() (a malformed example
+        # used to inflate it, and this artifact is where that inflated number was
+        # published). `folded_example_ids` is mirrored alongside it so the artifact names
+        # *which* examples those were, not just how many -- the ids are SHA-256 digests of
+        # input+output, so this publishes no traced text.
         "examples_folded_into_spec": manifest.get("examples_folded_into_spec"),
+        "folded_example_ids": manifest.get("folded_example_ids"),
         # A-2: the manifest key that records the *requested* visibility was renamed
         # `public` -> `public_requested`, and `public_confirmed` (three-state: True /
         # False / None-with-a-reason) now carries what the server actually reported.
