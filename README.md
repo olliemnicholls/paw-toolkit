@@ -117,7 +117,6 @@ for i in range(1, 6):
 - [Serve over HTTP](./docs/serving.md): `paw-serve`, `/ready`, Docker export.
 - [Results](./docs/results.md): every measured number, one page.
 - [What is real and what is mocked](./docs/what-is-real.md).
-- [Roadmap](./docs/roadmap.md).
 
 `scripts/` and `measurements/` hold the scripts and raw output behind the results page;
 `tools/` is the project's own test tooling. None of it is needed to use paw-kit.

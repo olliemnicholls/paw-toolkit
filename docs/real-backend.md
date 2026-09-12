@@ -93,8 +93,7 @@ each. Indicative, not a benchmark.
    helps is exactly the kind of question `paw-test` is for. It is not assumed.
 2. **No grammar-constrained decoding.** The SDK's callable has no grammar or logits hook,
    so paw-kit cannot constrain generation to a schema. `paw.load` validates output after
-   generation with Pydantic and falls back on failure. A supported hook is on the
-   [roadmap](./roadmap.md) as an upstream request.
+   generation with Pydantic and falls back on failure.
 
 ## Bringing your own runtime
 
