@@ -2285,3 +2285,15 @@ tickets), but the mechanism is general: a manifest's `public` field records what
 scripts unchanged returns the same old public program regardless of what `public=` the
 caller passes now. Publishing this repository publishes every `program_id` it commits, and
 each one resolves, permanently. A later code fix does not reach backward.
+
+> **Corrected 2026-09-12, Track D (`A-2`).** The sentence above — "a manifest's `public`
+> field records what was *requested*, not what the server confirmed" — was true when
+> written and is no longer the shipped behaviour. The manifest now keeps `public_requested`
+> and a three-state `public_confirmed` (`true` / `false` / `null`, with
+> `public_confirmed_reason` saying why on `null`) apart; passing `verify_visibility=True`
+> asks the server directly after a compile and records what it says, at the cost of one
+> extra authenticated GET. This does not reach backward: the six historical programs above
+> were compiled with no verification call at all, so nothing retroactively fills in their
+> `public_confirmed`, and they remain public and anonymously downloadable regardless. What
+> changes is only what a *future* compile's manifest can tell you about itself, and only
+> when `verify_visibility=True` is passed.
