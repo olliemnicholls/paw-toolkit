@@ -19,11 +19,11 @@ This example shows the loop `paw-kit` uses to go after **adversarial edge cases,
 
 **Note:** in this example both the "teacher" and the adapter are deterministic Python stubs
 (`MockPAWBackend`), so the loop always converges. That demonstrates the loop's mechanics, not
-that active learning improves a real compiled function. It has been run for real — a real
-compiled adapter, a live Claude teacher, this same suite — and repaired **0 of 11** failures,
-correctly: every teacher label failed the suite's own assertions, because the suite has no
-"not a date" case for whitespace-only input. See `measurements/README.md`, "Active learning,
-for real". The loop is bounded and best-effort; it does not promise 100%.
+that active learning improves a real compiled function. Run for real against this same
+suite with a live Claude teacher, the loop repaired nothing, and correctly so: every
+teacher label failed the suite's own assertions, because the suite had no "not a date"
+case for whitespace-only input. See the [results page](../../docs/results.md). The loop is
+bounded and best-effort; it does not promise 100%.
 
 ## Running the Example
 

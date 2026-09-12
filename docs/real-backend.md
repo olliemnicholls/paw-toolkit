@@ -72,7 +72,8 @@ From the runs in [`measurements/`](../measurements/README.md), one machine each,
 each. Indicative, not a benchmark.
 
 - **Compile**: 1–5 s wall time with the default fast compiler; ~3 min with `paw-ft-bs48`.
-  On one phone-extraction task the two produced byte-identical output on 132 of 134 inputs.
+  On easy tasks the two produce near-identical adapters; on tasks that need an arbitrary
+  mapping from the spec, only the finetune compiler learns it.
 - **First call**: 2 s to ~110 s, depending on whether the base model and program are
   already in the SDK cache.
 - **Steady state**: ~65 ms per call on an RTX 3080, ~89 ms on a shared A100, ~5.9 s on
@@ -90,7 +91,7 @@ each. Indicative, not a benchmark.
 1. **The upstream compiler takes a spec, not a dataset.** It generates its own examples
    with teacher models. paw-kit's traced calls and active-learning labels can only reach it
    as few-shot demonstrations appended to the spec text (`max_spec_examples`). Whether that
-   helps is exactly the kind of question `paw-test` is for. It is not assumed.
+   helps depends on the task, and `paw-test compare` is how to find out.
 2. **No grammar-constrained decoding.** The SDK's callable has no grammar or logits hook,
    so paw-kit cannot constrain generation to a schema. `paw.load` validates output after
    generation with Pydantic and falls back on failure.
@@ -99,9 +100,8 @@ each. Indicative, not a benchmark.
 
 `AbstractPAWBackend` is three methods: `compile`, `infer`, `is_available`. Implement them
 and pass `backend=` to `paw.load` or `@compile_on_hit`, and paw-kit will drive whatever
-runtime you like. There is no in-process PyTorch/PEFT backend in this package and there is
-not going to be one: paw-kit is a toolkit around upstream PAW, not a reimplementation of
-it.
+runtime you like. paw-kit ships no in-process PyTorch backend of its own; it is a toolkit
+around upstream PAW, not a reimplementation of it.
 
 ## Lineage
 

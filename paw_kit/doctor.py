@@ -113,7 +113,7 @@ def check_llama_cpp() -> CheckResult:
             "llama_cpp",
             "WARN",
             f"version {version}; llama_supports_gpu_offload() raised {type(exc).__name__}: {exc}",
-            "See measurements/README.md 'If inference is unexpectedly slow'.",
+            "See docs/install.md 'GPU support'.",
         )
     if gpu_offload:
         return CheckResult("llama_cpp", "PASS", f"version {version}; GPU offload supported", "")
@@ -121,9 +121,8 @@ def check_llama_cpp() -> CheckResult:
         "llama_cpp",
         "WARN",
         f"version {version}; GPU offload NOT supported (CPU-only wheel)",
-        "Measured ~90x slower on CPU (5.9s vs 65ms per call). See the README and "
-        "measurements/README.md 'If inference is unexpectedly slow' for installing a "
-        "CUDA wheel of llama-cpp-python.",
+        "Measured ~90x slower on CPU (5.9s vs 65ms per call). See docs/install.md "
+        "'GPU support' for installing a CUDA wheel of llama-cpp-python.",
     )
 
 

@@ -37,10 +37,10 @@ worker drains for at most two seconds.
 
 | Parameter | Default | What it does |
 |---|---|---|
-| `shadow_window` | `20` | Comparisons per window. Matches the sample size of the repo's own semantic measurement. `0` disables shadow mode: the adapter is promoted as soon as the compile finishes, exactly the pre-shadow behaviour, and a task already sitting in `shadow` is promoted on the next call. |
-| `shadow_threshold` | `0.8` | Minimum agreement over a completed window to promote. Deliberately well above what the repo's measured adapter scored. |
+| `shadow_window` | `20` | Comparisons per window. `0` disables shadow mode: the adapter is promoted as soon as the compile finishes, and a task already sitting in `shadow` is promoted on the next call. |
+| `shadow_threshold` | `0.8` | Minimum agreement over a completed window to promote. |
 | `audit_window` | `20` | Comparisons per audit window after promotion. **Size this for the drift you want to catch**: a 20-sample window from an adapter that has drifted to 60% agreement reads anywhere from 0.40 to 0.80 in nine draws out of ten, so at the shipped `demote_threshold` it demotes on only about 40% of windows (measured; see [results](./results.md)). A window of 100 makes the same drift demote reliably, at five times the teacher spend per verdict. |
-| `audit_rate` | `0.0` | Fraction of served calls that also run your function for comparison. **Off by default** because it spends real teacher calls after promotion and re-invokes your function on a background thread, which requires it to be thread-safe. `0.05` is the recommended value if you turn it on: one call in twenty, so about 400 served calls per completed audit window. Hard-capped at `0.5`. With `0.0` there is no post-promotion drift signal and demotion is unreachable; that is the accepted trade. |
+| `audit_rate` | `0.0` | Fraction of served calls that also run your function for comparison. **Off by default** because it spends real teacher calls after promotion and re-invokes your function on a background thread, which requires it to be thread-safe. `0.05` is the recommended value if you turn it on: one call in twenty, so about 400 served calls per completed audit window. Hard-capped at `0.5`. With `0.0` there is no post-promotion drift signal and demotion is unreachable. |
 | `demote_threshold` | `0.6` | Audit agreement below this demotes. Must be strictly below `shadow_threshold` so a task cannot flap on window noise. |
 | `agreement_fn` | `None` | `(teacher_answer, adapter_answer) -> bool`. The default is conservative: strings are compared after Unicode normalisation and whitespace stripping; Pydantic models and dicts field by field; a string against a structured value by serialising the structure; anything else by equality. `field_tolerance_agreement` is shipped for the "urgency within 1" style of comparison. An `agreement_fn` that raises counts as a disagreement. |
 | `shadow_queue_size` | `8` | Bounded work in flight per task. |
@@ -66,8 +66,8 @@ residual: a window of 20 draws from an adapter that agrees on a random 60% of in
 reaches 16 of 20 with probability 5.1%, so over the five windows before the stall point
 the chance of one lucky promotion is about 23%. That is inherent to any sampling gate.
 Raise `shadow_window` if that residual matters for your task; at 50 the per-window chance
-falls below 0.3%. In the measured run the adapter's disagreements were fixed per input
-rather than random, and it scored exactly 12 of 20 on every window.
+falls below 0.3%. In practice an adapter's disagreements tend to be fixed per input rather
+than random, which makes the gate stricter than the random-draw arithmetic suggests.
 
 ## What is stored, and where
 
@@ -80,10 +80,8 @@ only a fail-open counter on the task row is incremented, and that happens on the
 thread. Because your function keeps serving while a task is in `shadow`, the `traces`
 table keeps growing for as long as it stays there.
 
-Opening an older trace database migrates it in place to the current schema. A task that
-was already `ready` keeps serving after the upgrade. A decorated function that is never
-called still appears in `paw-kit report`, as a `tracing` task with no calls, because
-decoration persists its shadow configuration.
+A decorated function that is never called still appears in `paw-kit report`, as a
+`tracing` task with no calls, because decoration persists its shadow configuration.
 
 ## Watching it
 

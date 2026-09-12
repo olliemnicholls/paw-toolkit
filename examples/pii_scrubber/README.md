@@ -8,8 +8,8 @@ a deterministic callable when validation fails.
 same rule-based logic as the fallback. It ignores the grammar constraint, so nothing here
 exercises token-level constrained decoding. The regex grammar is compiled from the schema
 (you can see it via `pydantic_to_regex`), but no current backend applies it during decoding;
-see the "What is real and what is mocked" table in the top-level README. Timings printed by
-the script are the cost of a Python dictionary lookup, not a benchmark.
+see [What is real and what is mocked](../../docs/what-is-real.md). Timings printed by the
+script are the cost of a Python dictionary lookup, not a benchmark.
 
 ## Running the Example
 

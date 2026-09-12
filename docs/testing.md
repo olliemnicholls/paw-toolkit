@@ -128,7 +128,7 @@ not be parsed, and calls that failed outright. A failed call is recorded and the
 continues, so a rate limit late in a long run does not discard the verdicts already paid
 for. If every case errors the command exits non-zero and says the judge itself is
 failing, so a broken SDK cannot read as an adapter failing every case. The reference judge
-needs `pip install 'paw-kit[judge]'`.
+needs the `judge` extra; see [install](./install.md#the-judge-extra).
 
 ## `paw-kit lint-spec`
 

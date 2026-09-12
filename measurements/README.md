@@ -2213,27 +2213,10 @@ manual look before relying on this being free indefinitely.
 
 ### If inference is unexpectedly slow (seconds, not milliseconds)
 
-Check `python -c "import llama_cpp; print(llama_cpp.llama_supports_gpu_offload())"`. If
-that's `False`, the installed `llama-cpp-python` wheel has no CUDA support compiled in —
-the default PyPI wheel is CPU-only. Two fixes, in order of preference:
-
-1. **Prebuilt CUDA wheel** (fast, no compiler needed):
-   ```bash
-   pip install "llama-cpp-python==<version>" \
-       --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
-   ```
-   If you get `OSError: libcudart.so.12: cannot open shared object file` after this, the
-   machine has a GPU driver but no CUDA *toolkit* installed — add the runtime libraries
-   standalone (no compiler needed) and point the loader at them:
-   ```bash
-   pip install "nvidia-cuda-runtime-cu12==12.1.*" "nvidia-cublas-cu12==12.1.*"
-   export LD_LIBRARY_PATH="$(python -c 'import nvidia.cuda_runtime, os; print(os.path.dirname(nvidia.cuda_runtime.__file__))')/lib:$(python -c 'import nvidia.cublas, os; print(os.path.dirname(nvidia.cublas.__file__))')/lib:$LD_LIBRARY_PATH"
-   ```
-2. **Build from source** with `CMAKE_ARGS="-DGGML_CUDA=on"` if you need a CUDA version
-   with no prebuilt wheel available. On Ubuntu 24.04 with CUDA 12.1, the default `gcc`
-   (13.x) is too new for `nvcc`; either install `g++-12`/`gcc-12` and add
-   `-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-12` to `CMAKE_ARGS`, or use CUDA 12.4+ (which
-   added GCC 13 support) if that's an option on your machine.
+The installed `llama-cpp-python` is probably the CPU-only PyPI wheel. The fix (prebuilt
+CUDA wheel, or source build with `-DGGML_CUDA=on`) is documented for users under "GPU
+support" in [`docs/install.md`](../docs/install.md#gpu-support); this section keeps only
+the notes specific to reproducing the measurements.
 
 **If you've installed `paw-kit[measure]` (named `[torch]` at the time) in the same environment**: prefer the source
 build over the prebuilt wheel. Hit this twice on the same machine: a working
