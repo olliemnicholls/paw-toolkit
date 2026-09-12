@@ -1,4 +1,4 @@
-"""Active-learning self-healing loop for neural adapter re-distillation."""
+"""Active-learning loop: label failing cases with a teacher and recompile the adapter."""
 
 import hashlib
 import inspect
@@ -256,7 +256,7 @@ def run_active_learning_loop(
     initial_dataset: Optional[List[Dict[str, str]]] = None,
     teacher_query_hook: Optional[Callable[[str], None]] = None,
 ) -> ActiveLearningReport:
-    """Execute the active-learning self-healing loop on a .paw adapter.
+    """Execute the active-learning loop on a .paw adapter.
 
     Tests the adapter against adversarial fuzzing and assertions. If failures occur,
     queries teacher_provider for authoritative ground truth, augments the training set,

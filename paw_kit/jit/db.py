@@ -541,7 +541,7 @@ class TraceDB:
         return self._get_call_count_locked(task_id)
 
     def get_status(self, task_id: str) -> str:
-        """Retrieve task lifecycle status (tracing | compiling | ready | failed)."""
+        """Retrieve task lifecycle status (tracing | compiling | shadow | ready | failed)."""
         cur = self._conn.execute(
             "SELECT status FROM tasks WHERE task_id = ?;", (task_id,)
         )
