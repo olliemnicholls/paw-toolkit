@@ -49,21 +49,47 @@ production traffic. Think about `redact_trace=True` on the decorator if you do s
 `public=True`. Note also that upstream's compile cache is keyed on the spec text and
 ignores `public` on a cache hit, so recompiling a spec that was previously compiled public
 returns that same public program regardless of what you pass this time. `compile()` warns
-when it detects this, but it cannot change the existing program's visibility. The
-manifest's `public` field records what was requested, not what the server confirmed; if
-it matters, check the program on programasweights.com.
+when it detects this (naming the existing program, and distinctly from the case where the
+check itself could not run), but it cannot change that program's visibility.
+
+The manifest keeps the request and the fact apart. `public_requested` is what paw-kit
+asked for. `public_confirmed` is what the server said when asked directly, and it is
+three-state: `true`, `false`, or `null` with `public_confirmed_reason` saying why there is
+no answer (not attempted, offline, no API key, the request failed, or the response carried
+no visibility field). A question that was never asked reads as `null`, never as "private".
+Pass `verify_visibility=True` to have `compile()` ask; it costs one extra authenticated GET
+per compile, which is why it is opt-in, and no outcome of it can prevent the manifest being
+written. On a cache hit the manifest also records `cached_program_id` — the existing program
+you are being handed back.
+
+Two smaller guarantees in the same area: only the literal `True` opts into a public compile
+(`public=None` used to forward `null`, which upstream reads as public), and a backend built
+with `offline=True` refuses to compile rather than contacting the service anyway — it is an
+inference mode, so construct a second backend without it if you need to compile.
 
 ## Retries, and what a timeout means
 
 Resending a compile the server already received queues a second compile and spends a
 second unit of the rate-limited quota. So `compile()` retries only when the connection
-provably never reached the server (a connect error or connect timeout) or on a 5xx other
-than 504, up to `compile_retries` times with a short backoff. A read timeout, a 504, or
-any 4xx is raised immediately with the response body in the message. After a read
-timeout, re-running the same spec hits upstream's compile cache once the first compile
-finishes, instead of paying for a second one. Status polling for the finetune compiler
-does tolerate transient failures; after five consecutive failures it gives up and raises
-with the `job_id` so you can poll it later.
+provably never reached the server — a connect error or connect timeout — up to
+`compile_retries` times with a short backoff. A read timeout, a 504, or any 4xx is raised
+immediately with the response body in the message. After a read timeout, re-running the
+same spec hits upstream's compile cache once the first compile finishes, instead of paying
+for a second one.
+
+A 5xx other than 504 is retried on the **synchronous** fast-compiler path only. It is
+never retried for `paw-ft-bs48`: that submission goes through `compile_async`, where a
+duplicate is minutes of paid GPU *and* discards the first attempt's `job_id`, leaving that
+job unpollable and uncancellable. The sync retry is not free either — if the first POST
+landed before its program was cached, the retry buys a second fast compile — but it is
+bounded to seconds of work and there is no `job_id` to lose.
+
+Status polling for the finetune compiler tolerates transient failures; after five
+consecutive failures it gives up and raises with the `job_id` so you can poll it later. A
+job that reports an error and no program is treated as terminal whatever its status string
+is called, with the server's own message passed through, rather than being polled for the
+full `compile_timeout_s`. If the poll loop does time out, `compile()` asks the service to
+cancel the job.
 
 ## What to expect
 
