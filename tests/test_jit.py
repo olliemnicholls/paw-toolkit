@@ -810,3 +810,97 @@ def test_sync_trigger_compilation_is_also_deduplicated_J_6(tmp_path: Path) -> No
         assert len(calls) == 1, f"{len(calls)} compiles for one task from 8 sync triggers"
     finally:
         db.close()
+
+
+def _wedge_in_compiling(db: "TraceDB", task_id: str, age_seconds: float) -> None:
+    """Leave `task_id` in `compiling` with a lease stamp `age_seconds` old."""
+    from datetime import datetime, timedelta, timezone
+
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
+    db._conn.execute(
+        "UPDATE tasks SET status = 'compiling', compiling_started_at = ? WHERE task_id = ?;",
+        (stamp, task_id),
+    )
+    db._conn.commit()
+
+
+def test_decorator_reclaims_a_wedged_compile_and_retries_it_J_5(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """J-5 end to end, and the reason the reclaim lives in `decorator.py`.
+
+    With `status` wedged at `compiling`, `decorator.py`'s own gate
+    (`if current_status == "tracing"`) means `trigger_compilation` is **never called at
+    all** -- so a reclaim placed inside `compiler.py` would be dead code and this test
+    would stay red against it. The teacher is paid on every subsequent call, forever,
+    with no compile in flight and none ever completing.
+    """
+    import paw_kit.jit.decorator as decorator_module
+
+    monkeypatch.setattr(decorator_module, "_COMPILE_LEASE_SECONDS", 60.0)
+    cache_dir = str(tmp_path / "wedged_cache")
+    backend = MockPAWBackend()
+    teacher_calls = {"n": 0}
+
+    @compile_on_hit(
+        spec="J-5 wedged-compile test",
+        threshold=2,
+        response_model=SentimentOutput,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(text: str) -> SentimentOutput:
+        teacher_calls["n"] += 1
+        return SentimentOutput(sentiment="teacher", confidence=1.0)
+
+    svc("first")  # call_count 1, below threshold: registers the task, no compile
+    assert teacher_calls["n"] == 1
+    task_id = svc.task_id  # type: ignore[attr-defined]
+    _wedge_in_compiling(svc.db, task_id, age_seconds=10_000)  # type: ignore[attr-defined]
+    assert svc.db.get_status(task_id) == "compiling"  # type: ignore[attr-defined]
+
+    svc("second")  # crosses the threshold and finds the task wedged
+
+    assert svc.db.get_status(task_id) == "ready", (  # type: ignore[attr-defined]
+        f"still {svc.db.get_status(task_id)!r}: the stale lease was never reclaimed, so "  # type: ignore[attr-defined]
+        "the teacher is paid on every call from here on with no compile in flight"
+    )
+    assert svc.db.get_compile_attempts(task_id) == 1, (  # type: ignore[attr-defined]
+        "the reclaim must count as an attempt so the retry cap still bounds it"
+    )
+    assert svc.is_compiled()  # type: ignore[attr-defined]
+
+
+def test_decorator_does_not_reclaim_a_compile_still_inside_its_lease_J_5(
+    tmp_path: Path,
+) -> None:
+    """Negative control, and the expensive failure mode: a compile that is genuinely
+    running must not be reclaimed out from under itself, because the reclaim hands out a
+    second paid compile. The shipped lease is hours precisely so that a finetune compile
+    (96-223s, capped by `compile_timeout_s` at an hour) can never be mistaken for a
+    wedge."""
+    cache_dir = str(tmp_path / "live_cache")
+    backend = MockPAWBackend()
+
+    @compile_on_hit(
+        spec="J-5 live-compile test",
+        threshold=2,
+        response_model=SentimentOutput,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(text: str) -> SentimentOutput:
+        return SentimentOutput(sentiment="teacher", confidence=1.0)
+
+    svc("first")
+    task_id = svc.task_id  # type: ignore[attr-defined]
+    _wedge_in_compiling(svc.db, task_id, age_seconds=5.0)  # type: ignore[attr-defined]
+
+    svc("second")
+
+    assert svc.db.get_status(task_id) == "compiling"  # type: ignore[attr-defined]
+    assert svc.db.get_compile_attempts(task_id) == 0  # type: ignore[attr-defined]

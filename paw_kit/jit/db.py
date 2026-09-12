@@ -1,7 +1,7 @@
 """Thread-safe SQLite tracing database for paw.jit."""
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -42,7 +42,8 @@ T = TypeVar("T")
 _DB_RETRY_ATTEMPTS = 5
 _DB_RETRY_BASE_DELAY_SECONDS = 0.05
 
-# Track 14 (shadow mode), schema v2.
+# Schema v3. v2 was Track 14 (shadow mode); v3 adds `tasks.compiling_started_at`, the
+# compile lease stamp J-5 needs to tell a running compile apart from a wedged one.
 #
 # `PRAGMA user_version` is a *forward marker only*. It reads 0 on every pre-v2
 # traces.db AND on a brand-new one, so it is ambiguous and nothing branches v1->v2 on
@@ -54,7 +55,7 @@ _DB_RETRY_BASE_DELAY_SECONDS = 0.05
 # marker exists to prevent. `PRAGMA user_version` takes no bind parameter, which is
 # why this is an int module constant interpolated into the SQL and never
 # caller-supplied.
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 # Per-task retention cap on `state_transitions`. `shadow_pairs`' cap is the caller's
 # `shadow_max_pairs` (decorator.py), passed in per write.
@@ -427,9 +428,29 @@ class TraceDB:
                     # `shadow_window`/`shadow_threshold` between runs instead of
                     # re-slicing an existing epoch's history under new arithmetic.
                     ("shadow_config", "shadow_config TEXT"),
+                    # --- schema v3 (J-5) --------------------------------------
+                    # When the current `compiling` lease began. Its whole job is to
+                    # let `reclaim_stale_compile` tell a compile that is *running*
+                    # from one whose process was killed: without it, a task wedged in
+                    # `compiling` is indistinguishable from a healthy one and the
+                    # teacher is paid on every call forever.
+                    ("compiling_started_at", "compiling_started_at TEXT"),
                 ):
                     if column not in existing_cols:
                         self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {ddl};")
+                        if column == "compiling_started_at":
+                            # Backfill, because the databases that actually have J-5's
+                            # bug are the ones that predate this column. The reclaim
+                            # deliberately requires a stamp -- a `compiling` row of
+                            # unknown age must never be yanked out from under a live
+                            # compile -- so without this an already-wedged task would
+                            # stay wedged forever after the upgrade. `updated_at` is
+                            # when the status was last written, i.e. when the lease
+                            # began, which is exactly the value wanted here.
+                            self._conn.execute(
+                                "UPDATE tasks SET compiling_started_at = updated_at "
+                                "WHERE status = 'compiling' AND compiling_started_at IS NULL;"
+                            )
 
                 self._conn.execute(
                     """
@@ -572,6 +593,12 @@ class TraceDB:
         as a cache) while a process holds a live wrapper.
         """
         now = datetime.now(timezone.utc).isoformat()
+        # J-5: every status writer maintains the compile lease, so the invariant
+        # "status == 'compiling' implies compiling_started_at is set" has no holes --
+        # and leaving `compiling` clears the stamp, so a later wedge cannot inherit an
+        # old one. Without this, a direct `set_status(task_id, 'compiling')` would
+        # produce exactly the NULL-stamp row the reclaim cannot act on.
+        lease = now if status == "compiling" else None
 
         def _do() -> bool:
             with self._write_txn():
@@ -582,28 +609,31 @@ class TraceDB:
                     self._conn.execute(
                         """
                         INSERT INTO tasks (task_id, call_count, status, adapter_path,
-                                           state_epoch, created_at, updated_at)
-                        VALUES (?, 0, ?, ?, ?, ?, ?)
+                                           state_epoch, compiling_started_at,
+                                           created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             status = excluded.status,
                             adapter_path = excluded.adapter_path,
                             state_epoch = excluded.state_epoch,
+                            compiling_started_at = excluded.compiling_started_at,
                             updated_at = excluded.updated_at;
                         """,
-                        (task_id, status, adapter_path, new_epoch, now, now),
+                        (task_id, status, adapter_path, new_epoch, lease, now, now),
                     )
                 else:
                     self._conn.execute(
                         """
                         INSERT INTO tasks (task_id, call_count, status, state_epoch,
-                                           created_at, updated_at)
-                        VALUES (?, 0, ?, ?, ?, ?)
+                                           compiling_started_at, created_at, updated_at)
+                        VALUES (?, 0, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             status = excluded.status,
                             state_epoch = excluded.state_epoch,
+                            compiling_started_at = excluded.compiling_started_at,
                             updated_at = excluded.updated_at;
                         """,
-                        (task_id, status, new_epoch, now, now),
+                        (task_id, status, new_epoch, lease, now, now),
                     )
                 if changed:
                     self._record_transition_locked(
@@ -669,15 +699,18 @@ class TraceDB:
                 cur = self._conn.execute(
                     """
                     INSERT INTO tasks (task_id, call_count, status, state_epoch,
-                                       created_at, updated_at)
-                    VALUES (?, 0, 'compiling', 1, ?, ?)
+                                       compiling_started_at, created_at, updated_at)
+                    VALUES (?, 0, 'compiling', 1, ?, ?, ?)
                     ON CONFLICT(task_id) DO UPDATE SET
                         status = 'compiling',
                         state_epoch = tasks.state_epoch + 1,
+                        -- J-5: the lease starts here, on the transition that actually
+                        -- claims the compile.
+                        compiling_started_at = excluded.compiling_started_at,
                         updated_at = excluded.updated_at
                     WHERE tasks.status = 'tracing';
                     """,
-                    (task_id, now, now),
+                    (task_id, now, now, now),
                 )
                 if cur.rowcount == 0:
                     return None
@@ -689,6 +722,90 @@ class TraceDB:
                     task_id, previous or "tracing", "compiling", None, None, new_epoch, now
                 )
                 return (previous or "tracing", new_epoch)
+
+        won = self._with_write_retry(_do)
+        if won is None:
+            return False
+        self._after_transition_write(task_id)
+        for listener in list(self._status_listeners):
+            listener(task_id)
+        return True
+
+    def reclaim_stale_compile(
+        self,
+        task_id: str,
+        lease_seconds: float,
+        max_attempts: Optional[int] = None,
+    ) -> bool:
+        """Release a `compiling` lease older than `lease_seconds`. True only for the winner.
+
+        J-5. `status` is written `compiling` *before* the compile worker runs and nothing
+        clears it if that process dies, while the decorator's trigger gate requires
+        `status == 'tracing'`. So a task whose compiling process was killed is stuck:
+        the teacher answers every subsequent call -- and is paid for every one -- with no
+        compile in flight and none ever going to complete. This is the way out.
+
+        A compare-and-set, for exactly D-2's reason: two processes both noticing the same
+        wedged task must not both reclaim it and both pay. Same
+        `_with_write_retry` + `_write_txn()` shape, with the `compile_attempts` bump in
+        the **same transaction** as the status write.
+
+        `compiling_started_at IS NOT NULL` is required, deliberately. A `compiling` row
+        of unknown age must never be reclaimed: doing so would yank a *running*,
+        already-billed compile out from under itself and buy a second one. Every writer
+        of `compiling` stamps the lease (`set_status`, `try_begin_compile`), and
+        `_init_db` backfills pre-v3 rows from `updated_at`, so in practice a NULL here
+        means nothing this module wrote.
+
+        `max_attempts`, when given, makes the reclaim terminal (`failed`) rather than
+        retryable (`tracing`) once the bumped count reaches it. Without that, a task that
+        wedges on every attempt would be handed another paid compile forever -- the same
+        unbounded paid retry loop PAW-JIT-03 bounds on the failure path, reached by a
+        different route. It is a parameter rather than an import because
+        `BackgroundCompiler` owns the cap and `compiler.py` imports *this* module.
+        """
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        cutoff = (now_dt - timedelta(seconds=lease_seconds)).isoformat()
+
+        def _do() -> Optional[Tuple[str, int]]:
+            with self._write_txn():
+                cur = self._conn.execute(
+                    "SELECT state_epoch, compile_attempts FROM tasks WHERE task_id = ?;",
+                    (task_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                attempts = (row["compile_attempts"] or 0) + 1
+                target = (
+                    "failed"
+                    if max_attempts is not None and attempts >= max_attempts
+                    else "tracing"
+                )
+                new_epoch = (row["state_epoch"] or 0) + 1
+                updated = self._conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = ?,
+                        state_epoch = state_epoch + 1,
+                        compile_attempts = COALESCE(compile_attempts, 0) + 1,
+                        compiling_started_at = NULL,
+                        updated_at = ?
+                    WHERE task_id = ?
+                      AND status = 'compiling'
+                      AND compiling_started_at IS NOT NULL
+                      AND compiling_started_at < ?;
+                    """,
+                    (target, now, task_id, cutoff),
+                )
+                if updated.rowcount == 0:
+                    return None
+                self._record_transition_locked(
+                    task_id, "compiling", target, None, None, new_epoch, now,
+                    reason="stale_compile_lease",
+                )
+                return (target, new_epoch)
 
         won = self._with_write_retry(_do)
         if won is None:
