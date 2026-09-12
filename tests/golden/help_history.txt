@@ -7,10 +7,17 @@ exit code: 0
  Print the append-only compile lineage log for an adapter.
 
  Every `compile()` call (on any `AbstractPAWBackend` shipped by paw-kit) appends
- one line to `<adapter>.history.jsonl` -- the compiled manifest minus its spec
- text. A manifest itself only ever points at its immediate parent (an overwritten
- file cannot be read back), so this sidecar is the only place the full compile
- lineage of a repeatedly-recompiled adapter survives.
+ one line to `<adapter>.history.jsonl`. A manifest itself only ever points at its
+ immediate parent (an overwritten file cannot be read back), so this sidecar is the
+ only place the full compile lineage of a repeatedly-recompiled adapter survives.
+
+ D-4: each line is the manifest's **lineage fields** -- ids, hashes, counts,
+ visibility provenance, parent pointers, timings -- and not, as this docstring used
+ to say, "the manifest minus its spec text". That described a one-key deny-list the
+ mock backend's traced `examples` walked straight past; it is an allow-list now (see
+ `paw_kit.backend.manifest_lineage._HISTORY_ALLOWED_FIELDS`). The sidecar is also
+ capped and rotated, so a long-lived adapter's oldest lines move to
+ `<adapter>.history.jsonl.1`, which this command does not read.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ *    adapter_path      <path>  Path to a compiled .paw adapter artifact [required]                                   │
