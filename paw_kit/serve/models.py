@@ -4,6 +4,18 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 
+# X-2: an unbounded `messages` array let an unauthenticated caller force Pydantic to
+# validate an arbitrarily large list before `_verify_auth` (now `AuthMiddleware`, see
+# server.py) ever ran -- the bug hunt measured 186-475ms CPU and 31.5MB peak memory
+# from an oversized array alone. A field-level constraint rejects it during
+# validation itself (422), which is as early as Pydantic can be made to stop; the
+# *real* fix for the ordering half of X-2 is authenticating before any body is even
+# read (see server.py's AuthMiddleware), which stops this cost being paid by an
+# unauthenticated caller at all. 500 is generous headroom over any legitimate
+# multi-turn conversation while still bounding the worst case.
+_MAX_MESSAGES_PER_REQUEST = 500
+
+
 # ---------------------------------------------------------------------------
 # 1. OpenAI Chat Completions API Models
 # ---------------------------------------------------------------------------
@@ -26,7 +38,7 @@ class ChatCompletionRequest(BaseModel):
     """OpenAI Chat Completion request payload."""
 
     model: Optional[str] = "default"
-    messages: List[ChatMessage]
+    messages: List[ChatMessage] = Field(..., max_length=_MAX_MESSAGES_PER_REQUEST)
     temperature: Optional[float] = 0.0
     max_tokens: Optional[int] = None
     response_format: Optional[ResponseFormat] = None
@@ -90,7 +102,7 @@ class AnthropicMessageRequest(BaseModel):
     """Anthropic Claude Messages request payload."""
 
     model: Optional[str] = "default"
-    messages: List[AnthropicMessage]
+    messages: List[AnthropicMessage] = Field(..., max_length=_MAX_MESSAGES_PER_REQUEST)
     system: Optional[Union[str, List[Dict[str, Any]]]] = None
     max_tokens: Optional[int] = 1024
     temperature: Optional[float] = 0.0
