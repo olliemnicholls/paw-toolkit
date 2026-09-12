@@ -1902,3 +1902,65 @@ def test_set_status_maintains_the_compile_lease_stamp_J_5(tmp_path: Path) -> Non
         assert stamp() is None, "the adapter_path branch must clear it too"
     finally:
         db.close()
+
+
+def test_first_reclaim_is_not_immediately_terminal_at_a_cap_of_two_J_5(tmp_path: Path) -> None:
+    """A task's *first* stale-lease reclaim must hand it back to `tracing`, not fail it.
+
+    `attempts = (row["compile_attempts"] or 0) + 1` is the count the cap is compared
+    against, and at `max_attempts=3` (the shipped cap) an off-by-one in that fallback
+    happens to produce the same three outcomes -- so the retry-cap test above cannot see
+    it. At a cap of 2 it is the difference between "reclaimed once, still retryable" and
+    "reclaimed once, terminally failed", which is a compile the user would never get.
+
+    (Kills `db.py int 0->1  attempts = (row["compile_attempts"] or 0) + 1`, which the
+    gate-3 fingerprint reconciliation found alive.)
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert db.try_begin_compile("t") is True
+        _wedge(db, "t", age_seconds=10_000)
+        assert db.get_compile_attempts("t") == 0, "the fixture must start from zero attempts"
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0, max_attempts=2) is True
+        assert db.get_compile_attempts("t") == 1
+        assert db.get_status("t") == "tracing", (
+            "the first reclaim of a two-attempt budget went terminal: that spends the "
+            "whole budget on one crash and the task never compiles again"
+        )
+    finally:
+        db.close()
+
+
+def test_reclaim_epoch_is_right_when_the_task_never_left_epoch_zero_J_5(
+    tmp_path: Path,
+) -> None:
+    """The `state_epoch or 0` fallback, exercised where it is actually reachable.
+
+    `set_status` bumps `state_epoch` only on a *change*, and a write against a task with
+    **no row at all** has no previous status to differ from -- so it upserts
+    `status='compiling'` with `state_epoch` left at **0**. That is reachable in practice:
+    it is the D-7 scenario, a `.paw/traces.db` (documented as a cache) deleted while a
+    process still holds a live wrapper. So a task can genuinely be `compiling` at epoch 0,
+    and that is the only input under which this fallback's value matters.
+    `test_reclaim_audit_row_carries_the_epoch_it_created_J_5` above deliberately sets up a
+    non-zero epoch, which makes the `or` short-circuit and hides it.
+
+    (Kills `db.py int 0->1  new_epoch = (row["state_epoch"] or 0) + 1`, alive at gate 3.)
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        db.set_status("t", "compiling")  # no prior row: upserts at epoch 0
+        assert db.get_task_routing("t")[2] == 0, "the fixture must start at epoch 0"
+        _wedge(db, "t", age_seconds=10_000)
+        assert db.reclaim_stale_compile("t", lease_seconds=3600.0) is True
+        _, _, task_epoch = db.get_task_routing("t")
+        assert task_epoch == 1
+        assert _rows(
+            db_path,
+            "SELECT state_epoch FROM state_transitions WHERE task_id = 't' "
+            "AND reason = 'stale_compile_lease';",
+        ) == [(1,)], "the audit row names an epoch the task never had"
+    finally:
+        db.close()

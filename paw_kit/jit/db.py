@@ -693,7 +693,7 @@ class TraceDB:
         """
         now = datetime.now(timezone.utc).isoformat()
 
-        def _do() -> Optional[Tuple[str, int]]:
+        def _do() -> Optional[int]:
             with self._write_txn():
                 previous, _ = self._get_status_and_epoch_locked(task_id)
                 cur = self._conn.execute(
@@ -721,7 +721,13 @@ class TraceDB:
                 self._record_transition_locked(
                     task_id, previous or "tracing", "compiling", None, None, new_epoch, now
                 )
-                return (previous or "tracing", new_epoch)
+                # The epoch, not a tuple. This used to also hand back
+                # `previous or "tracing"`, which no caller read -- the mutation gate found
+                # that second copy of the fallback unkillable, which is what dead data in
+                # a return value looks like from the outside. The one copy that matters is
+                # in the audit row above, pinned by
+                # `test_try_begin_compile_names_the_previous_status_in_a_first_ever_compile_D_2`.
+                return new_epoch
 
         won = self._with_write_retry(_do)
         if won is None:
