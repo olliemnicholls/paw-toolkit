@@ -33,6 +33,85 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # to leave world-readable by default.
 _HISTORY_FILE_MODE = 0o600
 
+# --- D-4: the lineage sidecar's retention policy ---------------------------------
+#
+# This used to be a one-key **deny-list** (`if k != "spec"`). The default backend --
+# `MockPAWBackend`, the one the README's own example uses -- retains every traced
+# input/output pair verbatim in `examples`, which walked straight past it: three mock
+# compiles of 500 examples produced a 216 KB sidecar of raw production rows, append-only,
+# uncapped and never pruned.
+#
+# A deny-list is the wrong shape for this, not just wrongly populated. It has to
+# enumerate every *future* way some backend might carry raw traffic, and whoever adds the
+# next such field is not thinking about this file. An allow-list fails the other way --
+# towards dropping a new lineage field rather than publishing a new sensitive one -- and
+# `tests/test_manifest_lineage.py` turns that remaining failure mode into a test that
+# makes adding a manifest key force a decision.
+#
+# What belongs here: identifiers, hashes, counts, visibility provenance, parent pointers
+# and timings. What does not: anything derived from the traced traffic itself.
+_HISTORY_ALLOWED_FIELDS = frozenset(
+    {
+        # identity and schema
+        "backend",
+        "manifest_version",
+        "program_id",
+        "slug",
+        "cached_program_id",
+        "compiler",
+        "compiler_snapshot",
+        "status",
+        # content fingerprints -- a hash of the spec, never the spec
+        "spec_sha256",
+        "full_spec_sha256",
+        # what was folded, by count and by id (ids are SHA-256 digests)
+        "examples_count",
+        "examples_folded_into_spec",
+        "folded_example_ids",
+        # visibility provenance (A-2). `public` is the pre-A-2 name, kept so a sidecar
+        # line written by an older paw-kit still carries the value it recorded.
+        "public_requested",
+        "public_confirmed",
+        "public_confirmed_reason",
+        "public",
+        "ephemeral",
+        "cache_hit",
+        # lineage
+        "parent_program_id",
+        "parent_manifest_sha256",
+        # timings
+        "compile_wall_s",
+        "compiled_at",
+    }
+)
+
+# Named, not merely omitted. The old filter dropped `spec` explicitly and kept
+# `examples` by oversight; enumerating both -- with a reason -- is what lets a reader
+# (and the allow-list evolution test) tell a decision from an accident.
+_HISTORY_EXCLUDED_FIELDS = {
+    "spec": (
+        "sensitive: the spec text, which ProgramAsWeightsBackend.compile() folds traced "
+        "production input/output pairs into before sending. Its hash is retained instead."
+    ),
+    "examples": (
+        "sensitive: the raw traced input/output pairs themselves. MockPAWBackend retains "
+        "them verbatim in the manifest as live inference signal; the sidecar records "
+        "`examples_count` and `folded_example_ids` instead."
+    ),
+    "rules": "not lineage: backend configuration, not a record of this compile.",
+    "default_response": "not lineage: backend configuration.",
+}
+
+#: Per-file cap on the sidecar. One line is a few hundred bytes of lineage, so 1 MiB is
+#: on the order of a thousand compiles of history -- far more than `paw-kit history` has
+#: ever needed to show, and a bound instead of no bound.
+_HISTORY_MAX_BYTES = 1024 * 1024
+
+#: Generations kept beside the live file (`<sidecar>.1`). Total retention is therefore
+#: bounded at roughly `(_HISTORY_ROTATIONS + 1) * _HISTORY_MAX_BYTES`. An unbounded
+#: rotation depth would be an unbounded sidecar wearing a different shape.
+_HISTORY_ROTATIONS = 1
+
 
 def sha256_text(text: str) -> str:
     """SHA-256 hex digest of `text`, encoded as UTF-8."""
@@ -117,8 +196,42 @@ def read_parent_lineage(output_path: Union[str, Path], max_bytes: int) -> Tuple[
     return parent_program_id, parent_manifest_sha256
 
 
+def _rotate_history_if_full(history_path: str, incoming_bytes: int) -> None:
+    """Move the sidecar aside when the next line would take it past its cap (D-4).
+
+    `os.replace` to `<sidecar>.1`, deliberately -- **never** a rewrite of the live file.
+    Report §12 measured this sidecar clean under 6 concurrent appending processes (0
+    corrupt lines), and that holds precisely *because* each append is one `write()` under
+    `O_APPEND` rather than a read-modify-write. Dropping the oldest lines in place, which
+    is how the finding first described "rotation", would have reintroduced exactly the
+    shape that measurement proved safe to avoid.
+
+    A process that already holds a descriptor on the rotated-away inode keeps appending
+    into it; those lines live on in the `.1` file. Nothing is interleaved or truncated.
+
+    Best-effort: a sidecar that cannot be rotated is still appended to. Retention is a
+    policy, and failing a compile over it would be worse than exceeding it.
+    """
+    try:
+        size = os.stat(history_path).st_size
+    except OSError:
+        return  # nothing there yet, or unreadable -- either way, nothing to rotate
+    if size + incoming_bytes <= _HISTORY_MAX_BYTES:
+        return
+    try:
+        os.replace(history_path, f"{history_path}.{_HISTORY_ROTATIONS}")
+    except OSError:
+        pass
+
+
 def append_history_entry(output_path: Union[str, Path], manifest: Dict[str, Any]) -> None:
-    """Append one line to `<output_path>.history.jsonl`: `manifest` minus `spec`.
+    """Append one line of **lineage** to `<output_path>.history.jsonl`.
+
+    The line is `manifest` filtered through `_HISTORY_ALLOWED_FIELDS` -- ids, hashes,
+    counts, visibility provenance, parent pointers, timings. See that constant for why
+    this is an allow-list and not the deny-list it used to be (D-4): a one-key deny-list
+    dropped `spec` and let the mock backend's `examples`, the traced input/output pairs
+    themselves, through untouched.
 
     Append-only by construction (`os.O_APPEND`) rather than read-modify-write, so
     concurrent compiles against distinct adapters never contend, and a compile that
@@ -129,14 +242,23 @@ def append_history_entry(output_path: Union[str, Path], manifest: Dict[str, Any]
     briefly world-readable. `os.open`'s mode argument only governs permissions at
     *creation*; it has no effect on a file that already exists, which is the expected
     case for every compile after the first.
+
+    Two additions from D-4 beyond the filter: the file is rotated rather than grown
+    without limit (see `_rotate_history_if_full`), and the append is `fsync`ed. A compile
+    takes seconds to minutes, so one fsync costs nothing measurable at this call site, and
+    without it the lineage record of a compile can be lost to a power cut the compile
+    itself survived.
     """
     history_path = str(output_path) + ".history.jsonl"
-    entry = {k: v for k, v in manifest.items() if k != "spec"}
+    entry = {k: v for k, v in manifest.items() if k in _HISTORY_ALLOWED_FIELDS}
     line = json.dumps(entry) + "\n"
+    _rotate_history_if_full(history_path, len(line.encode("utf-8")))
     fd = os.open(history_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, _HISTORY_FILE_MODE)
     try:
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
     except BaseException:
         # os.fdopen took ownership of fd; on the (unlikely) chance it fails before
         # that handoff completes, avoid leaking the raw descriptor.
