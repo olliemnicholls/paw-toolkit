@@ -21,8 +21,17 @@ def test_availability() -> None:
     assert backend.is_available() is True
 
 
-def test_mock_compilation_creates_artifact(tmp_path: Path) -> None:
-    """Verify compilation creates artifact on disk and in memory in under 50ms."""
+def test_mock_compilation_creates_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify compilation creates artifact on disk and in memory in under 50ms.
+
+    D-ADD-5: `os.fsync` is stubbed out for this timing so the budget measures the mock
+    backend's own logic, not disk durability. `atomicio.atomic_write_text`'s two fsyncs
+    (D-3) cost ~23ms of real disk I/O on their own, which is not what "fast deterministic
+    compile guarantee" is about and made this assertion flake under disk contention.
+    Durability itself is covered separately by
+    test_atomic_write_text_fsyncs_the_file_and_the_directory_D_3 in test_jit_persistence.py.
+    """
+    monkeypatch.setattr("os.fsync", lambda fd: None)
     backend = MockPAWBackend()
     adapter_path = str(tmp_path / "models" / "triage.paw")
     spec = "Classify customer ticket priority (low, med, high)."
