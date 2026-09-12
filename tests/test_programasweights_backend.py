@@ -594,7 +594,16 @@ def test_finetune_compile_submission_5xx_wrapped(
     key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The async/finetune path gets the same error wrapping on the initial submission
-    call, without changing the polling behaviour in `_wait_for_job`."""
+    call, without changing the polling behaviour in `_wait_for_job`.
+
+    A-1 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`): this
+    test's `sdk.attempts == 2` became `== 1`. It was pinning the retry that A-1 removes
+    from the async path, not the error wrapping this test is named for -- the wrapping
+    assertion (`pytest.raises(... "HTTP 503")`) is unchanged and still the subject. The
+    `compile_retries=1` and the second queued 503 are kept deliberately: they are what
+    makes `attempts == 1` mean "the retry budget existed and was correctly not spent",
+    rather than "there was nothing to retry with".
+    """
     import paw_kit.backend.programasweights as mod
 
     monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
@@ -605,7 +614,7 @@ def test_finetune_compile_submission_5xx_wrapped(
 
     with pytest.raises(RuntimeError, match="ProgramAsWeights compile service returned HTTP 503"):
         backend.compile("spec", [], str(tmp_path / "ft.paw"))
-    assert sdk.attempts == 2
+    assert sdk.attempts == 1
 
 
 # ---------------------------------------------------------------- _wait_for_job poll retry
@@ -685,3 +694,187 @@ def test_wait_for_job_poll_failures_still_bounded_by_total_wall_clock_cap(
     with pytest.raises(TimeoutError):
         backend.compile("spec", [], str(tmp_path / "ft.paw"))
     assert sdk.status_attempts == 1
+
+
+# ================================================================== A-1: retry safety
+#
+# Decided in Phase 0 (option (b)): retry the cache-keyed *sync* `paw.compile` only;
+# never retry `paw.compile_async` on a 5xx. The money is entirely on the async path
+# (it is reachable only via FINETUNE_COMPILER) and only the async path is
+# unreconcilable -- a retried submission discards the first attempt's `job_id`, which
+# makes that paid job unpollable and uncancellable. Connect-failure retry is
+# unchanged on both paths: the request provably never reached the server.
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 503])
+def test_finetune_compile_async_5xx_is_never_retried_A_1(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    """`compile_async` is invoked exactly once for 500/502/503 -- the report's own
+    required assertion. A non-504 5xx proves nothing about whether the compile landed,
+    and a retry that buys a second finetune compile costs 96-223s of paid GPU while
+    orphaning the first job_id."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([_status_error(status_code)], statuses=["completed"])
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0, compile_retries=3
+    )
+
+    with pytest.raises(RuntimeError, match=f"HTTP {status_code}"):
+        backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    assert sdk.attempts == 1, (
+        "compile_async was resubmitted after a 5xx: that buys a second paid finetune "
+        "compile and orphans the first job_id"
+    )
+
+
+def test_sync_compile_still_retries_5xx_A_1(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of option (b): the sync `paw.compile` path keeps its 5xx retry.
+    Upstream's compile cache is keyed on spec text, so a resubmitted identical spec
+    normally returns the existing program, and there is no job_id to orphan."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([_status_error(500)])
+    backend = ProgramAsWeightsBackend(sdk=sdk, compile_retries=2)
+
+    out = tmp_path / "a.paw"
+    backend.compile("spec", [], str(out))
+    assert sdk.attempts == 2
+    assert json.loads(out.read_text())["program_id"] == "prog-fast"
+
+
+def test_finetune_compile_async_connect_error_is_still_retried_A_1(
+    key: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Option (b) narrows the *5xx* retry only. A connect failure means the TCP
+    handshake itself never completed, so the request provably never reached the server
+    and nothing was billed -- that retry stays in place on the async path too."""
+    import paw_kit.backend.programasweights as mod
+
+    monkeypatch.setattr(mod.ProgramAsWeightsBackend, "_COMPILE_RETRY_BACKOFF_S", 0.0)
+    sdk = _FlakyCompileSDK([httpx.ConnectError("refused")], statuses=["completed"])
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0, compile_retries=1
+    )
+
+    out = tmp_path / "ft.paw"
+    backend.compile("spec", [], str(out))
+    assert sdk.attempts == 2
+    assert json.loads(out.read_text())["program_id"] == "prog-ft"
+
+
+# ============================================ A-5: unrecognised terminal job states
+#
+# `_wait_for_job` only knows two vocabularies (`_SUCCESS_STATES`, `_FAILED_STATES`).
+# Anything else -- `infrastructure_error`, `redis_unavailable`, a `completed` that
+# named no program -- fell through to the sleep loop and was polled for the full
+# `compile_timeout_s` (720 GETs at the defaults), with the server's own `error` string
+# never read and `cancel_compile` never called, on the paid finetune path.
+
+
+class _CancellableSDK(FakeSDK):
+    """`FakeSDK` plus a `cancel_compile` spy and a scriptable status payload."""
+
+    def __init__(self, payloads: List[Dict[str, Any]], **kwargs: Any):
+        super().__init__(**kwargs)
+        self._payloads = list(payloads)
+        self.status_attempts = 0
+        self.cancel_calls: List[str] = []
+
+    def get_compile_status(self, job_id: str):
+        self.status_attempts += 1
+        payload = self._payloads[min(self.status_attempts - 1, len(self._payloads) - 1)]
+        return {"job_id": job_id, **payload}
+
+    def cancel_compile(self, job_id: str):
+        self.cancel_calls.append(job_id)
+        return {"job_id": job_id, "status": "cancelled"}
+
+
+def test_wait_for_job_unknown_status_with_error_fails_fast_A_5(
+    key: None, tmp_path: Path
+) -> None:
+    """An unrecognised status carrying a non-null `error` is terminal failure, raised
+    on the first poll with the server's `error` surfaced verbatim -- not polled for the
+    full hour."""
+    sdk = _CancellableSDK(
+        [{"status": "infrastructure_error", "program_id": None,
+          "error": "redis_unavailable: queue backend down"}]
+    )
+    backend = ProgramAsWeightsBackend(
+        # A real `compile_timeout_s` is 3600s; 2.0s keeps the *failing* (pre-fix) run
+        # bounded for the red-at-main gate, which would otherwise spin for an hour.
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0.05, compile_timeout_s=2.0
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    message = str(exc_info.value)
+    assert "redis_unavailable: queue backend down" in message, "the server's error string must be surfaced verbatim"
+    assert "infrastructure_error" in message
+    assert "job-1" in message
+    assert sdk.status_attempts == 1, (
+        f"polled {sdk.status_attempts} times for a job the server had already given up "
+        "on; an unrecognised terminal state must fail within one poll interval"
+    )
+
+
+def test_wait_for_job_success_status_with_no_program_id_but_an_error_fails_fast_A_5(
+    key: None, tmp_path: Path
+) -> None:
+    """`completed` with a null `program_id` and a non-null `error` is the same defect
+    wearing a recognised status name: the job is over, there is no program, and the
+    old code slept on it until `compile_timeout_s`."""
+    sdk = _CancellableSDK(
+        [{"status": "completed", "program_id": None, "error": "adapter upload failed"}]
+    )
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0.05, compile_timeout_s=2.0
+    )
+
+    with pytest.raises(RuntimeError, match="adapter upload failed"):
+        backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    assert sdk.status_attempts == 1
+
+
+def test_wait_for_job_cancels_the_job_once_on_a_genuine_timeout_A_5(
+    key: None, tmp_path: Path
+) -> None:
+    """When the poll loop itself gives up, the queued job is still the caller's to pay
+    for -- attempt `cancel_compile` exactly once so it does not run on anyway."""
+    sdk = _CancellableSDK([{"status": "running", "program_id": None, "error": None}])
+    backend = ProgramAsWeightsBackend(
+        compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0, compile_timeout_s=0
+    )
+
+    with pytest.raises(TimeoutError):
+        backend.compile("spec", [], str(tmp_path / "ft.paw"))
+    assert sdk.cancel_calls == ["job-1"]
+
+
+def test_wait_for_job_unknown_status_without_an_error_keeps_polling_A_5(
+    key: None, tmp_path: Path
+) -> None:
+    """Negative control (green at `main` by design -- see the track file). The fix must
+    not turn every unfamiliar status name into a failure: a server that introduces
+    `provisioning` as a *transient* state carries no `error`, and the compile the user
+    already paid for must keep being polled."""
+    sdk = _CancellableSDK(
+        [
+            {"status": "provisioning", "program_id": None, "error": None},
+            {"status": "completed", "program_id": "prog-ft", "slug": "s", "error": None,
+             "completed_at": "now"},
+        ]
+    )
+    backend = ProgramAsWeightsBackend(compiler=FINETUNE_COMPILER, sdk=sdk, poll_interval_s=0)
+
+    out = tmp_path / "ft.paw"
+    backend.compile("spec", [], str(out))
+    assert json.loads(out.read_text())["program_id"] == "prog-ft"
+    assert sdk.status_attempts == 2
+    assert sdk.cancel_calls == []

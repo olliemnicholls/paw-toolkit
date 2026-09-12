@@ -135,10 +135,14 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             own documentation for its effect.
         compile_retries: Extra attempts for the actual `paw.compile`/`paw.compile_async`
             HTTP call, after a connect failure (`httpx.ConnectTimeout`/`ConnectError` --
-            the request provably never reached the server) or a 5xx other than 504
-            (server-side, transient), with a short backoff between attempts. A read
-            timeout, a 504, or a 4xx (bad request, invalid API key, rate limit) is never
-            retried -- see `_invoke_compile`'s docstring for why. `0` disables retrying.
+            the request provably never reached the server), with a short backoff between
+            attempts. A 5xx other than 504 is additionally retried on the **synchronous**
+            `paw.compile` path only; `compile_async` (the paid finetune submission) never
+            retries a 5xx, because a duplicate there both double-bills and orphans the
+            first attempt's `job_id` (A-1). A read timeout, a 504, or a 4xx (bad request,
+            invalid API key, rate limit) is never retried on either path -- see
+            `_invoke_compile`'s docstring for the full policy and its residual risk.
+            `0` disables retrying.
         sdk: Test seam. Any object exposing `compile`, `compile_async`,
             `get_compile_status` and `function` with the upstream signatures. Defaults to
             the real `programasweights` module, imported lazily on first use.
@@ -259,6 +263,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
 
         compile_started = time.monotonic()
         if self.compiler == FINETUNE_COMPILER:
+            # A-1: no `retry_5xx=True` here, deliberately. See `_invoke_compile`.
             job = self._invoke_compile(
                 paw.compile_async,
                 full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral,
@@ -268,6 +273,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             program = self._invoke_compile(
                 paw.compile,
                 full_spec, compiler=self.compiler, public=self.public, ephemeral=self.ephemeral,
+                retry_5xx=True,
             )
             program_id = getattr(program, "id", None) or (program.get("id") if isinstance(program, dict) else None)
             slug = getattr(program, "slug", None) or (program.get("slug") if isinstance(program, dict) else None)
@@ -308,7 +314,13 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             self._functions.pop(output_path, None)
         return output_path
 
-    def _invoke_compile(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    def _invoke_compile(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        retry_5xx: bool = False,
+        **kwargs: Any,
+    ) -> Any:
         """Call `fn` (`paw.compile` or `paw.compile_async`), converting an httpx
         connect failure or HTTP error response into a `RuntimeError` naming the
         service and what happened -- rather than letting a raw httpx exception (whose
@@ -319,19 +331,37 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         that is *not idempotent*. Resubmitting it after the server has already seen the
         request queues a second compile, spends a second unit of the rate-limited
         quota, and (on the finetune path) discards the first attempt's `job_id`, making
-        that job unpollable. So only `httpx.ConnectTimeout`/`httpx.ConnectError` (the
-        TCP handshake itself failed or timed out -- the request provably never reached
-        the server) are retried, up to `self.compile_retries` additional times with a
-        short backoff. Every other timeout (`httpx.ReadTimeout` and friends: the
-        request was sent and the server may already be compiling) is raised
-        immediately, *not* retried -- the message explains that the compile may still
-        be running server-side and that re-running with the same spec will hit the
-        compile cache once it finishes, instead of paying for a second compile. A 5xx
-        response is retried the same way as a connect failure, *except* 504 (gateway
-        timeout), which carries the same "already landed, still working" ambiguity as
-        a read timeout and so is also never retried. A 4xx (bad request, invalid API
-        key, rate limit) is never retried either -- retrying it wastes a rate-limited
-        attempt on something that will fail again identically.
+        that job unpollable and uncancellable. So only
+        `httpx.ConnectTimeout`/`httpx.ConnectError` (the TCP handshake itself failed or
+        timed out -- the request provably never reached the server) are retried
+        unconditionally, up to `self.compile_retries` additional times with a short
+        backoff. Every other timeout (`httpx.ReadTimeout` and friends: the request was
+        sent and the server may already be compiling) is raised immediately, *not*
+        retried -- the message explains that the compile may still be running
+        server-side and that re-running with the same spec will hit the compile cache
+        once it finishes, instead of paying for a second compile. A 4xx (bad request,
+        invalid API key, rate limit) is never retried either -- retrying it wastes a
+        rate-limited attempt on something that will fail again identically.
+
+        **A-1: a 5xx is retried only when the caller opts in with `retry_5xx=True`,
+        and only the synchronous `paw.compile` call site does.** A non-504 5xx (a
+        gateway 502, or a 500 raised while serialising the response for a job that was
+        already enqueued) proves nothing about whether the compile landed, so retrying
+        it can buy a second compile. `compile_async` is reachable only via
+        `FINETUNE_COMPILER`, where a duplicate compile is 96-223s of paid GPU *and*
+        orphans the first `job_id` -- unpollable and uncancellable -- so it never
+        retries a 5xx. The unsafe direction requires an explicit opt-in precisely so a
+        future third call site cannot inherit the retry silently. 504 (gateway timeout)
+        stays excluded even when `retry_5xx=True`: it carries the same "already landed,
+        still working" ambiguity as a read timeout.
+
+        **Residual risk on the sync path, stated rather than hidden:** upstream's
+        compile cache is keyed on spec text, so a resubmitted identical spec usually
+        returns the program the first attempt created -- but only once that program is
+        actually cached. If the first POST landed and the retry arrives before it is,
+        the retry buys a second *fast* compile. That is bounded to the fast compiler and
+        to `self.compile_retries` (default 1) extra attempts, and there is no `job_id`
+        to orphan. The cache does not make the retry free.
         """
         attempt = 0
         while True:
@@ -361,7 +391,10 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                 status_code = exc.response.status_code if exc.response is not None else None
                 body = exc.response.text[:300] if exc.response is not None else ""
                 retryable_5xx = (
-                    status_code is not None and 500 <= status_code < 600 and status_code != 504
+                    retry_5xx
+                    and status_code is not None
+                    and 500 <= status_code < 600
+                    and status_code != 504
                 )
                 if retryable_5xx and attempt < self.compile_retries:
                     attempt += 1
@@ -407,6 +440,22 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         raises a `RuntimeError` naming `job_id` so the caller can poll the job again
         later by hand -- the compile itself may well still be running. The overall
         `compile_timeout_s` wall-clock cap still applies on top of this.
+
+        A-5: upstream publishes no enum of job states, so `_SUCCESS_STATES` and
+        `_FAILED_STATES` are both guesses about a vocabulary that can grow. Anything
+        outside them used to fall through to the sleep loop and be polled for the whole
+        `compile_timeout_s` -- 720 GETs at the defaults -- while the server's own `error`
+        string sat in the response unread. A status *with a non-null `error` and no
+        `program_id`* is therefore treated as terminal failure whatever it is called
+        (`infrastructure_error`, `redis_unavailable`, or a `completed` that named no
+        program), with `error` surfaced verbatim. A status this code does not recognise
+        and that carries **no** error is still polled: a server is free to introduce a
+        new *transient* state, and failing a compile the user has already paid for
+        because its status string is unfamiliar would be strictly worse than waiting.
+
+        When the poll loop itself times out, `cancel_compile` is attempted once
+        (best-effort, never masking the timeout) -- the job is queued and billable, and
+        nothing else in this process is ever going to come back for it.
         """
         job_id = job.get("job_id") if isinstance(job, dict) else getattr(job, "job_id", None)
         if not job_id:
@@ -439,6 +488,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                         f"later with this job_id: {job_id}"
                     ) from failure_exc
                 if time.monotonic() >= deadline:
+                    self._cancel_job_best_effort(paw, job_id)
                     raise TimeoutError(
                         f"ProgramAsWeights compile {job_id} still unreachable after "
                         f"{self.compile_timeout_s}s"
@@ -451,15 +501,49 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             get = status_obj.get if isinstance(status_obj, dict) else lambda k, d=None: getattr(status_obj, k, d)
             status = str(get("status") or "").lower()
             program_id = get("program_id")
+            error = get("error")
             if status in _FAILED_STATES:
-                raise RuntimeError(f"ProgramAsWeights finetune compile {job_id} {status}: {get('error')!r}")
+                raise RuntimeError(f"ProgramAsWeights finetune compile {job_id} {status}: {error!r}")
             if program_id and (status in _SUCCESS_STATES or get("completed_at")):
                 return str(program_id), get("slug"), status, extract_snapshot(status_obj)
+            # A-5: the job reported a problem and named no program. Whatever the status
+            # string is, there is nothing left to wait for -- fail now, with the
+            # server's own explanation, instead of polling until compile_timeout_s.
+            if error is not None and not program_id:
+                raise RuntimeError(
+                    f"ProgramAsWeights finetune compile {job_id} reported status "
+                    f"{status!r} with no program_id and an error, so it is treated as "
+                    f"terminal rather than polled further: {error!r}"
+                )
             if time.monotonic() >= deadline:
+                self._cancel_job_best_effort(paw, job_id)
                 raise TimeoutError(
                     f"ProgramAsWeights compile {job_id} still {status!r} after {self.compile_timeout_s}s"
                 )
             time.sleep(self.poll_interval_s)
+
+    @staticmethod
+    def _cancel_job_best_effort(paw: Any, job_id: str) -> None:
+        """A-5: ask the service to cancel a job this process has stopped waiting for.
+
+        Strictly best-effort. The caller is already raising, and the reasons this can
+        fail are all ones that must not replace the timeout the caller needs to see: an
+        SDK too old to expose `cancel_compile`, a 409 because the job has already
+        started (upstream documents that response), or the same network fault that
+        caused the timeout in the first place.
+        """
+        cancel = getattr(paw, "cancel_compile", None)
+        if not callable(cancel):
+            return
+        try:
+            cancel(job_id)
+        except Exception:
+            warnings.warn(
+                f"ProgramAsWeights compile {job_id} timed out and could not be "
+                "cancelled; it may still be running (and billable) server-side.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # ------------------------------------------------------------------ infer
 
