@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import threading
 import time
 from typing import List
 from pydantic import BaseModel
@@ -574,10 +575,23 @@ def test_compile_on_hit_sync_recompile_of_ready_task_bypasses_stale_cache_PAW_JI
     svc("x")  # cache hit expected: load must NOT be called again
     assert load_call_count["n"] == 0
 
-    # Recompile the already-"ready" task via the public API surface, exactly as
-    # BackgroundCompiler.trigger_compilation(sync=True) allows (compiler.py's
-    # status-guard is skipped entirely when sync=True).
+    # Recompile the already-"ready" task via the public API surface.
+    #
+    # J-6 (named hazard, listed in `conductor/tracks/bug-hunt-D-money-privacy.md`):
+    # this test used to reach its recompile by exploiting the defect J-6 fixes. The
+    # comment here read "exactly as BackgroundCompiler.trigger_compilation(sync=True)
+    # allows (compiler.py's status-guard is skipped entirely when sync=True)" -- i.e. it
+    # recompiled a `ready` task through the `and not sync` hole that let 8 concurrent
+    # sync triggers buy 8 paid compiles. With the hole closed, `trigger_compilation`
+    # correctly returns None here and no recompile happens.
+    #
+    # Re-pointed, not deleted: this test's actual subject is PAW-JIT-05 cache
+    # invalidation, which is unrelated to the duplicate guard. The recompile is now
+    # driven through a legitimately-allowed path -- returning the task to `tracing`
+    # first, which is what any real recompile does -- and every invalidation assertion
+    # below is unchanged.
     out_path = svc.db.get_adapter_path(svc.task_id)  # type: ignore[attr-defined]
+    svc.db.set_status(svc.task_id, "tracing")  # type: ignore[attr-defined]
     decorator_module._GLOBAL_COMPILER.trigger_compilation(
         task_id=svc.task_id,  # type: ignore[attr-defined]
         spec="JIT-05 stale-recompile test",
@@ -750,3 +764,49 @@ def test_shipped_backend_compiles_route_through_atomic_write_PAW_JIT_05() -> Non
 
     assert "atomic_write_text" in inspect.getsource(MockPAWBackend.compile)
     assert "atomic_write_text" in inspect.getsource(ProgramAsWeightsBackend.compile)
+
+
+def test_sync_trigger_compilation_is_also_deduplicated_J_6(tmp_path: Path) -> None:
+    """J-6: `sync_compile=True` dropped the duplicate guard wholesale.
+
+    `compiler.py`'s guard was `status in (...) and not sync`, so the `sync=True` path was
+    not guarded at all -- the comment claimed protection came from "the fresh status read
+    at the decorator's compile trigger", which is not atomic with `set_status`. The hunt
+    measured duplicate compiles in 18 of 20 runs (max 24 for one task) against 0 of 20
+    with `sync_compile=False`. Each duplicate also bumps `state_epoch` and can burn the
+    retry cap in one burst.
+
+    In-process threads here; the cross-process half is
+    `test_exactly_one_paid_compile_across_six_processes_D_2_J_6` in
+    tests/test_jit_persistence.py, which is the one that actually proves the CAS.
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    compiler = BackgroundCompiler()
+    calls: List[str] = []
+    lock = threading.Lock()
+
+    class _CountingBackend(MockPAWBackend):
+        def compile(self, spec: str, examples: object, output_path: str) -> str:  # type: ignore[override]
+            with lock:
+                calls.append(output_path)
+            time.sleep(0.05)
+            return super().compile(spec, examples, output_path)  # type: ignore[arg-type]
+
+    backend = _CountingBackend()
+    out_path = str(tmp_path / "t.paw")
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [
+                pool.submit(
+                    compiler.trigger_compilation,
+                    task_id="t", spec="spec", db=db, backend=backend,
+                    output_path=out_path, sync=True,
+                )
+                for _ in range(8)
+            ]
+            for f in futures:
+                f.result()
+        assert len(calls) == 1, f"{len(calls)} compiles for one task from 8 sync triggers"
+    finally:
+        db.close()

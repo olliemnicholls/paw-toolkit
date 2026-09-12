@@ -55,19 +55,33 @@ class BackgroundCompiler:
         Returns:
             The spawned Thread if asynchronous, or None if synchronous or already compiling.
         """
-        with self._lock:
-            status = db.get_status(task_id)
-            # Track 14: "shadow" joins the guard. A caller whose routing snapshot
-            # predates the compile finishing would otherwise re-enter here for a task
-            # already in `shadow` and recompile underneath the running shadow worker,
-            # invalidating the callable cache and the epoch's pairs mid-window. Note
-            # this closes the *asynchronous* path only -- the guard is `... and not
-            # sync`, so it is skipped entirely when sync=True, both before and after
-            # this change. The protection for `sync_compile=True` is the fresh status
-            # read at the decorator's compile trigger, not this tuple.
-            if status in ("compiling", "shadow", "ready", "failed") and not sync:
-                return None
-            db.set_status(task_id, "compiling")
+        # D-2/J-6: one compare-and-set, for both paths, replacing a read-then-write
+        # guard and the `and not sync` hole in it.
+        #
+        # What was here: `status = db.get_status(task_id)`, a deny-list check against
+        # `("compiling", "shadow", "ready", "failed")`, and then
+        # `db.set_status(task_id, "compiling")`. Two problems, one per finding.
+        #
+        # D-2 -- the check and the write were separate statements, so N *processes*
+        # crossing the compile threshold together each read `tracing`, each decided to
+        # compile, and each bought a paid compile. `self._lock` below cannot close that:
+        # an `RLock` is per process and `traces.db` is shared. Measured: 6 of 6 processes
+        # compiled the same task.
+        #
+        # J-6 -- the guard was `... and not sync`, so the `sync=True` path was not
+        # guarded at all. The comment that used to stand here claimed the protection came
+        # from "the fresh status read at the decorator's compile trigger", which is a
+        # read that is not atomic with this write either: duplicate compiles in 18 of 20
+        # runs, up to 24 for one task. Dropping `and not sync` is safe *now* precisely
+        # because `try_begin_compile` is the guard -- the CAS decides and writes in one
+        # committed transaction -- so the in-process lock is no longer load-bearing for
+        # correctness. It is kept only for `_active_threads`, which it has always owned.
+        #
+        # The deny-list became an allow-list of one; `TraceDB.try_begin_compile`'s
+        # docstring carries the equivalence argument (and why the upsert is what makes it
+        # equivalent for a task with no row yet).
+        if not db.try_begin_compile(task_id):
+            return None
 
         def _worker() -> None:
             try:

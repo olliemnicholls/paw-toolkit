@@ -18,6 +18,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import threading
+import time
 from typing import Any, Callable, Dict, List, Tuple
 
 import pytest
@@ -1264,3 +1265,264 @@ def test_a_scored_window_is_not_rescored_on_every_comparison_J_12() -> None:
     )
     runner._maybe_transition(job, 40)
     assert db.stats_calls == 2, "the next completed window was not evaluated"
+
+
+# --- D-2 / J-6: exactly one paid compile per `tracing` -> `compiling` transition ---
+#
+# `BackgroundCompiler.trigger_compilation` read `db.get_status(task_id)`, decided, and
+# then wrote `db.set_status(task_id, "compiling")` -- a textbook TOCTOU that its own
+# `threading.RLock` cannot close, because the lock is per process and the traces.db is
+# shared. N processes crossing the compile threshold together therefore bought N paid
+# compiles. The fix is `TraceDB.try_begin_compile`, a compare-and-set.
+#
+# Phase 0 measured that a *bare* single-statement `UPDATE ... WHERE status='tracing'` is
+# not sufficient here and is strictly worse than the bug: under
+# `isolation_level="IMMEDIATE"` the DML opens a transaction and leaves it open, so the
+# caller sees `rowcount == 1` and starts paying while every other process still reads
+# `tracing` and can win the same CAS -- and the row reverts on a crash, after the money
+# is spent. Atomicity was never the missing property; commit was.
+# `test_try_begin_compile_is_committed_before_it_returns_D_2` below is that measurement
+# turned into an assertion.
+
+
+class _FilesystemCountingBackend:
+    """Counts `compile()` calls in the FILESYSTEM, deliberately.
+
+    An in-memory counter is worthless for this finding: each of the K processes holds
+    its own backend instance and its own integer, so every process would count 1 and the
+    test would pass vacuously against the very cross-process race it exists to detect.
+    One `O_EXCL` file per call, in a shared directory, is a counter all K processes share.
+
+    The sleep is load-bearing too. A real paid compile takes seconds to minutes; an
+    instantaneous one narrows the decide-then-write window so far that the race becomes
+    hard to observe even where it exists.
+    """
+
+    def __init__(self, counter_dir: str) -> None:
+        self._counter_dir = Path(counter_dir)
+
+    def compile(self, spec: str, examples: Any, output_path: str) -> str:
+        self._counter_dir.mkdir(parents=True, exist_ok=True)
+        marker = self._counter_dir / f"{os.getpid()}-{len(list(self._counter_dir.iterdir()))}"
+        fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        time.sleep(0.3)
+        Path(output_path).write_text('{"backend": "mock", "examples": []}', encoding="utf-8")
+        return output_path
+
+    def infer(self, adapter_path: str, input_text: str, grammar_constraint: Any = None) -> str:
+        return "x"
+
+    def is_available(self) -> bool:
+        return True
+
+
+def _w_trigger_compilation(
+    db_path: str, task_id: str, counter_dir: str, start_at: float, sync: bool
+) -> None:
+    """One process crossing the compile trigger. Module-level so it is picklable.
+
+    The barrier is a shared wall-clock deadline rather than a `multiprocessing.Barrier`
+    so it does not depend on the start method.
+    """
+    from paw_kit.jit.compiler import BackgroundCompiler
+
+    db = TraceDB(db_path=db_path)
+    compiler = BackgroundCompiler()
+    backend = _FilesystemCountingBackend(counter_dir)
+    out_path = str(Path(db_path).with_name(f"{task_id}.paw"))
+    while time.time() < start_at:
+        time.sleep(0.002)
+    thread = compiler.trigger_compilation(
+        task_id=task_id, spec="spec", db=db, backend=backend,  # type: ignore[arg-type]
+        output_path=out_path, sync=sync,
+    )
+    if thread is not None:
+        thread.join(timeout=60)
+    db.close()
+
+
+@pytest.mark.parametrize("sync", [False, True])
+def test_exactly_one_paid_compile_across_six_processes_D_2_J_6(
+    tmp_path: Path, sync: bool
+) -> None:
+    """The report's own bar: a counting backend's `compile()` runs exactly once when K
+    processes trigger concurrently.
+
+    `sync=False` is D-2 (the TOCTOU across the guard). `sync=True` is J-6: the guard was
+    `... and not sync`, so it was skipped *wholesale* on that path -- the hunt measured
+    duplicate compiles in 18 of 20 runs, up to 24 for one task, against 0 of 20 with
+    `sync=False`. Both paths now go through the same compare-and-set, which is what lets
+    `and not sync` be dropped: the CAS *is* the guard, and the in-process RLock is no
+    longer load-bearing for correctness.
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    task_id = "dedup"
+    _seed(db_path, task_id)
+    counter_dir = tmp_path / "compiles"
+
+    start_at = time.time() + 1.0
+    workers = [
+        multiprocessing.Process(
+            target=_w_trigger_compilation,
+            args=(db_path, task_id, str(counter_dir), start_at, sync),
+        )
+        for _ in range(6)
+    ]
+    for p in workers:
+        p.start()
+    for p in workers:
+        p.join(timeout=120)
+        assert p.exitcode == 0, "a worker process crashed"
+
+    compiles = sorted(p.name for p in counter_dir.iterdir()) if counter_dir.exists() else []
+    assert len(compiles) == 1, (
+        f"{len(compiles)} paid compiles for one task across 6 processes "
+        f"(sync={sync}): {compiles}"
+    )
+
+    # The audit trail has to agree with the money. One won transition, not six.
+    began = _rows(
+        db_path,
+        "SELECT id FROM state_transitions WHERE task_id = ? AND to_status = 'compiling';",
+        (task_id,),
+    )
+    assert len(began) == 1, f"{len(began)} 'compiling' transitions recorded for one compile"
+    assert _rows(db_path, "SELECT status FROM tasks WHERE task_id = ?;", (task_id,)) == [("ready",)]
+
+
+def test_try_begin_compile_wins_exactly_once_from_tracing_D_2(tmp_path: Path) -> None:
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert db.try_begin_compile("t") is True
+        assert db.get_status("t") == "compiling"
+        assert db.try_begin_compile("t") is False, "the second caller must not also pay"
+    finally:
+        db.close()
+
+
+def test_try_begin_compile_upserts_when_there_is_no_task_row_D_2(tmp_path: Path) -> None:
+    """The D-7 regression this CAS must not reintroduce, and the reason it is an *upsert*.
+
+    A bare `UPDATE ... WHERE status='tracing'` affects **zero** rows when no `tasks` row
+    exists yet -- and today's guard *wins* in that case, because `get_status` returns
+    `"tracing"` for a missing row and `set_status` upserts. A bare UPDATE would therefore
+    silently refuse the first-ever compile: verbatim the D-7 defect this repo already
+    paid for ("a bare UPDATE against a missing tasks row affecting zero rows and
+    reporting success").
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        assert _rows(str(tmp_path / "paw" / "traces.db"), "SELECT task_id FROM tasks;") == []
+        assert db.try_begin_compile("never-seen") is True, (
+            "the first-ever compile for a task with no row was refused"
+        )
+        assert db.get_status("never-seen") == "compiling"
+        assert db.try_begin_compile("never-seen") is False
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("status", ["compiling", "shadow", "ready", "failed"])
+def test_try_begin_compile_refuses_every_other_persisted_status_D_2(
+    tmp_path: Path, status: str
+) -> None:
+    """The deny-list -> allow-list inversion, pinned.
+
+    The old guard was a deny-list (`compiling|shadow|ready|failed`); the CAS is an
+    allow-list of one. Persisted statuses are exactly
+    `tracing|compiling|shadow|ready|failed` (`stalled` is derived in `get_task_report`
+    and never stored), so the complement of the deny-list is `{tracing}` plus the no-row
+    case -- which is why the inversion is equivalent, *given* the upsert above. This
+    parametrisation is the enumeration that keeps it equivalent.
+    """
+    db = TraceDB(db_path=str(tmp_path / "paw" / "traces.db"))
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        db.set_status("t", status)
+        assert db.try_begin_compile("t") is False
+        assert db.get_status("t") == status
+    finally:
+        db.close()
+
+
+def test_try_begin_compile_is_committed_before_it_returns_D_2(tmp_path: Path) -> None:
+    """Phase 0 F2, as an assertion rather than a measurement.
+
+    A bare single-statement CAS reports `rowcount == 1` while leaving the transaction
+    **open** under `isolation_level="IMMEDIATE"`. That is strictly worse than the TOCTOU
+    D-2 set out to fix: the caller believes it won and starts paying, every other process
+    still reads `tracing` and can win the same CAS, and the row reverts on a crash after
+    the money is spent. A second, independent connection is the only way to see the
+    difference -- the winning connection reads its own uncommitted write either way.
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        assert db.try_begin_compile("t") is True
+        assert db._conn.in_transaction is False, (
+            "try_begin_compile returned with its transaction still open: the caller is "
+            "about to pay for a compile whose status write no other process can see"
+        )
+        assert _rows(db_path, "SELECT status FROM tasks WHERE task_id = 't';") == [("compiling",)], (
+            "an independent connection does not see 'compiling', so the CAS was never "
+            "committed and another process can win it too"
+        )
+    finally:
+        db.close()
+
+
+def test_try_begin_compile_keeps_set_status_parity_D_2(tmp_path: Path) -> None:
+    """Epoch bump, audit row and invalidation hook, all of which `set_status` does today.
+
+    Skipping any of them would silently drop the `state_transitions` audit row, the
+    epoch bump that shadow-window arithmetic depends on, or the adapter-cache
+    invalidation listener -- three regressions hidden behind a correct-looking CAS.
+    """
+    db_path = str(tmp_path / "paw" / "traces.db")
+    db = TraceDB(db_path=db_path)
+    fired: List[str] = []
+    db.register_status_listener(fired.append)
+    try:
+        db.record_trace("t", "i", "o", 1.0)
+        _, _, epoch_before = db.get_task_routing("t")
+        assert db.try_begin_compile("t") is True
+        _, _, epoch_after = db.get_task_routing("t")
+        assert epoch_after == epoch_before + 1, "state_epoch was not bumped"
+        assert _rows(
+            db_path,
+            "SELECT from_status, to_status, state_epoch FROM state_transitions "
+            "WHERE task_id = 't';",
+        ) == [("tracing", "compiling", epoch_after)]
+        assert fired == ["t"], "the PAW-JIT-05 invalidation listener did not fire"
+        # A loser writes nothing at all: no epoch bump, no audit row, no listener.
+        assert db.try_begin_compile("t") is False
+        assert db.get_task_routing("t")[2] == epoch_after
+        assert len(_rows(db_path, "SELECT id FROM state_transitions WHERE task_id = 't';")) == 1
+        assert fired == ["t"]
+    finally:
+        db.close()
+
+
+def _w_try_begin_compile(db_path: str, task_id: str, n: int) -> None:
+    """Winners append a marker file next to the database; see `_FilesystemCountingBackend`."""
+    db = TraceDB(db_path=db_path)
+    wins = Path(db_path).parent / "wins"
+    wins.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        if db.try_begin_compile(task_id):
+            fd = os.open(str(wins / f"{os.getpid()}-{i}"), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+    db.close()
+
+
+def test_try_begin_compile_has_exactly_one_winner_across_processes_D_2(tmp_path: Path) -> None:
+    """The CAS itself, isolated from `BackgroundCompiler`: 6 processes x 20 attempts,
+    one `tracing` to claim, exactly one winner."""
+    db_path = str(tmp_path / "paw" / "traces.db")
+    _seed(db_path, "cas")
+    _run_procs(_w_try_begin_compile, db_path, "cas", procs=6, per=20)
+    wins = list((Path(db_path).parent / "wins").iterdir())
+    assert len(wins) == 1, f"{len(wins)} processes each believed they had won the CAS: {wins}"

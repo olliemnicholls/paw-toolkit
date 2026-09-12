@@ -618,6 +618,86 @@ class TraceDB:
         for listener in list(self._status_listeners):
             listener(task_id)
 
+    def try_begin_compile(self, task_id: str) -> bool:
+        """Compare-and-set `tracing` -> `compiling`. True only for the writer that won.
+
+        D-2. `BackgroundCompiler.trigger_compilation` read `get_status`, decided, and
+        then called `set_status(..., "compiling")`. Its own `threading.RLock` cannot
+        close that window: the lock is per process and `traces.db` is shared, so N
+        processes crossing the compile threshold together each read `tracing`, each
+        decide to compile, and each buy a paid compile. Measured at 6 of 6 processes on
+        both the sync and async paths. This method is the claim those callers branch on.
+
+        **Why this is not the one-line `UPDATE` the finding's first draft described.**
+        Atomicity was never the missing property; *commit* was. Under
+        `isolation_level="IMMEDIATE"` sqlite3 emits `BEGIN IMMEDIATE` before a DML
+        statement and then leaves the transaction **open**. A bare
+        `self._conn.execute("UPDATE ... WHERE status='tracing'")` would therefore report
+        `rowcount == 1` to a caller that is about to spend money, while every other
+        process still reads `tracing` and can win the same CAS, while holding the write
+        lock so every other writer burns its whole `_with_write_retry` budget, and while
+        leaving the row to revert to `tracing` if this process dies -- after the money
+        was spent. That is strictly worse than the race it would be fixing. Hence
+        `_with_write_retry` + `_write_txn()`, exactly like every other read-modify-write
+        on this class.
+
+        **Why it is an upsert and not an UPDATE.** A bare UPDATE affects **zero** rows
+        when no `tasks` row exists yet -- and today's guard *wins* in that case, because
+        `get_status` returns `"tracing"` for a missing row and `set_status` upserts. An
+        UPDATE-only CAS would silently refuse the first-ever compile for every task:
+        verbatim the D-7 defect this repo has already paid for once.
+
+        **Why an allow-list of one is equivalent to the deny-list it replaces.** The old
+        guard refused `compiling|shadow|ready|failed`. The statuses this module ever
+        *persists* are exactly `tracing|compiling|shadow|ready|failed` -- `stalled` is
+        derived in `get_task_report` and never stored -- so the complement of that
+        deny-list is `{tracing}` plus the no-row case, which is what this method accepts.
+        The equivalence holds *because* of the upsert above; without it the no-row case
+        would change behaviour.
+
+        Parity with `set_status` is deliberate and load-bearing: a win bumps
+        `state_epoch`, writes the `state_transitions` audit row, advances that task's
+        prune clock and fires `_status_listeners`. Skipping any of them would drop the
+        audit trail, the epoch bump shadow-window arithmetic depends on, or the
+        adapter-cache invalidation hook -- three regressions behind a correct-looking CAS.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+
+        def _do() -> Optional[Tuple[str, int]]:
+            with self._write_txn():
+                previous, _ = self._get_status_and_epoch_locked(task_id)
+                cur = self._conn.execute(
+                    """
+                    INSERT INTO tasks (task_id, call_count, status, state_epoch,
+                                       created_at, updated_at)
+                    VALUES (?, 0, 'compiling', 1, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        status = 'compiling',
+                        state_epoch = tasks.state_epoch + 1,
+                        updated_at = excluded.updated_at
+                    WHERE tasks.status = 'tracing';
+                    """,
+                    (task_id, now, now),
+                )
+                if cur.rowcount == 0:
+                    return None
+                # Re-read rather than recompute: on the insert branch the epoch is 1, on
+                # the conflict branch it is whatever SQLite incremented it to, and the
+                # `state_transitions` row has to name the epoch that was actually stored.
+                _, new_epoch = self._get_status_and_epoch_locked(task_id)
+                self._record_transition_locked(
+                    task_id, previous or "tracing", "compiling", None, None, new_epoch, now
+                )
+                return (previous or "tracing", new_epoch)
+
+        won = self._with_write_retry(_do)
+        if won is None:
+            return False
+        self._after_transition_write(task_id)
+        for listener in list(self._status_listeners):
+            listener(task_id)
+        return True
+
     def get_compile_attempts(self, task_id: str) -> int:
         """Retrieve the number of compilation attempts made so far for task_id (PAW-JIT-03).
 
