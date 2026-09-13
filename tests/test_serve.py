@@ -195,6 +195,27 @@ def test_schema_enforcement_in_server(mock_adapter: Path) -> None:
     assert TicketSchema.model_validate(claude_text)
 
 
+def test_create_app_warns_when_backend_omitted_A_10(mock_adapter: Path) -> None:
+    """A-10: `create_app()` with no `backend=` must warn, the same way
+    `schema.loader.get_default_backend()` already warns its own omitted-backend
+    callers -- both silently hand back MockPAWBackend, not a placeholder that
+    becomes real hardware in production. The CLI's own `serve` command never hits
+    this (it always resolves a backend first via `_resolve_cli_backend`); this is
+    for a direct/programmatic caller.
+    """
+    with pytest.warns(UserWarning, match="no backend="):
+        create_app(mock_adapter, allow_anonymous=True)
+
+
+def test_create_app_does_not_warn_when_backend_is_given(mock_adapter: Path) -> None:
+    """The negative control: passing an explicit backend must not warn."""
+    import warnings as warnings_module
+
+    with warnings_module.catch_warnings():
+        warnings_module.simplefilter("error")
+        create_app(mock_adapter, backend=MockPAWBackend(), allow_anonymous=True)
+
+
 def test_error_handling_and_validation(mock_adapter: Path) -> None:
     """Verify proper error responses, generic 500 error sanitization, and metric tracking."""
     # Non-existent adapter file

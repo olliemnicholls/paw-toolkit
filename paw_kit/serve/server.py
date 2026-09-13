@@ -17,6 +17,7 @@ import secrets
 import sys
 import threading
 import time
+import warnings
 from typing import Any, Callable, Dict, List, Optional, Type, Union
 import uuid
 
@@ -855,6 +856,21 @@ def create_app(
     if not path_obj.exists():
         raise FileNotFoundError(f"Adapter file not found: {adapter_path}")
 
+    # A-10: a caller who omits `backend=` (the CLI's `serve` command never does --
+    # it always resolves one first, see `_resolve_cli_backend` -- this is for a
+    # direct/programmatic `create_app` call) lands here silently otherwise. Same
+    # warning `paw_kit.schema.loader.get_default_backend` already gives its own
+    # omitted-backend callers, for the same reason: this is the mock backend, not a
+    # placeholder that becomes real hardware in production.
+    if backend is None:
+        warnings.warn(
+            "create_app() called with no backend= -- serving MockPAWBackend (a "
+            "deterministic rule/example-based stub, not a real model). Pass "
+            "backend=ProgramAsWeightsBackend(...) or your own AbstractPAWBackend for "
+            "real inference.",
+            UserWarning,
+            stacklevel=2,
+        )
     selected_backend = backend or MockPAWBackend()
     # Return basename to avoid exposing host filesystem directory layout
     state = ServerState()
