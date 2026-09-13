@@ -1079,6 +1079,41 @@ def test_json_float_integer_part_caps_digit_count_PAW_SCHEMA_06() -> None:
     assert _re.match(pat, f'{{"value": {at_limit}.5}}') is not None
 
 
+def test_json_float_exponent_is_bounded_S_19() -> None:
+    """A field-level float regex must not accept an exponent that overflows to inf.
+
+    `1e400` satisfies JSON and pydantic accepts it (`json.loads("1e400")` returns
+    `float("inf")`), but `inf` is not valid JSON to re-serialise
+    (`json.dumps(float("inf"))` raises `ValueError`) -- a decoder emitting it hands
+    the caller a value the grammar itself calls valid and the JSON spec does not.
+    """
+    import json
+    import re as _re
+    from paw_kit.schema.grammar import JSON_FLOAT, _MAX_EXPONENT_DIGITS
+
+    class FloatModel(BaseModel):
+        value: float
+
+    pat = pydantic_to_regex(FloatModel, anchors=True)
+    assert _re.match(pat, '{"value": 1e400}') is None
+    assert float("1e400") == float("inf")
+    # Standard-compliant JSON has no way to spell infinity: Python's own `json.dumps`
+    # only accepts it by default because of a non-standard extension (`allow_nan`,
+    # emitting the bare token `Infinity`, which most other JSON parsers reject).
+    with pytest.raises(ValueError):
+        json.dumps(float("inf"), allow_nan=False)
+
+    # The field-level regex still accepts an ordinary exponent.
+    assert _re.match(pat, '{"value": 1.5e10}') is not None
+
+    # JSON_FLOAT directly, at and past the exponent's own digit cap.
+    at_limit = "1e" + "9" * _MAX_EXPONENT_DIGITS
+    over_limit = "1e" + "9" * (_MAX_EXPONENT_DIGITS + 1)
+    assert _re.fullmatch(JSON_FLOAT, at_limit) is not None
+    assert _re.fullmatch(JSON_FLOAT, over_limit) is None
+    assert float(at_limit) != float("inf")
+
+
 # --- PAW-SCHEMA-07: content-fingerprint cache keying, not model-identity keying ----
 
 

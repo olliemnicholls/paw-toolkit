@@ -65,6 +65,17 @@ from paw_kit.schema.exceptions import PAWSchemaError
 # while staying nowhere near the 4300-digit failure point.
 _MAX_NUMBER_DIGITS = 100
 
+# S-19: JSON_FLOAT's exponent used to be `[0-9]+`, unbounded. `1e400` satisfies the
+# grammar (and pydantic accepts it, since `json.loads("1e400")` returns `inf`, a
+# `float` a `float` field is allowed to hold), but `inf` is not valid JSON to
+# re-serialise (`json.dumps(float("inf"))` raises `ValueError`) -- a decoder emitting
+# it hands the caller a value the grammar itself calls valid and the JSON spec does
+# not. Two digits caps the exponent at 99, which combined with the 100-digit mantissa
+# this module already bounds (`_MAX_NUMBER_DIGITS`) stays at or below ~1e198 in the
+# worst case -- safely inside float64's ~1.8e308 range, so no reachable combination of
+# mantissa and exponent can overflow to inf.
+_MAX_EXPONENT_DIGITS = 2
+
 JSON_WHITESPACE = r"[ \t\n\r]*"
 
 # S-2: the escape sequences JSON actually permits after a backslash. The previous
@@ -92,7 +103,7 @@ _JSON_HEX_ESCAPE = r"u(?:[0-9a-cA-Ce-fE-F][0-9a-fA-F]|[dD][0-7])[0-9a-fA-F]{2}"
 _JSON_ESCAPE = rf'\\(["\\/bfnrt]|{_JSON_HEX_ESCAPE})'
 JSON_STRING = rf'"([^"\\\x00-\x1f\x7f-\x9f]|{_JSON_ESCAPE})*"'
 JSON_INTEGER = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}}))"
-JSON_FLOAT = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(\.[0-9]+)?([eE][+-]?[0-9]+)?)"
+JSON_FLOAT = rf"(-?(0|[1-9][0-9]{{0,{_MAX_NUMBER_DIGITS - 1}}})(\.[0-9]+)?([eE][+-]?[0-9]{{1,{_MAX_EXPONENT_DIGITS}}})?)"
 JSON_BOOLEAN = r"(true|false)"
 JSON_NULL = r"null"
 
