@@ -1379,6 +1379,56 @@ def test_check_real_backend_refuses_explicit_auto_recompile(tmp_path, monkeypatc
     assert "demo stub" in strip_ansi(result.output)
 
 
+def test_check_recompile_announcement_is_per_iteration_not_whole_run_B_CLI_1(tmp_path, monkeypatch):
+    """"Recompiling..." must announce only the iterations that actually recompiled.
+
+    Before this fix the announcement was gated on `recompiles_performed > 0`, a
+    whole-run aggregate: once any iteration recompiled, every later non-final
+    iteration was announced as recompiling too, even one that skipped its own
+    recompile because the teacher's label was unchanged (idempotent) from the one
+    already compiled. Reproduced here: the CLI's own demo teacher answers
+    "2026-01-01" for "today", which matches this suite's `expected`, so iteration 1
+    genuinely recompiles -- and every later iteration re-offers the identical label,
+    so none of them do (H-9). The backend keeps failing regardless (infer always
+    returns "WRONG"), so the loop runs to `max_iterations` without ever succeeding.
+    """
+    from paw_kit.backend.mock import MockPAWBackend
+
+    def _always_wrong(self, *a, **kw):
+        return "WRONG"
+
+    monkeypatch.setattr(MockPAWBackend, "infer", _always_wrong)
+
+    suite = tmp_path / "suite.yaml"
+    suite.write_text(
+        "task_name: bcli1\n"
+        'spec: "Normalize a date."\n'
+        'adapter_path: "fresh.paw"\n'
+        "standard_cases:\n"
+        '  - input: "today"\n'
+        '    expected: "2026-01-01"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+        "active_learning:\n"
+        "  auto_recompile: true\n"
+        "  max_iterations: 3\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(paw_test_app, ["check", "suite.yaml", "--backend", "mock"])
+    out = strip_ansi(result.output)
+
+    iter1 = out.index("Iteration 1:")
+    iter2 = out.index("Iteration 2:")
+    iter3 = out.index("Iteration 3:")
+    # Announced exactly once, between iterations 1 and 2 -- not before iteration 3,
+    # and not a second time between 2 and 3.
+    assert out.count("Recompiling adapter") == 1
+    action_at = out.index("Recompiling adapter")
+    assert iter1 < action_at < iter2 < iter3
+
+
 def test_check_mock_backend_recompiles_freely_when_no_adapter_exists_yet(tmp_path, monkeypatch):
     """The first-compile case (no existing file at adapter_path) stays unaffected.
 

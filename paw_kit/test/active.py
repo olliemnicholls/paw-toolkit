@@ -187,6 +187,16 @@ class ActiveLearningReport(BaseModel):
     rejected_labels: List[RejectedLabel] = Field(default_factory=list)
     recompiles_performed: int = 0
     recompiles_skipped: int = 0
+    # B-CLI-1: parallel to `iteration_reports` -- whether a recompile happened
+    # immediately *after* that iteration's report (before the next one, if any, was
+    # run). The CLI used to gate its "Recompiling..." announcement on
+    # `recompiles_performed > 0`, a whole-run aggregate, so a run where an early
+    # iteration skipped its recompile but a later one genuinely recompiled announced
+    # the early iteration as recompiling too, and vice versa in reverse. Always the
+    # same length as `iteration_reports`: `False` for a successful final iteration
+    # (which never reaches the recompile decision) and for one that broke out of the
+    # loop before making one.
+    recompiled_after_iteration: List[bool] = Field(default_factory=list)
     # H-8(b): failing inputs that were never sent to the teacher because they carry no
     # answer key -- fuzz-generated cases and adversarial probes. See
     # `run_active_learning_loop`. Reported rather than silent, because the count is the
@@ -319,10 +329,16 @@ def run_active_learning_loop(
     # is a different artifact and may never have been built from this dataset at all.
     last_compiled_fingerprint: Optional[str] = None
 
+    recompiled_after_iteration: List[bool] = []
     for iteration in range(1, max_iter + 1):
         # 1. Run test suite
         report = runner.run(config)
         iteration_reports.append(report)
+        # B-CLI-1: appended now, before the success check and before the recompile
+        # decision below -- flipped to True only inside the `if dataset_needs_compile`
+        # branch further down. Keeps this list's length equal to `iteration_reports`'
+        # in every exit path (success below, `break`, or falling out of the loop).
+        recompiled_after_iteration.append(False)
 
         # 2. Check if 100% assertions pass
         if report.is_success:
@@ -339,6 +355,7 @@ def run_active_learning_loop(
                 rejected_labels=all_rejected_labels,
                 recompiles_performed=recompiles_performed,
                 recompiles_skipped=recompiles_skipped,
+                recompiled_after_iteration=recompiled_after_iteration,
                 skipped_unfalsifiable_inputs=len(skipped_inputs),
                 stuck_reason=None,
             )
@@ -497,6 +514,7 @@ def run_active_learning_loop(
             )
             recompiled = True
             recompiles_performed += 1
+            recompiled_after_iteration[-1] = True
             last_compiled_fingerprint = current_fingerprint
         else:
             recompiles_skipped += 1
@@ -528,6 +546,7 @@ def run_active_learning_loop(
         rejected_labels=all_rejected_labels,
         recompiles_performed=recompiles_performed,
         recompiles_skipped=recompiles_skipped,
+        recompiled_after_iteration=recompiled_after_iteration,
         skipped_unfalsifiable_inputs=len(skipped_inputs),
         stuck_reason=stuck_reason,
     )

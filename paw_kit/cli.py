@@ -727,16 +727,19 @@ def check(
 
     for i, rep in enumerate(al_report.iteration_reports, 1):
         console.print(f"\n[bold]Iteration {i}:[/bold] {rep.passed_cases}/{rep.total_cases} passed ({rep.pass_rate:.1f}%)")
-        # Gated on a recompile having actually happened. This line used to print
-        # whenever an iteration failed and another followed, regardless of whether the
-        # loop recompiled -- so a run that skipped every recompile (no new examples,
-        # H-9; or no falsifiable failures, H-8(b)) announced work it did not do. That
-        # is the campaign report's Pattern 4, and it became newly reachable once H-8(b)
-        # made "queried nothing this iteration" a normal outcome.
+        # Gated on a recompile having actually happened *after this iteration*
+        # (B-CLI-1), not on the whole run's aggregate. This line used to print
+        # whenever an iteration failed and another followed, regardless of whether
+        # THIS iteration's recompile was skipped (no new examples, H-9; or no
+        # falsifiable failures, H-8(b)) -- so a mixed run where iteration 1 skipped
+        # its recompile but iteration 2 genuinely recompiled misannounced iteration 1
+        # once the run-wide aggregate turned positive. That is the campaign report's
+        # Pattern 4, and it became newly reachable once H-8(b) made "queried nothing
+        # this iteration" a normal outcome.
         if (
             not rep.is_success
             and i < len(al_report.iteration_reports)
-            and al_report.recompiles_performed > 0
+            and al_report.recompiled_after_iteration[i - 1]
         ):
             console.print("  [cyan][ACTION][/cyan] Recompiling adapter with augmented edge-case pairs...")
 
