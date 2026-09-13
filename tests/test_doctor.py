@@ -413,6 +413,54 @@ def test_cached_programs_with_mock_adapter_is_warn_not_fail(
     assert result.detail == "offline readiness does not apply to a mock-backend manifest"
 
 
+def test_cached_programs_with_typoed_path_is_warn_not_fail_C_11(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A mistyped --adapter path must WARN with a clear reason, not FAIL by blaming
+    the environment for an uncaught FileNotFoundError.
+
+    Before this fix: `read_manifest`'s own `is_file()` guard raised
+    `FileNotFoundError`, which `_guarded` turned into `FAIL | check raised
+    FileNotFoundError: ...` with the remedy "Run the check directly for a full
+    traceback if this is unexpected" -- a typo reported as if it were a broken
+    environment.
+    """
+    pytest.importorskip("programasweights")
+    import programasweights as paw
+
+    monkeypatch.setattr(paw, "list_cached_programs", lambda: [])
+
+    result = doctor.check_cached_programs(adapter_path=str(tmp_path / "typo.paw"))
+    assert result.status == "WARN"
+    assert result.status != "FAIL"
+    assert "no adapter manifest" in result.detail
+    assert "FileNotFoundError" not in result.detail
+
+
+def test_cached_programs_with_corrupted_real_manifest_is_not_mislabelled_mock_C_11(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A genuinely malformed real manifest must not be reported as 'that's just a
+    mock' -- the converse mislabel: `read_manifest` raises the identical `ValueError`
+    for an oversized file, a non-dict, or any wrong `backend` value alike, and the
+    old code treated every one of those the same as an honest mock manifest.
+    """
+    pytest.importorskip("programasweights")
+    import programasweights as paw
+
+    monkeypatch.setattr(paw, "list_cached_programs", lambda: [])
+
+    # A dict, JSON-valid, but with a `backend` field that is neither
+    # "programasweights" nor "mock" -- corrupted, not a legitimate mock manifest.
+    manifest_path = tmp_path / "corrupt.paw"
+    manifest_path.write_text(json.dumps({"backend": "unknown", "program_id": "x"}))
+
+    result = doctor.check_cached_programs(adapter_path=str(manifest_path))
+    assert result.status == "WARN"
+    assert "mock-backend manifest" not in result.detail
+    assert "not a readable programasweights manifest" in result.detail
+
+
 # ---------------------------------------------------------------- check_rate_limit_note
 
 

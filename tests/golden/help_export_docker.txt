@@ -17,5 +17,6 @@ exit code: 0
 │                            Defaults to real -- a container that only ever serves the mock is a demo, not a           │
 │                            deployment.                                                                               │
 │                            [default: real]                                                                           │
+│ --force    -f              Overwrite existing files in --out-dir without prompting for confirmation                  │
 │ --help                     Show this message and exit.                                                               │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

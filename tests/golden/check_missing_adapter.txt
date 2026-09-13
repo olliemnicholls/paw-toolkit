@@ -1,5 +1,5 @@
 $ paw-test check suite.yaml
 exit code: 1
 --- stdout ---
-Error: Adapter 'absent.paw' does not exist, and recompilation is off -- there is nothing to run this suite against.
-Compile it first, or re-run with --auto-recompile.
+Error: Adapter '<WORKDIR.......................................................>/absent.paw' does not exist, and
+recompilation is off -- there is nothing to run this suite against. Compile it first, or re-run with --auto-recompile.

@@ -7,3 +7,4 @@ Docker deployment assets successfully generated in:
   - .dockerignore
   - docker-compose.yml
   - README.md
+  - requirements.txt

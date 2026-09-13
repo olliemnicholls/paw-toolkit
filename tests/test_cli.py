@@ -95,7 +95,63 @@ def test_cli_check_passing_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     result = runner.invoke(app, ["check", str(suite_path)])
     assert result.exit_code == 0
-    assert "All assertions passed" in result.output
+    # C-2: the pre-seeded adapter above already exists, so auto-recompile is now
+    # disabled (any existing adapter is protected, not only non-mock ones) and this
+    # run takes the read-only path -- which is still exit 0, since the seeded mock
+    # adapter already passes every case. "All assertions passed! (Iterations: ...)"
+    # is printed only by the active-learning branch, which does not run here.
+    assert "Pass rate: 100.0% (2/2)" in result.output
+
+
+def test_cli_check_json_report_carries_backend_C_5(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `--json` consumer must be able to tell which backend actually ran.
+
+    Before this fix, `TestRunReport` had no `backend` field at all -- the only place
+    that ever recorded which backend ran was Rich console text.
+    """
+    monkeypatch.chdir(tmp_path)
+    adapter_path = tmp_path / "model.paw"
+    adapter_path.write_text(
+        json.dumps({"backend": "mock", "spec": "s", "examples": [{"input": "today", "output": "x"}]}),
+        encoding="utf-8",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(VALID_SUITE_YAML.replace("{adapter_path}", str(adapter_path)), encoding="utf-8")
+    json_out = tmp_path / "report.json"
+
+    result = runner.invoke(app, ["check", str(suite_path), "--json", str(json_out)])
+    # Pass/fail is irrelevant here; only that a JSON report was written and carries
+    # the backend that actually ran.
+    data = json.loads(json_out.read_text(encoding="utf-8"))
+    assert data["backend"] == "MockPAWBackend"
+
+
+def test_cli_check_json_at_a_directory_is_refused_cleanly_C_12(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--json <existing directory>` must be refused up front, not crash after the
+    whole run completes.
+
+    Before this fix, `--json` had no `dir_okay=False`, so a directory argument was
+    accepted, the entire suite ran, and only then did `Path.write_text` raise an
+    uncaught `IsADirectoryError` -- discarding the report and, for an
+    otherwise-passing run, turning exit 0 into a traceback.
+    """
+    monkeypatch.chdir(tmp_path)
+    adapter_path = tmp_path / "model.paw"
+    adapter_path.write_text(
+        json.dumps({"backend": "mock", "spec": "s", "examples": [{"input": "today", "output": "x"}]}),
+        encoding="utf-8",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(VALID_SUITE_YAML.replace("{adapter_path}", str(adapter_path)), encoding="utf-8")
+    json_out_dir = tmp_path / "a_directory"
+    json_out_dir.mkdir()
+
+    result = runner.invoke(app, ["check", str(suite_path), "--json", str(json_out_dir)])
+
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 def test_cli_check_no_auto_recompile_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -584,6 +640,30 @@ def test_cli_history_missing_log_errors(tmp_path: Path) -> None:
     assert "no history log" in strip_ansi(result.output)
 
 
+def test_cli_history_survives_a_non_utf8_byte_in_the_sidecar_C_8(tmp_path: Path) -> None:
+    """One non-UTF-8 byte anywhere in the sidecar must not crash the command.
+
+    Before this fix, `log_path.read_text(encoding="utf-8")` raised an uncaught
+    UnicodeDecodeError -- defeating the size/JSON-corruption defences this command
+    already has, which all assume a decode failure cannot happen.
+    """
+    from paw_kit.backend.mock import MockPAWBackend
+
+    adapter = tmp_path / "a.paw"
+    MockPAWBackend().compile("v1", [{"input": "a", "output": "1"}], str(adapter))
+    history_path = tmp_path / "a.paw.history.jsonl"
+    with open(history_path, "ab") as f:
+        f.write(b"\xff\xfe not valid utf-8\n")
+
+    result = runner.invoke(app, ["history", str(adapter)])
+
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert result.exit_code == 0
+    # The one legitimate (valid-JSON) line still prints; the corrupted line is
+    # skipped by the existing per-line JSON guard, same as any other malformed line.
+    assert "mock" in strip_ansi(result.output)
+
+
 def test_cli_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify clean command handles missing dirs, dry-run, confirmation, and actual purging."""
     # PAW-CLI-01: cache_dir must resolve under cwd, so exercise this from a cwd chdir'd
@@ -658,6 +738,65 @@ def test_cli_clean_rejects_path_outside_cwd_PAW_CLI_01(tmp_path: Path, monkeypat
     assert result.exit_code == 1
     assert "not contained within" in " ".join(result.output.split())
     assert sentinel.exists()
+
+
+def test_cli_clean_reports_failure_when_every_delete_fails_C_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run where every delete fails must not print success or exit 0.
+
+    Before this fix the per-file `except` printed a red failure line and continued;
+    nothing accumulated those failures, so "Cache cleaned successfully." and exit 0
+    were unconditional -- reproduced here exactly as the report did, with the cache
+    dir made undeletable.
+    """
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root ignores permission bits, so this reproduction cannot fire")
+
+    monkeypatch.chdir(tmp_path)
+    cache_dir = Path("cache")
+    cache_dir.mkdir()
+    f1 = cache_dir / "trace.db"
+    f1.write_text("trace", encoding="utf-8")
+    cache_dir.chmod(0o500)  # r-x: list allowed, unlink inside denied
+    try:
+        result = runner.invoke(app, ["clean", "--cache-dir", str(cache_dir), "--yes"])
+    finally:
+        cache_dir.chmod(0o700)  # restore so tmp_path cleanup can remove it
+
+    assert result.exit_code == 1
+    assert "Cache cleaned successfully" not in result.output
+    assert "could not be deleted" in result.output
+    assert f1.exists()
+
+
+def test_cli_clean_reports_directories_separately_and_does_not_delete_them_C_7(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory entry must be reported apart from files, never counted as purged.
+
+    Before this fix, `files_to_remove = list(resolved_cache.glob("*"))` counted and
+    listed a subdirectory under "Purging N files", then `if file.is_file(): unlink()`
+    silently skipped it -- "Cache cleaned successfully." printed anyway with no mention
+    that the directory was left behind.
+    """
+    monkeypatch.chdir(tmp_path)
+    cache_dir = Path("cache")
+    cache_dir.mkdir()
+    f1 = cache_dir / "trace.db"
+    f1.write_text("trace", encoding="utf-8")
+    subdir = cache_dir / "examples_cache"
+    subdir.mkdir()
+    (subdir / "nested.txt").write_text("x", encoding="utf-8")
+
+    result = runner.invoke(app, ["clean", "--cache-dir", str(cache_dir), "--yes"])
+
+    assert result.exit_code == 0
+    assert "Cache cleaned successfully" in result.output
+    assert not f1.exists()
+    assert subdir.exists()  # left in place, not silently "cleaned"
+    assert "subdirectory" in result.output
+    assert "examples_cache" in result.output
 
 
 def test_cli_demo_triage() -> None:
@@ -876,6 +1015,34 @@ def test_cli_export_dataset_confirms_before_overwrite_PAW_CLI_03(
     assert out_file.read_text(encoding="utf-8") != "pre-existing content\n"
 
 
+def test_cli_export_dataset_overwrite_prompt_is_not_backslash_mangled_C_9(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The overwrite prompt must show the literal filename, not a Rich-escaped one.
+
+    `typer.confirm` is click, not Rich -- it prints raw. Before this fix the
+    filename was run through `_e()` (Rich's markup escaper) first, which *added*
+    visible backslashes: `[v2]out.jsonl` prompted `\\[v2]out.jsonl already exists.
+    Overwrite?`, on the one prompt whose whole job is to name the file about to be
+    destroyed.
+    """
+    from paw_kit.jit.db import TraceDB
+
+    monkeypatch.chdir(tmp_path)
+    db_file = Path("traces.db")
+    TraceDB(str(db_file)).record_trace(task_id="t", input_payload="i", teacher_output="o", latency_ms=1.0)
+
+    out_file = Path("[v2]dataset.jsonl")
+    out_file.write_text("pre-existing content\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["export", "dataset", "--db", str(db_file), "--out", str(out_file)], input="n\n"
+    )
+    assert result.exit_code == 0
+    assert "[v2]dataset.jsonl already exists" in result.output
+    assert "\\[v2]dataset.jsonl" not in result.output
+
+
 def test_cli_serve_api_key_warns_on_commandline_PAW_CLI_07(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -944,9 +1111,12 @@ def test_resolve_cli_backend_real_falls_back_loudly_without_sdk(monkeypatch, cap
 
     backend = _resolve_cli_backend("real")
     assert isinstance(backend, MockPAWBackend)
-    out = strip_ansi(capsys.readouterr().out)
-    assert "not a model" in out
-    assert "programasweights" in out
+    # C-5: this fallback warning now goes to stderr, not stdout.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    err = strip_ansi(captured.err)
+    assert "not a model" in err
+    assert "programasweights" in err
 
 
 def test_resolve_cli_backend_real_without_api_key_still_returns_upstream(monkeypatch, capsys):
@@ -996,10 +1166,14 @@ def test_resolve_cli_backend_real_falls_back_when_sdk_present_but_unimportable(m
     backend = _resolve_cli_backend("real")
 
     assert isinstance(backend, MockPAWBackend)
-    out = strip_ansi(capsys.readouterr().out)
-    assert "could not be loaded" in out
-    assert "libllama.so" in out
-    assert "not a model" in out
+    # C-5: this fallback warning now goes to stderr, not stdout -- a caller piping
+    # stdout to a report/log file must still see it.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    err = strip_ansi(captured.err)
+    assert "could not be loaded" in err
+    assert "libllama.so" in err
+    assert "not a model" in err
 
 
 def _real_backend_suite(tmp_path):
@@ -1024,6 +1198,49 @@ def _real_backend_suite(tmp_path):
         "  max_iterations: 3\n"
     )
     return suite
+
+
+def test_check_real_backend_fallback_disables_auto_recompile_too_C_13(tmp_path, monkeypatch):
+    """A fallback from --backend real to MockPAWBackend must not silently compile a
+    mock adapter at the path the user asked for a real compile at.
+
+    Before this fix, `is_real = not isinstance(backend, MockPAWBackend)` was False
+    after a fallback, so this guard never fired for exactly the scenario it exists to
+    prevent: a fresh `--backend real` invocation (no existing adapter, so C-2's
+    existence guard does not apply either) with an unavailable SDK compiled a *mock*
+    adapter from cli_teacher's fabricated labels at the real adapter's path, and could
+    report `[SUCCESS]` with nothing distinguishing it from an actual real compile.
+    """
+    from paw_kit.backend.programasweights import ProgramAsWeightsBackend
+
+    monkeypatch.setattr(ProgramAsWeightsBackend, "is_available", lambda self: False)
+    adapter = tmp_path / "prod.paw"
+    suite = tmp_path / "suite.yaml"
+    suite.write_text(
+        "task_name: c13\n"
+        'spec: "Normalize a date."\n'
+        f'adapter_path: "{adapter.name}"\n'
+        "standard_cases:\n"
+        '  - input: "February 30, 2026"\n'
+        '    expected: "INVALID"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+        "active_learning:\n"
+        "  auto_recompile: true\n"
+        "  max_iterations: 2\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert not adapter.exists()
+
+    result = runner.invoke(paw_test_app, ["check", "suite.yaml", "--backend", "real"])
+    out = strip_ansi(result.output)
+
+    assert "auto-recompile is disabled" in out
+    assert "fell back to" in out
+    assert "MockPAWBackend" in out
+    # The point of the test: no mock adapter was silently compiled at this path.
+    assert not adapter.exists()
 
 
 def test_check_real_backend_disables_auto_recompile_by_default(tmp_path, monkeypatch, capsys):
@@ -1088,16 +1305,46 @@ def test_check_real_backend_refuses_explicit_auto_recompile(tmp_path, monkeypatc
     assert "demo stub" in strip_ansi(result.output)
 
 
-def test_check_mock_backend_still_recompiles_freely(tmp_path, monkeypatch):
-    """The guard is scoped to real backends: the mock costs nothing and is unaffected."""
-    suite = _real_backend_suite(tmp_path)
+def test_check_mock_backend_recompiles_freely_when_no_adapter_exists_yet(tmp_path, monkeypatch):
+    """The first-compile case (no existing file at adapter_path) stays unaffected.
+
+    Renamed from `test_check_mock_backend_still_recompiles_freely` (C-2): that test
+    used `_real_backend_suite`, whose fixture adapter *already exists on disk*
+    declaring `backend: "mock"` -- which after C-2's fix is exactly the case that
+    must now be protected, not the case this test's docstring claimed to cover ("the
+    mock costs nothing"). This version points at an adapter path that does not exist
+    yet, which is the actual claim: recompiling into nothing is always allowed.
+    """
+    # "February 30" is the one input the CLI's demo teacher (`cli_teacher`) answers
+    # "INVALID" for -- matching `expected` below, so the recompile is a legitimate
+    # one and not rejected by H-8's poisoned-label guard (an input/expected pair the
+    # stub teacher would actually disagree with never compiles at all).
+    suite_dir = tmp_path
+    adapter = suite_dir / "fresh.paw"
+    suite = suite_dir / "suite.yaml"
+    suite.write_text(
+        "task_name: fresh\n"
+        'spec: "Normalize a date."\n'
+        f'adapter_path: "{adapter.name}"\n'
+        "standard_cases:\n"
+        '  - input: "February 30, 2026"\n'
+        '    expected: "INVALID"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+        "active_learning:\n"
+        "  auto_recompile: true\n"
+        "  max_iterations: 3\n"
+    )
     monkeypatch.chdir(tmp_path)
+    assert not adapter.exists()
 
     result = runner.invoke(paw_test_app, ["check", str(suite), "--backend", "mock"])
     out = strip_ansi(result.output)
 
     assert "auto-recompile is disabled" not in out
     assert "Iteration 1:" in out
+    assert adapter.exists()  # the first compile did happen
 
 
 def test_check_surfaces_backend_execution_error(tmp_path, monkeypatch):
@@ -1162,15 +1409,30 @@ def test_check_refuses_to_recompile_a_non_mock_adapter(tmp_path, monkeypatch):
     out = strip_ansi(result.output)
 
     assert "auto-recompile is disabled" in out
-    assert "programasweights adapter" in out
+    # Rich's terminal-width wrapping can insert a line break between these two
+    # words at test width, so compare with whitespace collapsed rather than the
+    # exact substring (C-2's longer message pushed the wrap point earlier).
+    assert "programasweights adapter" in " ".join(out.split())
     # The point of the test: the file on disk is untouched.
     assert adapter.read_text() == original
 
 
-def test_check_still_recompiles_a_mock_adapter(tmp_path, monkeypatch):
-    """The N1 guard is scoped to foreign adapters: a mock adapter recompiles as before."""
+def test_check_refuses_to_recompile_an_existing_mock_adapter_C_2(tmp_path, monkeypatch):
+    """A mock-declared adapter that already exists is a real user artifact too.
+
+    Renamed from `test_check_still_recompiles_a_mock_adapter`, which asserted C-2's
+    exact defect as correct behaviour: the pre-fix guard exempted anything whose
+    manifest declared `backend == "mock"` from protection, but mock adapters are real
+    user artifacts (`paw-kit demo`, `MockPAWBackend.compile()`, `schema.loader`, and
+    `@compile_on_hit`'s cache all write them) -- not a safe default overwrite target.
+    `"examples": []` in the fixture below is why the old assertion's loss was
+    invisible: there was nothing in the file for a silent overwrite to be seen
+    destroying. Mirrors `test_check_refuses_to_recompile_a_non_mock_adapter`'s shape;
+    existence is now the only gate, not the declared backend.
+    """
     adapter = tmp_path / "mock.paw"
-    adapter.write_text(json.dumps({"backend": "mock", "spec": "s", "examples": []}))
+    original = json.dumps({"backend": "mock", "spec": "s", "examples": ["not empty"]})
+    adapter.write_text(original)
     suite = tmp_path / "suite.yaml"
     suite.write_text(
         "task_name: n1mock\n"
@@ -1191,8 +1453,10 @@ def test_check_still_recompiles_a_mock_adapter(tmp_path, monkeypatch):
     result = runner.invoke(paw_test_app, ["check", "suite.yaml"])
     out = strip_ansi(result.output)
 
-    assert "auto-recompile is disabled" not in out
-    assert "Iteration 1:" in out
+    assert "auto-recompile is disabled" in out
+    assert "mock" in out
+    # The point of the test: the file on disk is untouched.
+    assert adapter.read_text() == original
 
 
 def test_check_output_survives_rich_markup_in_paths_and_errors(tmp_path, monkeypatch):
@@ -1233,9 +1497,37 @@ def test_check_output_survives_rich_markup_in_paths_and_errors(tmp_path, monkeyp
 
     # No MarkupError escaped as a crash...
     assert result.exception is None or isinstance(result.exception, SystemExit)
-    # ...and neither bracketed span was silently swallowed.
-    assert "[v2]adapter.paw" in out
-    assert "[/usr/lib/libllama.so]" in out
+    # ...and neither bracketed span was silently swallowed. Newlines stripped
+    # (not just collapsed to a space) before matching: M-2 now prints an absolute
+    # path (suite_dir-resolved), and Rich's terminal-width wrapping can hard-wrap
+    # -- no space -- inside the longer filename at test width.
+    joined = out.replace("\n", "")
+    assert "[v2]adapter.paw" in joined
+    assert "[/usr/lib/libllama.so]" in joined
+
+
+def test_inspect_and_history_table_titles_survive_rich_markup_in_filename_C_6(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bracketed adapter filename must appear in the table title, not be eaten.
+
+    Rich parses square brackets as markup. `Table(title=...)` was never visited by
+    `test_no_unescaped_console_interpolations` (it only ever walked
+    `console.print(...)` calls), so an adapter named `[v2]model.paw` printed a table
+    titled "PAW Adapter: model.paw" -- silently dropping the bracketed span and
+    naming a *different* file than the one on disk.
+    """
+    monkeypatch.chdir(tmp_path)
+    adapter = tmp_path / "[v2]model.paw"
+    adapter.write_text(json.dumps({"backend": "mock", "spec": "s", "examples": []}), encoding="utf-8")
+
+    inspect_result = runner.invoke(app, ["inspect", str(adapter)])
+    assert "[v2]model.paw" in strip_ansi(inspect_result.output)
+
+    history_path = tmp_path / "[v2]model.paw.history.jsonl"
+    history_path.write_text(json.dumps({"compiled_at": "now"}) + "\n", encoding="utf-8")
+    history_result = runner.invoke(app, ["history", str(adapter)])
+    assert "[v2]model.paw" in strip_ansi(history_result.output)
 
 
 def test_no_unescaped_console_interpolations():
@@ -1261,7 +1553,7 @@ def test_no_unescaped_console_interpolations():
         "report.pass_rate", "report.passed_cases", "report.total_cases",
         "rep.pass_rate", "rep.passed_cases", "rep.total_cases",
         "al_report.iterations_run",
-        "len(files_to_remove)", "len(rows)",
+        "len(files_to_remove)", "len(rows)", "len(dirs_skipped)", "len(failed)",
         "'Dry run: would remove' if dry_run else 'Purging'",
     }
 
@@ -1273,26 +1565,90 @@ def test_no_unescaped_console_interpolations():
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "print"
             and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "console"
+            # C-5 added a second Console instance (`stderr_console`) for the
+            # real-to-mock fallback warnings; same markup-parsing risk, same guard.
+            and node.func.value.id in ("console", "stderr_console")
         )
-        if not is_console_print:
+        # C-6: `Table(title=...)`/`Panel(title=...)` render Rich markup exactly like
+        # `console.print`, but were never visited by this guard -- an adapter named
+        # `[v2]model.paw` printed a table titled "PAW Adapter: model.paw", naming a
+        # *different* file than the one on disk. `add_row`/`add_column` were audited
+        # by hand instead of mechanically: every real (non-demo) call site already
+        # escapes every dynamic argument, and the one exception
+        # (`_run_triage_demo`'s `mode` variable) is a literal `"[green]...[/green]"`/
+        # `"[yellow]...[/yellow]"` string constant meant to *be* markup, from a
+        # hardcoded demo ticket list -- never attacker- or environment-controlled --
+        # so mechanizing that check would need an allowlist entry for the one case
+        # that must stay unescaped, for no live-defect coverage gained.
+        is_table_or_panel_title = (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("Table", "Panel")
+            and any(kw.arg == "title" for kw in node.keywords)
+        )
+        if not (is_console_print or is_table_or_panel_title):
             continue
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.FormattedValue):
-                continue
-            expr = inner.value
-            escaped = (
-                isinstance(expr, ast.Call)
-                and isinstance(expr.func, ast.Name)
-                and expr.func.id in ("_e", "escape")
-            )
-            src = ast.unparse(expr)
-            if not escaped and src not in numeric_or_literal_allowlist:
-                offenders.append(f"cli.py:{node.lineno}: {src}")
+        walk_targets = (
+            [node]
+            if is_console_print
+            else [kw.value for kw in node.keywords if kw.arg == "title"]
+        )
+        for target in walk_targets:
+            for inner in ast.walk(target):
+                if not isinstance(inner, ast.FormattedValue):
+                    continue
+                expr = inner.value
+                escaped = (
+                    isinstance(expr, ast.Call)
+                    and isinstance(expr.func, ast.Name)
+                    and expr.func.id in ("_e", "escape")
+                )
+                src = ast.unparse(expr)
+                if not escaped and src not in numeric_or_literal_allowlist:
+                    offenders.append(f"cli.py:{node.lineno}: {src}")
 
     assert not offenders, (
         "Unescaped interpolation into Rich markup (wrap in _e(), or add to the "
         "allowlist only if provably never a string):\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_no_rich_escaping_before_plain_click_output():
+    """The inverse mistake (C-9): `_e()`/`escape()` before a plain-click sink.
+
+    `typer.confirm`/`typer.prompt`/`typer.echo`/`typer.BadParameter` are click, not
+    Rich -- they print raw. Running a value through Rich's markup escaper first
+    *adds* visible backslashes instead of protecting anything: a file named
+    `[v2]out.jsonl` prompted `\\[v2]out.jsonl already exists. Overwrite?` on the one
+    prompt whose whole job is to name the file about to be destroyed.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    source = _Path(__file__).parent.parent.joinpath("paw_kit", "cli.py").read_text()
+    offenders = []
+    for node in ast.walk(ast.parse(source)):
+        is_plain_click_sink = (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "typer"
+            and node.func.attr in ("confirm", "prompt", "echo", "BadParameter")
+        )
+        if not is_plain_click_sink:
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id in ("_e", "escape")
+            ):
+                offenders.append(f"cli.py:{node.lineno}: {ast.unparse(inner)}")
+
+    assert not offenders, (
+        "Rich-escaped value passed to a plain-click sink (typer.confirm/prompt/echo/"
+        "BadParameter never parses markup, so escaping it only adds visible "
+        "backslashes):\n  " + "\n  ".join(offenders)
     )
 
 
@@ -1316,6 +1672,26 @@ def test_cli_lint_spec_reads_from_file(tmp_path: Path):
     spec_file.write_text("Translate this sentence into French.", encoding="utf-8")
     result = runner.invoke(app, ["lint-spec", "--file", str(spec_file)])
     assert result.exit_code == 0
+
+
+def test_cli_lint_spec_file_rejects_non_utf8_cleanly_C_8(tmp_path: Path):
+    """A non-UTF-8 spec file must exit 1 with a message, not an uncaught traceback."""
+    spec_file = tmp_path / "spec.txt"
+    spec_file.write_bytes(b"\xff\xfe not valid utf-8")
+    result = runner.invoke(app, ["lint-spec", "--file", str(spec_file)])
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "not valid UTF-8" in strip_ansi(result.output)
+
+
+def test_cli_lint_spec_examples_file_rejects_non_utf8_cleanly_C_8(tmp_path: Path):
+    """A non-UTF-8 examples file must exit 1 with a message, not an uncaught traceback."""
+    examples_file = tmp_path / "examples.jsonl"
+    examples_file.write_bytes(b"\xff\xfe not valid utf-8\n")
+    result = runner.invoke(app, ["lint-spec", "do it", "--examples", str(examples_file)])
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "not valid UTF-8" in strip_ansi(result.output)
 
 
 def test_cli_lint_spec_json_output(tmp_path: Path):

@@ -1,6 +1,7 @@
 {
   "task_name": "golden_date_normalizer",
-  "adapter_path": "good.paw",
+  "adapter_path": "<WORKDIR.......................................................>/good.paw",
+  "backend": "MockPAWBackend",
   "total_cases": 3,
   "passed_cases": 3,
   "failed_cases": 0,

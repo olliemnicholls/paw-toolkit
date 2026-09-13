@@ -1816,6 +1816,49 @@ def test_docker_exporter_rejects_unknown_backend(mock_adapter: Path, tmp_path: P
         export_docker_scaffold(mock_adapter, output_dir=tmp_path / "docker_bad", backend="torch")
 
 
+def test_cli_export_docker_overwrite_requires_confirmation_or_force_C_1(
+    mock_adapter: Path, tmp_path: Path
+) -> None:
+    """`export docker` must not silently overwrite an existing deployment scaffold.
+
+    Before this fix there was no exists() check, no prompt, and no --force flag at
+    all: a second `export docker` into the same --out-dir truncated and replaced
+    Dockerfile, .dockerignore, docker-compose.yml, README.md and requirements.txt
+    with no confirmation, exiting 0. The sibling `export dataset` command got exactly
+    this gate (PAW-CLI-03); this mirrors it.
+    """
+    runner = CliRunner()
+    out_dir = tmp_path / "docker_out"
+
+    first = runner.invoke(app, ["export", "docker", str(mock_adapter), "--out-dir", str(out_dir)])
+    assert first.exit_code == 0
+    sentinel = "# SENTINEL: do not overwrite me\n"
+    (out_dir / "Dockerfile").write_text(sentinel, encoding="utf-8")
+
+    # Declining the confirmation prompt leaves every existing file untouched.
+    declined = runner.invoke(
+        app, ["export", "docker", str(mock_adapter), "--out-dir", str(out_dir)], input="n\n"
+    )
+    assert declined.exit_code == 0
+    assert "Aborted" in declined.output
+    assert (out_dir / "Dockerfile").read_text(encoding="utf-8") == sentinel
+
+    # Accepting the prompt overwrites, as does --force without any prompt at all.
+    accepted = runner.invoke(
+        app, ["export", "docker", str(mock_adapter), "--out-dir", str(out_dir)], input="y\n"
+    )
+    assert accepted.exit_code == 0
+    assert (out_dir / "Dockerfile").read_text(encoding="utf-8") != sentinel
+
+    (out_dir / "Dockerfile").write_text(sentinel, encoding="utf-8")
+    forced = runner.invoke(
+        app, ["export", "docker", str(mock_adapter), "--out-dir", str(out_dir), "--force"]
+    )
+    assert forced.exit_code == 0
+    assert "already exist" not in forced.output
+    assert (out_dir / "Dockerfile").read_text(encoding="utf-8") != sentinel
+
+
 def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
     """Verify paw-kit export docker and paw-kit export dataset CLI commands."""
     runner = CliRunner()
@@ -1846,6 +1889,11 @@ def test_cli_export_commands(mock_adapter: Path, tmp_path: Path) -> None:
         ["export", "docker", str(mock_adapter), "--out-dir", str(tmp_path / "cli_docker_bad"), "--backend", "torch"],
     )
     assert res_docker_bad_backend.exit_code == 1
+
+    # 2c. requirements.txt is named in the generated-files list (C-1): it is one of
+    # the five files this command writes and can overwrite, but was missing from the
+    # printed list, so a user could not tell it had been replaced too.
+    assert "requirements.txt" in res_docker.output
 
     # 3. paw-kit export dataset -- PAW-CLI-04: built via a real TraceDB/record_trace,
     # not a hand-built `traces` table shaped like the old (never-real) input/output

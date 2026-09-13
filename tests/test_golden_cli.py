@@ -657,10 +657,20 @@ def _cases() -> List[Case]:
             "check_active_learning_fail", "paw-test", ["check", "suite.yaml"],
             setup=setup_al,
             note=(
-                "The active-learning path: the CLI's demo-stub teacher runs and the run "
-                "still fails. Pins the per-iteration lines and the [FAIL] summary.\n"
-                "Both 'LOOKS WRONG' notes this case carried are now FIXED, and the diff "
-                "that fixed them is in bug-hunt-remediation Track B:\n"
+                "SUPERSEDED 2026-09-13 (bug-hunt-remediation Track H, C-2). This case's "
+                "fixture pre-writes a mock-declared adapter (`al.paw`) and sets "
+                "auto_recompile=true, which used to reach the active-learning path this "
+                "case was written to pin (the per-iteration lines, H-8(a)'s poisoned-label "
+                "rejection, the honest 1/2). C-2 closed the guard's mock-adapter exemption: "
+                "*any* existing adapter now blocks auto-recompile, not only non-mock ones, "
+                "so this exact fixture now hits that guard first and runs read-only instead "
+                "-- never reaching the active-learning branch at all. Still a correct, even "
+                "stronger outcome (the existing adapter is protected two ways now: H-8 would "
+                "reject the poisoned label, and C-2 never lets it try), but the per-iteration "
+                "text this case used to snapshot is not exercised by this fixture shape "
+                "anymore. The original notes are kept below for the historical record.\n"
+                "Original: the active-learning path: the CLI's demo-stub teacher runs and "
+                "the run still fails. Pins the per-iteration lines and the [FAIL] summary.\n"
                 "  * G-1 -- the [ACTION] line read \"Querying frontier teacher for 'You "
                 "are an authoritative labeling teache'...\", the first 40 characters of "
                 "the *teacher prompt*, identical for every case. It now quotes the case "
@@ -677,14 +687,23 @@ def _cases() -> List[Case]:
             "check_active_learning_recompiled", "paw-test", ["check", "suite.yaml"],
             setup=setup_al_recompiled,
             note=(
-                "M-1's reporting half: the adapter was recompiled during this run from a "
-                "dataset seeded with the suite's own `expected` values, so any agreement "
-                "with `expected` afterwards is circular. Report M-1 filed exactly this "
-                "as a High finding -- a 2-case suite reporting 'Correct against expected: "
-                "2/2 (100.0%)' and [SUCCESS] at exit 0 against an adapter built from its "
-                "own answer key seconds earlier. The number is still printed (suppressing "
-                "it would hide a real signal from a reader who knows what it means); what "
-                "is new is the line above it saying it is not a correctness result."
+                "SUPERSEDED 2026-09-13 (Track H, C-2) -- same cause as "
+                "check_active_learning_fail above: the pre-written mock-declared adapter "
+                "now blocks auto-recompile outright, so the active-learning path (and "
+                "M-1's circularity note this case existed to pin) never runs; this is now "
+                "a read-only run against the pre-seeded adapter. CLI-level golden coverage "
+                "of M-1's circularity-note text is lost by this fixture shape; the "
+                "mechanism itself remains covered at the `run_active_learning_loop` unit "
+                "level (Track B's own tests) and by `paw_kit/cli.py`'s "
+                "`test_check_mock_backend_recompiles_freely_when_no_adapter_exists_yet` "
+                "(a first-compile scenario with no pre-existing adapter, added by Track H). "
+                "Filed as a gap rather than silently dropped -- see that track's file.\n"
+                "Original note: M-1's reporting half: the adapter was recompiled during "
+                "this run from a dataset seeded with the suite's own `expected` values, so "
+                "any agreement with `expected` afterwards is circular. Report M-1 filed "
+                "exactly this as a High finding -- a 2-case suite reporting 'Correct "
+                "against expected: 2/2 (100.0%)' and [SUCCESS] at exit 0 against an "
+                "adapter built from its own answer key seconds earlier."
             ),
         ),
         Case(

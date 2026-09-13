@@ -1,7 +1,8 @@
 $ paw-test check suite.yaml --json report.json
 exit code: 1
 --- stdout ---
-Running paw.test check on: golden_date_normalizer (bad.paw) (backend: MockPAWBackend)
+Running paw.test check on: golden_date_normalizer
+(<WORKDIR.......................................................>/bad.paw) (backend: MockPAWBackend)
   [FAIL] Input: 'today' -> 'tomorrow'
          regex_match: Output 'tomorrow' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
          expected: got tomorrow want 2026-09-11

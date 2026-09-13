@@ -2,6 +2,8 @@
   "task_name": "golden_date_normalizer",
   "adapter_a": "alpha.paw",
   "adapter_b": "beta.paw",
+  "backend": "MockPAWBackend",
+  "requested_backend": "mock",
   "label_a": "alpha",
   "label_b": "beta",
   "manifest_a": {

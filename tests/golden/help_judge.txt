@@ -25,7 +25,7 @@ exit code: 0
 │ --suite        <path>          suite.yaml to read the spec from, instead of --spec                                   │
 │ --judge        <str>           provider:model for the judge, e.g. anthropic:claude-haiku-4-5                         │
 │                                [default: anthropic:claude-haiku-4-5]                                                 │
-│ --out          <path>          Write verdicts JSON to this path                                                      │
+│ --out          <file>          Write verdicts JSON to this path                                                      │
 │ --diff         <path path>...  Diff two verdicts JSON files (OLD NEW) instead of judging a report                    │
 │ --help                         Show this message and exit.                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

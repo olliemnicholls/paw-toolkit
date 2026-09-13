@@ -27,6 +27,6 @@ exit code: 0
 │                                     -- on by default, so a default `compare` run covers the same cases `paw-test     │
 │                                     check` does. Pass --no-fuzz for standard_cases only.                             │
 │                                     [default: fuzz]                                                                  │
-│ --json                      <path>  Write the full CompareReport as JSON to this path                                │
+│ --json                      <file>  Write the full CompareReport as JSON to this path                                │
 │ --help                              Show this message and exit.                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

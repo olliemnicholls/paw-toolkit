@@ -145,6 +145,129 @@ adapter_path: "{outside_adapter}"
         load_suite(suite_yaml)
 
 
+def test_active_learning_loop_rejects_a_hand_built_configs_escaping_relative_path_M_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_active_learning_loop`'s own defense-in-depth containment check
+    (PAW-TEST-02) must still reject a relative, traversal-capable adapter_path on a
+    `TestSuiteConfig` built directly in Python -- never through `load_suite()`, so
+    there is no suite file to resolve against and CWD is the only sensible root.
+
+    M-2 changed this check to skip an *absolute* adapter_path (load_suite() always
+    produces one, already validated against the suite's own directory -- see that
+    fix), but a still-relative path reaching here has not been validated by anyone,
+    and must still be caught.
+    """
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    config = TestSuiteConfig(
+        task_name="escape_test",
+        spec="test",
+        adapter_path="../outside.paw",  # relative, escapes workdir
+        standard_cases=[StandardTestCase(input="x", expected="y")],
+        assertions=[AssertionRule(rule="max_length", value=100)],
+    )
+    backend = MockPAWBackend()
+
+    with pytest.raises(ValueError, match="not contained within"):
+        run_active_learning_loop(config=config, backend=backend, teacher_provider=lambda p: "y")
+
+
+def test_active_learning_loop_recompiles_via_a_suite_loaded_from_a_different_cwd_M_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: a suite loaded while CWD is elsewhere must still recompile into
+    its own directory, not raise and not target the wrong file.
+
+    Before this fix, `load_suite()`'s M-2 resolution (against the suite's own
+    directory) and this module's own redundant `ensure_contained(..., Path.cwd())`
+    disagreed the moment CWD differed from the suite's directory: the suite loaded
+    fine, but the first recompile attempt raised "not contained within" for an
+    adapter_path that was in fact perfectly legitimate.
+    """
+    suite_dir = tmp_path / "project"
+    suite_dir.mkdir()
+    suite_path = suite_dir / "suite.yaml"
+    suite_path.write_text(
+        'task_name: m2_e2e\nspec: "test"\nadapter_path: "./relative.paw"\n'
+        "standard_cases:\n"
+        '  - input: "x"\n'
+        '    expected: "y"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 100\n",
+        encoding="utf-8",
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    config = load_suite(str(suite_path))
+    backend = MockPAWBackend()
+
+    report = run_active_learning_loop(config=config, backend=backend, teacher_provider=lambda p: "y")
+
+    assert report.recompiled is True
+    assert (suite_dir / "relative.paw").exists()
+    assert not (elsewhere / "relative.paw").exists()
+
+
+def test_load_suite_resolves_relative_adapter_path_against_suite_file_not_cwd_M_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same suite.yaml, loaded from two different CWDs, must target the same
+    adapter file.
+
+    Before this fix, a relative `adapter_path` was left exactly as written and
+    implicitly resolved against whatever the process CWD happened to be the moment
+    something later touched it -- so the same suite run from two directories
+    targeted two different adapter files, silently. Reproduced here with the exact
+    shape report finding M-2 used: `adapter_path: ./relative.paw` in a suite that
+    lives elsewhere.
+    """
+    suite_dir = tmp_path / "project"
+    suite_dir.mkdir()
+    suite_path = suite_dir / "suite.yaml"
+    suite_path.write_text(
+        'task_name: m2\nspec: "test"\nadapter_path: "./relative.paw"\n',
+        encoding="utf-8",
+    )
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    monkeypatch.chdir(suite_dir)
+    config_from_project_dir = load_suite(str(suite_path))
+
+    monkeypatch.chdir(elsewhere)
+    config_from_elsewhere = load_suite(str(suite_path))
+
+    assert config_from_project_dir.adapter_path == config_from_elsewhere.adapter_path
+    # And it must be the suite's own directory, not either CWD.
+    resolved = Path(config_from_project_dir.adapter_path)
+    assert resolved.is_absolute()
+    assert resolved.parent == suite_dir.resolve()
+
+
+def test_load_suite_absolute_adapter_path_is_left_alone_M_2(tmp_path: Path) -> None:
+    """An already-absolute adapter_path is not re-based against the suite's directory."""
+    suite_dir = tmp_path / "project"
+    suite_dir.mkdir()
+    suite_path = suite_dir / "suite.yaml"
+    # Absolute, and already a genuine descendant of suite_dir -- containment must
+    # still hold; this test is only about resolution, not about escaping it.
+    absolute_adapter = suite_dir / "nested" / "adapter.paw"
+    suite_path.write_text(
+        f'task_name: m2\nspec: "test"\nadapter_path: "{absolute_adapter}"\n',
+        encoding="utf-8",
+    )
+
+    config = load_suite(str(suite_path))
+    assert config.adapter_path == str(absolute_adapter)
+
+
 def test_adversarial_fuzzer_generation() -> None:
     """Verify adversarial fuzzer generates Unicode, whitespace, and payload extremes."""
     config = FuzzingConfig(
