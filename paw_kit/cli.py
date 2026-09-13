@@ -1649,7 +1649,11 @@ def history(
         wall_str = f"{compile_wall_s:.3f}" if isinstance(compile_wall_s, (int, float)) else "-"
         table.add_row(
             str(i),
-            _e(entry.get("compiled_at") or "-"),
+            # G-6: `report`'s table already renders this same kind of value through
+            # `_short_timestamp` -- printing the raw ISO string here instead is the
+            # exact "two commands render the same field two different ways" shape
+            # this campaign keeps closing.
+            _e(_short_timestamp(entry.get("compiled_at"))),
             _e(entry.get("backend") or "-"),
             _e(entry.get("program_id") or "-"),
             _e(entry.get("compiler") or "-"),
@@ -1853,9 +1857,13 @@ def clean(
     files_to_remove = [e for e in all_entries if e.is_file()]
     dirs_skipped = [e for e in all_entries if e.is_dir()]
 
+    # G-3: "1 files" -- ordinary English pluralization, not a defect a user would ever
+    # not notice by eye, but exactly the kind of small honesty gap the campaign exists
+    # to close, and no finding-specific reason not to while this line is already open.
+    file_word = "file" if len(files_to_remove) == 1 else "files"
     console.print(
         f"[bold yellow]{'Dry run: would remove' if dry_run else 'Purging'}[/bold yellow] "
-        f"{len(files_to_remove)} files in '{_e(cache_dir)}':"
+        f"{len(files_to_remove)} {file_word} in '{_e(cache_dir)}':"
     )
     for file in files_to_remove:
         console.print(f"  - {_e(file.name)}")

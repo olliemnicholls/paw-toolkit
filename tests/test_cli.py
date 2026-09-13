@@ -634,6 +634,36 @@ def test_cli_history_appended_twice_and_printed(tmp_path: Path) -> None:
     assert "1" in out and "2" in out
 
 
+def test_cli_history_compiled_at_is_short_timestamp_G_6(tmp_path: Path) -> None:
+    """`history` must render `compiled_at` through `_short_timestamp`, the same way
+    `report` already renders `promoted_at`/`demoted_at` -- otherwise the same kind of
+    value prints two different ways depending on which command shows it.
+
+    `compiled_at` is only ever written by `ProgramAsWeightsBackend` (the real
+    backend writes it; `MockPAWBackend` has none, by design -- see `mock.py`'s own
+    comment), so the sidecar line is built directly here rather than via a real
+    compile, matching the field a real backend's history line actually carries.
+    """
+    adapter = tmp_path / "a.paw"
+    adapter.write_text(json.dumps({"backend": "programasweights"}), encoding="utf-8")
+    raw_compiled_at = "2026-09-13T02:30:45Z"
+    assert len(raw_compiled_at) > 19  # a full ISO-8601 timestamp
+    history_path = tmp_path / "a.paw.history.jsonl"
+    history_path.write_text(json.dumps({"compiled_at": raw_compiled_at}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["history", str(adapter)])
+    out = strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert raw_compiled_at not in out
+    # Rich's narrow "Compiled At" column wraps the date and time onto two table
+    # lines with a border between them, so check each half rather than one
+    # contiguous "date time" string.
+    short = raw_compiled_at[:19].replace("T", " ")
+    date_part, time_part = short.split(" ")
+    assert date_part in out
+    assert time_part in out
+
+
 def test_cli_history_missing_log_errors(tmp_path: Path) -> None:
     result = runner.invoke(app, ["history", str(tmp_path / "nope.paw")])
     assert result.exit_code == 1
@@ -684,6 +714,9 @@ def test_cli_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     res_dry = runner.invoke(app, ["clean", "--cache-dir", str(cache_dir), "--dry-run"])
     assert res_dry.exit_code == 0
     assert "Dry run" in res_dry.output
+    # G-3: "1 file", not "1 files".
+    assert "1 file in" in res_dry.output
+    assert "1 files in" not in res_dry.output
     assert f1.exists()
 
     # Real clean, declining the confirmation prompt: file survives
@@ -1553,7 +1586,7 @@ def test_no_unescaped_console_interpolations():
         "report.pass_rate", "report.passed_cases", "report.total_cases",
         "rep.pass_rate", "rep.passed_cases", "rep.total_cases",
         "al_report.iterations_run",
-        "len(files_to_remove)", "len(rows)", "len(dirs_skipped)", "len(failed)",
+        "len(files_to_remove)", "len(rows)", "len(dirs_skipped)", "len(failed)", "file_word",
         "'Dry run: would remove' if dry_run else 'Purging'",
     }
 

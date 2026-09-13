@@ -1093,8 +1093,15 @@ def _cases() -> List[Case]:
         Case(
             "history_table", "paw-kit", ["history", "adapter.paw"], setup=setup_history,
             note=(
-                "compiled_at is printed raw (ISO with a 'T'), unlike `report`'s table which "
-                "runs it through _short_timestamp. Inconsistent, snapshotted as-is."
+                "FIXED (bug-hunt-remediation, Low sweep, G-6): compiled_at now runs through "
+                "_short_timestamp, same as `report`'s table. The fixed output happens to be "
+                "exactly the shape `scrub_short_timestamps` looks for (space-separated, "
+                "trimmed to seconds), so this snapshot's two fixed, hand-written timestamps "
+                "now render as the scrub placeholder ('0000-00-00 00:00:00') rather than the "
+                "literal values -- expected, not a regression: the scrubber exists for "
+                "exactly this shape of value, and a dedicated CLI-level test "
+                "(test_cli_history_compiled_at_is_short_timestamp_G_6) pins the literal "
+                "conversion directly, unscrubbed."
             ),
         ),
         Case("history_missing", "paw-kit", ["history", "adapter.paw"]),
@@ -1147,7 +1154,8 @@ def _cases() -> List[Case]:
                 "filesystem order, not sorted, so a two-file fixture would be a snapshot that "
                 "depends on the filesystem -- which is also a real (cosmetic) finding about "
                 "the command.\n"
-                "LOOKS WRONG, NOT FIXED HERE: 'would remove 1 files'."
+                "FIXED (bug-hunt-remediation, Low sweep, G-3): 'would remove 1 files' is now "
+                "'would remove 1 file'."
             ),
         ),
         Case("clean_no_cache_dir", "paw-kit", ["clean"]),
