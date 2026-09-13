@@ -689,10 +689,6 @@ def test_serve_body_read_already_expired_deadline_returns_408_X_3() -> None:
     start = next(m for m in sent if m["type"] == "http.response.start")
     assert start["status"] == 408
 
-    assert receive_calls == 0
-    start = next(m for m in sent if m["type"] == "http.response.start")
-    assert start["status"] == 408
-
 
 def test_format_max_body_message_integer_vs_fractional_mb_X_2() -> None:
     """Verify X-2's dynamic 413 message text pins both branches of
