@@ -664,6 +664,47 @@ def test_cli_history_compiled_at_is_short_timestamp_G_6(tmp_path: Path) -> None:
     assert time_part in out
 
 
+def test_cli_history_reads_the_rotated_generation_D_ADD_2(tmp_path: Path) -> None:
+    """`history` must show the rotated-out `.1` generation too, oldest first.
+
+    `manifest_lineage.py`'s rotation (`_HISTORY_ROTATIONS = 1`) moves a full sidecar
+    to `<adapter>.history.jsonl.1` so a long-lived adapter's lineage stays bounded --
+    but before this fix, `history` read only the live file, so the oldest lineage was
+    retained on disk but invisible to the one command that exists to show it.
+    """
+    adapter = tmp_path / "a.paw"
+    adapter.write_text(json.dumps({"backend": "programasweights"}), encoding="utf-8")
+    rotated = tmp_path / "a.paw.history.jsonl.1"
+    rotated.write_text(json.dumps({"program_id": "prog_old", "compiler": "fast"}) + "\n", encoding="utf-8")
+    live = tmp_path / "a.paw.history.jsonl"
+    live.write_text(json.dumps({"program_id": "prog_new", "compiler": "finetune"}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["history", str(adapter)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 0
+    assert "prog_old" in out
+    assert "prog_new" in out
+    # Oldest first: the rotated entry's row number must precede the live entry's.
+    assert out.index("prog_old") < out.index("prog_new")
+
+
+def test_cli_history_reads_only_the_rotated_generation_when_live_file_is_absent_D_ADD_2(
+    tmp_path: Path,
+) -> None:
+    """A `.1` generation with no live file yet (freshly rotated) is not an error."""
+    adapter = tmp_path / "a.paw"
+    adapter.write_text(json.dumps({"backend": "programasweights"}), encoding="utf-8")
+    rotated = tmp_path / "a.paw.history.jsonl.1"
+    rotated.write_text(json.dumps({"program_id": "prog_old"}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["history", str(adapter)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 0
+    assert "prog_old" in out
+
+
 def test_cli_history_missing_log_errors(tmp_path: Path) -> None:
     result = runner.invoke(app, ["history", str(tmp_path / "nope.paw")])
     assert result.exit_code == 1

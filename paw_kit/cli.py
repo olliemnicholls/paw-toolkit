@@ -1598,37 +1598,56 @@ def history(
     to say, "the manifest minus its spec text". That described a one-key deny-list the
     mock backend's traced `examples` walked straight past; it is an allow-list now (see
     `paw_kit.backend.manifest_lineage._HISTORY_ALLOWED_FIELDS`). The sidecar is also
-    capped and rotated, so a long-lived adapter's oldest lines move to
-    `<adapter>.history.jsonl.1`, which this command does not read.
+    capped and rotated (`manifest_lineage._HISTORY_ROTATIONS`, currently 1): a
+    long-lived adapter's oldest lines move to `<adapter>.history.jsonl.1`, read here
+    too (D-ADD-2) and listed before the live file's lines, so lineage does not go
+    dark the moment an adapter is recompiled enough times to fill one generation.
     """
     log_path = _history_path(adapter_path)
-    if not log_path.is_file():
+    # D-ADD-2: the rotated-out generation is the *oldest* lineage, not extra detail --
+    # `manifest_lineage.py`'s own rotation exists precisely so a long-lived adapter's
+    # earlier compiles are not lost outright, and this was the one command that could
+    # not see them. Missing entirely (a freshly-rotated adapter, or one that has never
+    # filled its first generation) is not an error; only a *present-but-unreadable*
+    # rotated file is treated the same as an oversized/unreadable live file below.
+    rotated_path = Path(str(log_path) + ".1")
+    if not log_path.is_file() and not rotated_path.is_file():
         console.print(f"[bold red]Error:[/bold red] no history log at '{_e(log_path)}'.")
         raise typer.Exit(code=1)
-    if log_path.stat().st_size > _MAX_HISTORY_FILE_BYTES:
-        console.print(
-            f"[bold red]Error:[/bold red] history log '{_e(log_path)}' exceeds "
-            f"{_e(_MAX_HISTORY_FILE_BYTES)} bytes."
-        )
-        raise typer.Exit(code=1)
 
-    # C-8: one non-UTF-8 byte anywhere in the append-only sidecar used to raise an
-    # uncaught `UnicodeDecodeError` traceback here -- defeating the 20 lines above
-    # that defend this same read against size and JSON corruption. `errors="replace"`
-    # degrades that one line's un-decodable bytes to U+FFFD (which then fails
-    # `json.loads` and is skipped by the existing per-line guard below, exactly like
-    # any other malformed line) instead of taking the whole command down.
+    def _read_entries(path: Path) -> List[dict]:
+        if path.stat().st_size > _MAX_HISTORY_FILE_BYTES:
+            console.print(
+                f"[bold red]Error:[/bold red] history log '{_e(path)}' exceeds "
+                f"{_e(_MAX_HISTORY_FILE_BYTES)} bytes."
+            )
+            raise typer.Exit(code=1)
+        # C-8: one non-UTF-8 byte anywhere in the append-only sidecar used to raise an
+        # uncaught `UnicodeDecodeError` traceback here -- defeating the checks above
+        # that defend this same read against size and JSON corruption. `errors="replace"`
+        # degrades that one line's un-decodable bytes to U+FFFD (which then fails
+        # `json.loads` and is skipped by the existing per-line guard below, exactly like
+        # any other malformed line) instead of taking the whole command down.
+        found: List[dict] = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                found.append(parsed)
+        return found
+
+    # Oldest first, overall: the rotated generation predates everything in the live
+    # file by construction (rotation only happens when the live file is full).
     entries: List[dict] = []
-    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            parsed = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(parsed, dict):
-            entries.append(parsed)
+    if rotated_path.is_file():
+        entries.extend(_read_entries(rotated_path))
+    if log_path.is_file():
+        entries.extend(_read_entries(log_path))
 
     if not entries:
         console.print(f"[dim]No lineage entries recorded in '{_e(log_path)}'.[/dim]")

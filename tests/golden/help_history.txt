@@ -16,8 +16,10 @@ exit code: 0
  to say, "the manifest minus its spec text". That described a one-key deny-list the
  mock backend's traced `examples` walked straight past; it is an allow-list now (see
  `paw_kit.backend.manifest_lineage._HISTORY_ALLOWED_FIELDS`). The sidecar is also
- capped and rotated, so a long-lived adapter's oldest lines move to
- `<adapter>.history.jsonl.1`, which this command does not read.
+ capped and rotated (`manifest_lineage._HISTORY_ROTATIONS`, currently 1): a
+ long-lived adapter's oldest lines move to `<adapter>.history.jsonl.1`, read here
+ too (D-ADD-2) and listed before the live file's lines, so lineage does not go
+ dark the moment an adapter is recompiled enough times to fill one generation.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ *    adapter_path      <path>  Path to a compiled .paw adapter artifact [required]                                   │
