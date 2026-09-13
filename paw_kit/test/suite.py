@@ -236,13 +236,22 @@ def load_suite(path_or_yaml: Union[str, Path]) -> TestSuiteConfig:
         Validated TestSuiteConfig instance.
     """
     content: str
-    if isinstance(path_or_yaml, Path) or (
+    is_file_path = isinstance(path_or_yaml, Path) or (
         isinstance(path_or_yaml, str) and "\n" not in path_or_yaml and Path(path_or_yaml).exists()
-    ):
+    )
+    if is_file_path:
         with open(path_or_yaml, "r", encoding="utf-8") as f:
             content = f.read()
+        # M-2: the directory adapter_path resolves against, below. `.resolve()`
+        # rather than `.parent` on the raw argument, so a relative suite path (e.g.
+        # "suite.yaml" from the CLI) still yields an absolute base.
+        suite_dir = Path(path_or_yaml).resolve().parent
     else:
         content = str(path_or_yaml)
+        # No suite file exists on disk (raw YAML string, e.g. constructed in
+        # memory) -- CWD is the only sensible base, and is what this already used
+        # unconditionally before, so in-memory callers see no change.
+        suite_dir = Path.cwd()
 
     # PAW-TEST-01: applied here, after the two entry points above have already
     # converged on a single `content` string, so the cap covers both the file-path and
@@ -266,12 +275,28 @@ def load_suite(path_or_yaml: Union[str, Path]) -> TestSuiteConfig:
 
     config = TestSuiteConfig.model_validate(parsed_data)
 
+    # M-2: a relative adapter_path used to be left exactly as written and
+    # implicitly resolved against whatever the *process* CWD happened to be at the
+    # moment some later piece of code (the CLI, a backend's compile()/infer()) first
+    # touched it -- so the same suite.yaml run from two different directories
+    # targeted two different adapter files, with no error either way. Resolved here,
+    # once, against the suite file's own directory (or CWD, for an in-memory suite
+    # with no file at all) and stored back as an absolute path, so every downstream
+    # consumer of `config.adapter_path` sees the same file regardless of its own
+    # CWD at the time it runs.
+    adapter_path = Path(config.adapter_path)
+    if not adapter_path.is_absolute():
+        config.adapter_path = str(suite_dir / adapter_path)
+
     # PAW-TEST-02: an untrusted suite.yaml's adapter_path eventually drives a write
     # (run_active_learning_loop -> backend.compile(..., output_path=adapter_path)) if
     # assertions fail and auto_recompile fires. Validated here -- at the suite loader,
     # not only in the CLI's own recompile-triggering path (paw_kit.cli's PAW-CLI-02
     # check) -- so any caller that loads a suite via load_suite() gets the same
-    # guarantee, regardless of how it goes on to use the resulting config.
-    ensure_contained(config.adapter_path, Path.cwd(), label="suite.yaml's adapter_path")
+    # guarantee, regardless of how it goes on to use the resulting config. The
+    # containment root moves with the resolution base above: a suite may only point
+    # its adapter_path within its own directory tree, not merely within whatever the
+    # CWD happens to be at load time.
+    ensure_contained(config.adapter_path, suite_dir, label="suite.yaml's adapter_path")
 
     return config

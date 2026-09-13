@@ -1,6 +1,9 @@
 task_name: date_normalizer
 spec: "Convert natural language date expressions into standard ISO-8601 YYYY-MM-DD format."
-adapter_path: "examples/date_normalizer/.paw_demo_dates/date_normalizer.paw"
+# M-2: relative to this suite.yaml file's own directory (not the CWD it happens to be
+# invoked from), matching run.py's own CACHE_DIR -- both now agree on the same file
+# regardless of where `paw-test check` is run from.
+adapter_path: ".paw_demo_dates/date_normalizer.paw"
 
 # Only a case with an `expected` value can be repaired by active learning: the loop never
 # sends an input with no answer key to the teacher, because a label for it could not be
