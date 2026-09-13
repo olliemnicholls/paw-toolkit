@@ -364,7 +364,7 @@ def test_precheck_failure_is_swallowed_and_manifest_records_null(key: None, tmp_
 # ---------------------------------------------------------------- manifest v2 / lineage
 
 
-def test_manifest_v2_records_lineage_fields(key: None, tmp_path: Path) -> None:
+def test_manifest_v3_records_lineage_fields(key: None, tmp_path: Path) -> None:
     sdk = FakeSDK()
     backend = ProgramAsWeightsBackend(sdk=sdk, max_spec_examples=1)
     out = tmp_path / "a.paw"

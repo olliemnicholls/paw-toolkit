@@ -216,7 +216,7 @@ def test_mock_backend_rejects_malformed_adapter_shape_PAW_BACKEND_04(tmp_path: P
 # ---------------------------------------------------------------- manifest v2 / lineage
 
 
-def test_mock_compile_writes_v2_manifest_fields(tmp_path: Path) -> None:
+def test_mock_compile_writes_v3_manifest_fields(tmp_path: Path) -> None:
     """MockPAWBackend.compile() records the same lineage fields as
     ProgramAsWeightsBackend.compile() (manifest_version, hashes, folded example ids,
     parent linkage, timing) -- see paw_kit.backend.manifest_lineage."""
