@@ -198,6 +198,13 @@ class CompareReport(BaseModel):
     task_name: str
     adapter_a: str
     adapter_b: str
+    # C-5: `backend` is which backend class actually ran the comparison
+    # (`type(backend).__name__`); `requested_backend` is the raw `--backend` string
+    # the caller asked for. They diverge exactly on a real-to-mock fallback -- the
+    # one case a JSON consumer most needs to be able to detect, and previously could
+    # not, since the fallback announcement was stdout-only Rich text.
+    backend: str = ""
+    requested_backend: str = ""
     # Finding (measurements/README.md, "Finetune compiler", tool feedback point 2):
     # display labels for the two adapters -- each one's file stem, or the full path
     # when the stems collide -- kept separate from `adapter_a`/`adapter_b` (the full
@@ -365,6 +372,7 @@ def compare_adapters(
     backend: AbstractPAWBackend,
     *,
     include_fuzz: bool = True,
+    requested_backend: str = "",
 ) -> CompareReport:
     """Run every standard case (and, by default, every fuzz case) in `suite` through
     both adapters via `backend`, and diff the results.
@@ -497,6 +505,8 @@ def compare_adapters(
         task_name=suite.task_name,
         adapter_a=str(adapter_a),
         adapter_b=str(adapter_b),
+        backend=type(backend).__name__,
+        requested_backend=requested_backend,
         label_a=label_a,
         label_b=label_b,
         manifest_a=_project_manifest(read_adapter_manifest(str(adapter_a))),

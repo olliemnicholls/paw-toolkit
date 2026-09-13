@@ -17,6 +17,7 @@ from rich.table import Table
 import typer
 
 from paw_kit.backend.mock import MockPAWBackend
+from paw_kit.serve.docker import _RESERVED_OUTPUT_FILENAMES
 from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 from paw_kit.pathsafety import ensure_contained
 from paw_kit.serve.server import backend_label
@@ -37,6 +38,10 @@ from paw_kit.test.runner import TestRunner, TestRunReport
 from paw_kit.test.suite import load_suite
 
 console = Console()
+# C-5: the real-to-mock fallback warnings must be visible to a caller that piped
+# stdout to a report/log file -- a plain `Console()` writes to stdout, which is
+# exactly what `paw-test check --backend real --json out.json > run.log` discards.
+stderr_console = Console(stderr=True)
 
 
 def _e(value: object) -> str:
@@ -131,7 +136,8 @@ def _resolve_cli_backend(backend_type: str) -> Any:
         # False. Treat that as absent: this whole branch exists to degrade loudly.
         sdk_present = False
     if not sdk_present:
-        console.print(
+        # C-5: stderr, not stdout -- see `stderr_console`'s definition.
+        stderr_console.print(
             "[bold yellow]Warning:[/bold yellow] --backend real needs the official upstream SDK.\n"
             # Escape the [ so Rich does not parse "[real]" as a markup tag and print
             # `pip install 'paw-kit'` -- wrong advice, and silently wrong.
@@ -154,7 +160,8 @@ def _resolve_cli_backend(backend_type: str) -> Any:
     try:
         backend._paw()
     except Exception as exc:
-        console.print(
+        # C-5: stderr, not stdout.
+        stderr_console.print(
             "[bold yellow]Warning:[/bold yellow] the upstream SDK is installed but could "
             f"not be loaded: {escape(str(exc))}\n"
             "  Falling back to [green]MockPAWBackend[/green] -- results below come from a "
@@ -466,10 +473,23 @@ def _print_run_headline(report: TestRunReport, actual_backend: str) -> None:
 def _write_json_report(json_out: Optional[Path], data: dict) -> None:
     """Shared `--json PATH` writer for `check`/`compare`: a plain `json.dumps`, not
     routed through Rich -- machine-readable output must not be subject to Rich's
-    markup parsing or terminal-width line wrapping."""
+    markup parsing or terminal-width line wrapping.
+
+    C-12: `--json` on both commands now declares `dir_okay=False`, so Typer refuses
+    a directory argument up front with a clean usage error -- before the suite even
+    runs -- rather than this function raising `IsADirectoryError` only *after* the
+    whole run completed, discarding the report and, for an otherwise-passing run,
+    turning exit 0 into an uncaught traceback. The guard here is defense in depth
+    for any other write failure (e.g. a permissions error) that `dir_okay` cannot
+    catch, so a report that was worth computing is never silently thrown away.
+    """
     if json_out is None:
         return
-    json_out.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    try:
+        json_out.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[bold red]Error:[/bold red] could not write JSON report to '{_e(json_out)}': {_e(exc)}")
+        raise typer.Exit(code=1)
     console.print(f"[dim]Wrote JSON report to {_e(json_out)}[/dim]")
 
 
@@ -482,7 +502,8 @@ def check(
         None, "--auto-recompile/--no-auto-recompile", help="Enable active learning (overrides suite.yaml if set)"
     ),
     json_out: Optional[Path] = typer.Option(
-        None, "--json", help="Write the run's TestRunReport as JSON to this path (input for `paw-test judge`)"
+        None, "--json", dir_okay=False,
+        help="Write the run's TestRunReport as JSON to this path (input for `paw-test judge`)",
     ),
     adapter: Optional[Path] = typer.Option(
         None,
@@ -524,6 +545,16 @@ def check(
     backend = _resolve_cli_backend(backend_type)
     is_real = not isinstance(backend, MockPAWBackend)
     actual_backend = type(backend).__name__
+    # C-13: what the user asked for, independent of what they got. `_resolve_cli_backend`
+    # can fall back to MockPAWBackend when the SDK is unavailable -- an unavailable SDK
+    # does not change what the user asked for, and the guard below exists specifically to
+    # keep cli_teacher's fabricated labels away from what the user believes is a real,
+    # paid compile. Gating on `is_real` alone let a fallback silently regain exactly the
+    # behaviour this guard exists to prevent: a fresh `--backend real` invocation with no
+    # existing adapter would compile a *mock* adapter from fabricated labels at the path
+    # the user pointed at, and could print `[SUCCESS]` with nothing distinguishing it from
+    # a real compile.
+    requested_real = backend_type.strip().lower() == "real"
 
     # A real backend's compile() is a paid remote submission that overwrites
     # config.adapter_path *in place*. `auto_recompile` defaults to True (suite.py) and the
@@ -532,17 +563,33 @@ def check(
     # --backend real` -- would submit up to max_iterations-1 real compiles, built on labels
     # invented by cli_teacher below (a demo stub that answers "2026-01-01" to almost
     # anything), and destroy the adapter it was asked to test. Never fire that implicitly.
-    if is_real and config.active_learning.auto_recompile:
+    if (is_real or requested_real) and config.active_learning.auto_recompile:
         if auto_recompile is not True:
             config.active_learning.auto_recompile = False
-            console.print(
-                "[bold yellow]Note:[/bold yellow] auto-recompile is disabled for "
-                f"--backend {_e(backend_type.strip().lower())}. Recompiling would submit a "
-                "paid upstream "
-                f"compile and overwrite [cyan]{escape(config.adapter_path)}[/cyan] in place.\n"
-                "  Running assertions read-only. Pass [cyan]--auto-recompile[/cyan] "
-                "explicitly to allow recompilation."
-            )
+            if is_real:
+                console.print(
+                    "[bold yellow]Note:[/bold yellow] auto-recompile is disabled for "
+                    f"--backend {_e(backend_type.strip().lower())}. Recompiling would submit a "
+                    "paid upstream "
+                    f"compile and overwrite [cyan]{escape(config.adapter_path)}[/cyan] in place.\n"
+                    "  Running assertions read-only. Pass [cyan]--auto-recompile[/cyan] "
+                    "explicitly to allow recompilation."
+                )
+            else:
+                # C-13: requested real, but _resolve_cli_backend already fell back to
+                # MockPAWBackend and announced why (stderr). No paid compile is at
+                # risk here -- what is at risk is a *mock* adapter silently landing at
+                # a path the user believes holds a real, upstream-compiled program.
+                console.print(
+                    "[bold yellow]Note:[/bold yellow] auto-recompile is disabled: "
+                    "--backend real fell back to [green]MockPAWBackend[/green] (see the "
+                    "warning above), and recompiling would write a mock stub -- built "
+                    f"from this CLI's demo teacher -- to "
+                    f"[cyan]{escape(config.adapter_path)}[/cyan], a path you asked for a "
+                    "real compile at.\n"
+                    "  Running assertions read-only. Pass [cyan]--auto-recompile[/cyan] "
+                    "explicitly to allow recompilation anyway."
+                )
         else:
             # Explicit opt-in still must not feed a stub teacher into a paid compile.
             raise typer.BadParameter(
@@ -554,36 +601,39 @@ def check(
                 param_hint="--auto-recompile",
             )
 
-    # The mock is NOT a safe place to recompile either, which the guard above originally
-    # claimed it was. `MockPAWBackend.compile()` writes a real file (`backend/mock.py`,
+    # C-2: the mock is NOT a safe place to recompile either, which this guard used to
+    # claim by exempting anything whose manifest declared `backend == "mock"`. Mock
+    # adapters are real user artifacts too -- `paw-kit demo`, `MockPAWBackend.compile()`,
+    # `schema.loader`, and `@compile_on_hit`'s cache all write them -- and
+    # `MockPAWBackend.compile()` writes a real file (`backend/mock.py`,
     # atomic_write_text), so `paw-test check suite.yaml` with no flags at all -- default
-    # backend, default auto_recompile=True -- overwrites whatever `adapter_path` points at
-    # with a mock stub whose examples are cli_teacher's fabricated labels. Reproduced
-    # against a real programasweights manifest: it was replaced wholesale. Nothing about
-    # that is specific to --backend real; it is the *default* invocation.
+    # backend, default auto_recompile=True -- overwrote whatever `adapter_path` pointed at
+    # with a mock stub whose examples are cli_teacher's fabricated labels, for *any*
+    # existing adapter including one this same mock backend had produced legitimately.
+    # Reproduced against a real programasweights manifest before this guard existed at
+    # all: it was replaced wholesale. Nothing about that is specific to --backend real;
+    # it is the *default* invocation, and it is not specific to a foreign backend either.
     if config.active_learning.auto_recompile and Path(config.adapter_path).exists():
-        # Gate on existence, not on the return value. An *absent* adapter is the normal
-        # first-compile case and must stay allowed; a file that is present but whose
-        # manifest cannot be read is the dangerous case -- it may be a third-party
-        # AbstractPAWBackend adapter, a foreign format, or binary weights, none of which
-        # the mock may silently replace. Anything present that does not positively
-        # identify itself as "mock" is protected.
+        # Gate on existence alone, not on what the existing manifest declares. An
+        # *absent* adapter is the normal first-compile case and must stay allowed;
+        # anything already on disk at that path -- mock, real, third-party
+        # AbstractPAWBackend adapter, foreign format, or binary weights, readable or not
+        # -- is data this CLI did not just create and must not silently discard.
         existing_backend = _declared_adapter_backend(config.adapter_path)
-        if existing_backend != "mock":
-            config.active_learning.auto_recompile = False
-            console.print(
-                "[bold yellow]Note:[/bold yellow] auto-recompile is disabled: "
-                f"[cyan]{escape(config.adapter_path)}[/cyan] is "
-                + (
-                    f"a [bold]{escape(existing_backend)}[/bold] adapter"
-                    if existing_backend
-                    else "not a readable mock manifest"
-                )
-                + ", and recompiling would replace it with a mock stub built from this "
-                "CLI's demo teacher.\n"
-                "  Running assertions read-only. Recompile it with the backend that "
-                "produced it, from code."
+        config.active_learning.auto_recompile = False
+        console.print(
+            "[bold yellow]Note:[/bold yellow] auto-recompile is disabled: "
+            f"[cyan]{escape(config.adapter_path)}[/cyan] already exists ("
+            + (
+                f"a [bold]{escape(existing_backend)}[/bold] adapter"
+                if existing_backend
+                else "not a readable manifest"
             )
+            + "), and recompiling would replace it with a mock stub built from this "
+            "CLI's demo teacher.\n"
+            "  Running assertions read-only. Recompile it with the backend that "
+            "produced it, from code."
+        )
 
     # H-1: an adapter-existence gate matching `compare`'s existing one -- but only on
     # the read-only path. `compare` can refuse outright because it never compiles;
@@ -756,7 +806,7 @@ def compare_cmd(
         "cases `paw-test check` does. Pass --no-fuzz for standard_cases only.",
     ),
     json_out: Optional[Path] = typer.Option(
-        None, "--json", help="Write the full CompareReport as JSON to this path"
+        None, "--json", dir_okay=False, help="Write the full CompareReport as JSON to this path"
     ),
 ) -> None:
     """Run every suite case through two compiled adapters and diff the results, per case.
@@ -790,17 +840,50 @@ def compare_cmd(
         console.print(f"[bold red]Error parsing suite:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
 
+    manifests: Dict[str, dict] = {}
     for label, adapter_path_arg in ((label_a, adapter_a), (label_b, adapter_b)):
-        if not read_adapter_manifest(str(adapter_path_arg)):
+        manifest = read_adapter_manifest(str(adapter_path_arg))
+        if not manifest:
             console.print(
                 f"[bold red]Error:[/bold red] Could not read a manifest from adapter {_e(label)} "
                 f"'{_e(adapter_path_arg)}' -- not JSON, or not the expected shape. Refusing to compare."
             )
             raise typer.Exit(code=1)
+        manifests[label] = manifest
 
+    resolved_backend_type = backend_type.strip().lower()
     backend = _resolve_cli_backend(backend_type)
+    actual_backend = type(backend).__name__
+
+    # C-4: both manifests were already read above (right there in the guard against
+    # an unreadable one), and both declare their own `backend`. If neither matches
+    # the backend this comparison is actually about to run through, every case will
+    # be inferred by a backend neither adapter was built for -- `MockPAWBackend`
+    # cannot read a `programasweights` manifest at all, so two distinct real adapters
+    # both silently degrade to the same `[mock:<input>]` placeholder output on every
+    # case, and the resulting "No differences" reads as "these two programs are
+    # identical" rather than "neither backend actually ran". Declared-`mock`
+    # manifests are exempt: MockPAWBackend is the sensible way to compare two mock
+    # adapters, and this is not a mismatch.
+    mismatched = [
+        label
+        for label, manifest in manifests.items()
+        if isinstance(backend, MockPAWBackend)
+        and isinstance(manifest.get("backend"), str)
+        and manifest["backend"] != "mock"
+    ]
+    if mismatched:
+        console.print(
+            f"[bold yellow]Warning:[/bold yellow] adapter(s) {_e(', '.join(sorted(mismatched)))} "
+            f"declare a different backend than this comparison is running through "
+            f"([cyan]{_e(actual_backend)}[/cyan], from --backend {_e(resolved_backend_type)}). "
+            "Results below reflect that backend, not the one either adapter was built for. "
+            "Pass --backend real to compare them as what they actually are."
+        )
+
     report: CompareReport = compare_adapters(
-        str(adapter_a), str(adapter_b), suite, backend, include_fuzz=fuzz
+        str(adapter_a), str(adapter_b), suite, backend, include_fuzz=fuzz,
+        requested_backend=resolved_backend_type,
     )
 
     # PAW-TEST-08-style backend failures (`_infer_safely`) never raise -- a backend
@@ -848,10 +931,21 @@ def compare_cmd(
                     f"    [yellow]expected differs:[/yellow] want {_e(row.expected[:60])} -- "
                     f"{_e(label_a)}={_e(row.a_expected_match)} {_e(label_b)}={_e(row.b_expected_match)}"
                 )
-    elif not errored_rows and not whitespace_only:
-        # Suppressed whenever any case errored, or any case is a whitespace-only
-        # difference -- both would make "identical output ... on every case" false.
+    elif not errored_rows and not whitespace_only and not (
+        report.total_cases > 0 and report.a_pass_count == 0 and report.b_pass_count == 0
+    ):
+        # Suppressed whenever any case errored, any case is a whitespace-only
+        # difference, or both adapters failed every case (C-4: identical output that
+        # both adapters get identically wrong is not the clean result "No
+        # differences" implies -- it means neither backend actually ran, e.g. two
+        # real manifests silently degraded to the same MockPAWBackend placeholder).
         console.print("[bold green]No differences[/bold green] -- identical output and pass status on every case.")
+    elif not errored_rows and not whitespace_only:
+        console.print(
+            "[bold yellow]Identical output on every case, but both sides failed every "
+            "case[/bold yellow] -- not the same as 'no differences'. See the backend "
+            "warning above if one printed."
+        )
 
     if whitespace_only:
         console.print(
@@ -1057,7 +1151,9 @@ def judge_cmd(
         "--judge",
         help="provider:model for the judge, e.g. anthropic:claude-haiku-4-5",
     ),
-    out: Optional[Path] = typer.Option(None, "--out", help="Write verdicts JSON to this path"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", dir_okay=False, help="Write verdicts JSON to this path"
+    ),
     diff: Optional[Tuple[Path, Path]] = typer.Option(
         None, "--diff", help="Diff two verdicts JSON files (OLD NEW) instead of judging a report"
     ),
@@ -1174,6 +1270,15 @@ def judge_cmd(
         raise typer.Exit(code=1)
     if not report.exists():
         console.print(f"[bold red]Error:[/bold red] Report file '{_e(report)}' does not exist.")
+        raise typer.Exit(code=1)
+
+    # C-10: passing both --spec and --suite used to silently judge against --spec,
+    # with --suite never even checked for existence -- lint-spec already errors on
+    # the equivalent pair (spec text and --file together). A stale --spec left over
+    # in a CI invocation while --suite was updated would judge against the wrong
+    # spec with no warning at all.
+    if spec is not None and suite_path is not None:
+        console.print("[bold red]Error:[/bold red] pass --spec or --suite, not both.")
         raise typer.Exit(code=1)
 
     resolved_spec = spec
@@ -1440,7 +1545,12 @@ def inspect(
         console.print_json(data=metadata)
         return
 
-    table = Table(title=f"PAW Adapter: {adapter_path.name}")
+    # C-6: `Table(title=...)` is Rich markup like any `console.print` call, but the
+    # existing AST guard (`test_no_unescaped_console_interpolations`) only ever
+    # visited `console.print(...)` calls, so this interpolation went unescaped and
+    # unnoticed. An adapter named `[v2]model.paw` printed a table titled
+    # "PAW Adapter: model.paw" -- naming a *different* file than the one on disk.
+    table = Table(title=f"PAW Adapter: {_e(adapter_path.name)}")
     table.add_column("Property", style="cyan", no_wrap=True)
     table.add_column("Value", style="magenta")
 
@@ -1502,8 +1612,14 @@ def history(
         )
         raise typer.Exit(code=1)
 
+    # C-8: one non-UTF-8 byte anywhere in the append-only sidecar used to raise an
+    # uncaught `UnicodeDecodeError` traceback here -- defeating the 20 lines above
+    # that defend this same read against size and JSON corruption. `errors="replace"`
+    # degrades that one line's un-decodable bytes to U+FFFD (which then fails
+    # `json.loads` and is skipped by the existing per-line guard below, exactly like
+    # any other malformed line) instead of taking the whole command down.
     entries: List[dict] = []
-    for line in log_path.read_text(encoding="utf-8").splitlines():
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -1518,7 +1634,8 @@ def history(
         console.print(f"[dim]No lineage entries recorded in '{_e(log_path)}'.[/dim]")
         raise typer.Exit(code=0)
 
-    table = Table(title=f"Compile history: {adapter_path.name}")
+    # C-6: same blind spot as `inspect`'s Table title above.
+    table = Table(title=f"Compile history: {_e(adapter_path.name)}")
     table.add_column("#", style="dim", justify="right")
     table.add_column("Compiled At")
     table.add_column("Backend")
@@ -1580,7 +1697,13 @@ def lint_spec_cmd(
         if not file.exists():
             console.print(f"[bold red]Error:[/bold red] spec file '{_e(file)}' does not exist.")
             raise typer.Exit(code=1)
-        spec_content = file.read_text(encoding="utf-8")
+        # C-8: a non-UTF-8 spec file used to raise an uncaught UnicodeDecodeError
+        # traceback here.
+        try:
+            spec_content = file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            console.print(f"[bold red]Error:[/bold red] spec file '{_e(file)}' is not valid UTF-8: {_e(exc)}")
+            raise typer.Exit(code=1)
     elif spec_text is not None:
         spec_content = spec_text
     else:
@@ -1615,9 +1738,18 @@ def lint_spec_cmd(
                 f"[bold red]Error:[/bold red] examples file '{_e(examples_file)}' does not exist."
             )
             raise typer.Exit(code=1)
+        # C-8: same uncaught UnicodeDecodeError as the --file read above.
+        try:
+            examples_text = examples_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            console.print(
+                f"[bold red]Error:[/bold red] examples file '{_e(examples_file)}' is not "
+                f"valid UTF-8: {_e(exc)}"
+            )
+            raise typer.Exit(code=1)
         examples_list = []
         nonblank_lines = 0
-        for line in examples_file.read_text(encoding="utf-8").splitlines():
+        for line in examples_text.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -1707,16 +1839,38 @@ def clean(
         console.print(f"[dim]Cache directory '{_e(cache_dir)}' does not exist. Nothing to clean.[/dim]")
         raise typer.Exit(code=0)
 
-    files_to_remove = list(resolved_cache.glob("*"))
-    if not files_to_remove:
+    all_entries = list(resolved_cache.glob("*"))
+    if not all_entries:
         console.print(f"[dim]No cached artifacts found in '{_e(cache_dir)}'.[/dim]")
         raise typer.Exit(code=0)
 
-    console.print(f"[bold yellow]{'Dry run: would remove' if dry_run else 'Purging'}[/bold yellow] {len(files_to_remove)} files in '{_e(cache_dir)}':")
+    # C-7: a directory entry (e.g. an examples-file cache subdir) was previously
+    # counted in "Purging N files", listed by name, and then silently skipped by the
+    # `if file.is_file()` guard below -- still present on disk, but "Cache cleaned
+    # successfully" printed anyway with no mention that anything was left behind.
+    # `paw-clean` deletes files only; report the two kinds of entry separately instead
+    # of conflating them under one count neither loop actually acts on uniformly.
+    files_to_remove = [e for e in all_entries if e.is_file()]
+    dirs_skipped = [e for e in all_entries if e.is_dir()]
+
+    console.print(
+        f"[bold yellow]{'Dry run: would remove' if dry_run else 'Purging'}[/bold yellow] "
+        f"{len(files_to_remove)} files in '{_e(cache_dir)}':"
+    )
     for file in files_to_remove:
         console.print(f"  - {_e(file.name)}")
+    if dirs_skipped:
+        console.print(
+            f"[dim]{len(dirs_skipped)} subdirectory(ies) found and left in place "
+            "(paw-clean only removes files):[/dim]"
+        )
+        for d in dirs_skipped:
+            console.print(f"  - {_e(d.name)}/")
 
     if dry_run:
+        raise typer.Exit(code=0)
+
+    if not files_to_remove:
         raise typer.Exit(code=0)
 
     # PAW-CLI-01, second half of the audit's remediation: require an explicit
@@ -1726,12 +1880,26 @@ def clean(
         console.print("[dim]Aborted -- no files were deleted.[/dim]")
         raise typer.Exit(code=0)
 
+    # C-3: the per-file `except` printed a red failure line and continued, but nothing
+    # accumulated those failures -- "Cache cleaned successfully." and exit 0 were
+    # unconditional, even when every single delete failed (verified: chmod 0o500 on the
+    # cache dir left both files in place, printed two "Permission denied" lines, then
+    # printed success anyway). A CI step chaining `paw-kit clean -y && rebuild` would
+    # proceed on a stale cache with no signal anything was wrong.
+    failed = []
     for file in files_to_remove:
         try:
-            if file.is_file():
-                file.unlink()
+            file.unlink()
         except Exception as exc:
             console.print(f"    [red]Failed to delete {_e(file.name)}: {_e(exc)}[/red]")
+            failed.append(file)
+
+    if failed:
+        console.print(
+            f"[bold red]{len(failed)} of {len(files_to_remove)} file(s) could not be "
+            "deleted.[/bold red]"
+        )
+        raise typer.Exit(code=1)
 
     console.print("[bold green]Cache cleaned successfully.[/bold green]")
 
@@ -1883,6 +2051,9 @@ def export_docker_cmd(
         "the container doesn't run. Defaults to real -- a container that only ever "
         "serves the mock is a demo, not a deployment.",
     ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite existing files in --out-dir without prompting for confirmation"
+    ),
 ) -> None:
     """Generate a Dockerfile and docker-compose scaffold for serving an adapter."""
     if not adapter_path.exists():
@@ -1896,15 +2067,39 @@ def export_docker_cmd(
         )
         raise typer.Exit(code=1)
 
+    # C-1: this command used to overwrite up to five existing files (Dockerfile,
+    # .dockerignore, docker-compose.yml, README.md, requirements.txt) with no exists()
+    # check, no prompt, and no --force flag -- the sibling `export dataset` one function
+    # below got exactly this gate (PAW-CLI-03). Mirrored here rather than duplicated: the
+    # set of filenames this command can clobber is `export_docker_scaffold`'s own reserved
+    # list, imported rather than re-typed, so the two cannot drift apart.
+    existing = sorted(
+        name for name in _RESERVED_OUTPUT_FILENAMES if (out_dir / name).exists()
+    )
+    if existing and not force:
+        console.print(
+            f"[bold yellow]The following file(s) already exist in "
+            f"{_e(out_dir)}:[/bold yellow]"
+        )
+        for name in existing:
+            console.print(f"  - {_e(name)}")
+        if not typer.confirm("Overwrite these files?"):
+            console.print("[dim]Aborted -- no files were written.[/dim]")
+            raise typer.Exit(code=0)
+
     from paw_kit.serve.docker import export_docker_scaffold
 
     try:
         dest = export_docker_scaffold(adapter_path=adapter_path, output_dir=out_dir, backend=resolved_backend)
         console.print(f"[bold green]Docker deployment assets successfully generated in:[/bold green] {_e(dest.resolve())}")
+        # C-1: requirements.txt is one of the five files this command generates and can
+        # overwrite, but was missing from this list -- so a user could not tell from the
+        # output alone that it had been replaced too.
         console.print("  - Dockerfile")
         console.print("  - .dockerignore")
         console.print("  - docker-compose.yml")
         console.print("  - README.md")
+        console.print("  - requirements.txt")
     except Exception as exc:
         console.print(f"[bold red]Error exporting Docker assets:[/bold red] {_e(exc)}")
         raise typer.Exit(code=1)
@@ -1930,7 +2125,12 @@ def export_dataset_cmd(
         console.print(f"[bold red]Error:[/bold red] --out must have a '.jsonl' extension: {_e(out_file)}")
         raise typer.Exit(code=1)
     if out_file.exists() and not force:
-        if not typer.confirm(f"{_e(out_file)} already exists. Overwrite?"):
+        # C-9: `typer.confirm` is plain click, not Rich -- it prints raw, so running
+        # the filename through `_e()` (Rich's markup escaper) *adds* visible
+        # backslashes instead of protecting anything: a file named "[v2]out.jsonl"
+        # prompted "\[v2]out.jsonl already exists. Overwrite?", on the one prompt
+        # whose whole job is to name the file about to be destroyed.
+        if not typer.confirm(f"{out_file} already exists. Overwrite?"):
             console.print("[dim]Aborted -- file was not overwritten.[/dim]")
             raise typer.Exit(code=0)
 
