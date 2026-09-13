@@ -113,6 +113,11 @@ class TestRunReport(BaseModel):
 
     task_name: str
     adapter_path: str
+    # C-5: which backend class actually ran this suite (`type(backend).__name__`), so
+    # a `--json` consumer can tell a real run from a mock fallback. Before this field
+    # existed, `_resolve_cli_backend`'s fallback announcement was stdout-only Rich
+    # text -- invisible to any JSON artifact and to any caller that redirected stdout.
+    backend: str = ""
     total_cases: int = 0
     passed_cases: int = 0
     failed_cases: int = 0
@@ -516,6 +521,7 @@ class TestRunner:
         return TestRunReport(
             task_name=config.task_name,
             adapter_path=config.adapter_path,
+            backend=type(self.backend).__name__,
             total_cases=len(results),
             passed_cases=passed_count,
             failed_cases=failed_count,

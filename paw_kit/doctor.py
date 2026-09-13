@@ -349,6 +349,19 @@ def check_cached_programs(adapter_path: Optional[str] = None) -> CheckResult:
     which is what the default backend and `paw-kit demo` write). That is not a broken
     environment -- "offline readiness" simply does not apply to a mock adapter -- so it
     is reported as a WARN, not treated as a check failure.
+
+    C-11: two distinct misdiagnoses this used to produce, both closed by checking the
+    path and the manifest's own declared `backend` up front instead of inferring
+    everything from `read_manifest`'s exception type:
+    1. A mistyped `--adapter` path raised `FileNotFoundError` (`read_manifest`'s own
+       `is_file()` guard), which `_guarded` turned into "FAIL | check raised
+       FileNotFoundError" with the remedy "Run the check directly for a full
+       traceback" -- blaming the environment for a typo.
+    2. `read_manifest` raises the same `ValueError` for a genuinely malformed *real*
+       manifest (oversized, or a dict whose `backend` field is missing/wrong) as it
+       does for an honest mock manifest, and the old code reported both as "offline
+       readiness does not apply to a mock-backend manifest" -- the converse
+       mislabel: a corrupted real manifest read as "that's just a mock".
     """
     from programasweights import is_offline_ready, list_cached_programs
 
@@ -358,16 +371,46 @@ def check_cached_programs(adapter_path: Optional[str] = None) -> CheckResult:
     if not adapter_path:
         return CheckResult("Cached programs", "PASS", detail, "")
 
+    from pathlib import Path as _Path
+    import json as _json
+
+    if not _Path(adapter_path).is_file():
+        return CheckResult(
+            "Cached programs",
+            "WARN",
+            f"no adapter manifest at {adapter_path}",
+            "Check the --adapter path for a typo.",
+        )
+
     from paw_kit.backend.programasweights import ProgramAsWeightsBackend
 
     try:
         manifest = ProgramAsWeightsBackend.read_manifest(adapter_path)
     except ValueError:
+        # Peek at the raw JSON directly rather than trusting read_manifest's
+        # exception alone to mean "this is a mock manifest" -- read_manifest raises
+        # the identical ValueError for an oversized file, a non-dict, or a dict
+        # whose `backend` is simply wrong, none of which are "just a mock".
+        declared_backend = None
+        try:
+            raw = _json.loads(_Path(adapter_path).read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                declared_backend = raw.get("backend")
+        except (OSError, ValueError):
+            pass
+        if declared_backend == "mock":
+            return CheckResult(
+                "Cached programs",
+                "WARN",
+                "offline readiness does not apply to a mock-backend manifest",
+                "",
+            )
         return CheckResult(
             "Cached programs",
             "WARN",
-            "offline readiness does not apply to a mock-backend manifest",
-            "",
+            f"{adapter_path} is not a readable programasweights manifest "
+            f"(declared backend={declared_backend!r})",
+            "Check the --adapter path points at a real ProgramAsWeightsBackend manifest.",
         )
     program_id = manifest.get("program_id") or manifest.get("slug")
     ready = is_offline_ready(program_id)

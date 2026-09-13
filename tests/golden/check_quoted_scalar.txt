@@ -1,7 +1,8 @@
 $ paw-test check suite.yaml
 exit code: 1
 --- stdout ---
-Running paw.test check on: golden_date_normalizer (quoted.paw) (backend: MockPAWBackend)
+Running paw.test check on: golden_date_normalizer
+(<WORKDIR.......................................................>/quoted.paw) (backend: MockPAWBackend)
   [FAIL] Input: 'today' -> '"2026-09-11"'
          regex_match: Output '"2026-09-11"' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
          expected: got "2026-09-11" want 2026-09-11

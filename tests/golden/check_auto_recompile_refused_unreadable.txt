@@ -1,10 +1,11 @@
 $ paw-test check suite.yaml
 exit code: 1
 --- stdout ---
-Note: auto-recompile is disabled: opaque.paw is not a readable mock manifest, and recompiling would replace it with a
-mock stub built from this CLI's demo teacher.
+Note: auto-recompile is disabled: <WORKDIR.......................................................>/opaque.paw already
+exists (not a readable manifest), and recompiling would replace it with a mock stub built from this CLI's demo teacher.
   Running assertions read-only. Recompile it with the backend that produced it, from code.
-Running paw.test check on: golden_date_normalizer (opaque.paw) (backend: MockPAWBackend)
+Running paw.test check on: golden_date_normalizer
+(<WORKDIR.......................................................>/opaque.paw) (backend: MockPAWBackend)
   [FAIL] Input: 'today' -> '[mock:today]'
          regex_match: Output '[mock:today]' does not match pattern '^(\d{4}-\d{2}-\d{2}|INVALID)$'
          expected: got [mock:today] want 2026-09-11

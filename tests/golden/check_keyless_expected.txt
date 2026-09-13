@@ -1,7 +1,8 @@
 $ paw-test check suite.yaml
 exit code: 0
 --- stdout ---
-Running paw.test check on: golden_date_normalizer (good.paw) (backend: MockPAWBackend)
+Running paw.test check on: golden_date_normalizer
+(<WORKDIR.......................................................>/good.paw) (backend: MockPAWBackend)
   [PASS] Input: 'today' -> '2026-09-11'
   [PASS] Input: 'new year' -> '2026-01-01'
   [PASS] Input: 'February 30th' -> 'INVALID'

@@ -387,6 +387,34 @@ def test_anthropic_judge_temperature_survives_incompatible_sdk_signature(
 # --------------------------------------------------------------------------- CLI
 
 
+def test_judge_cli_out_at_a_directory_is_refused_cleanly_C_12(tmp_path: Path) -> None:
+    """Same fix as `check`/`compare --json`'s (C-12): a directory `--out` argument
+    must be refused by Typer's own argument validation, before any judge call is
+    even attempted -- not crash after paying for one.
+
+    No `ANTHROPIC_API_KEY` is set, deliberately: without `dir_okay=False`, Typer
+    accepts the directory as a valid Path and the command's own logic runs, hitting
+    the missing-API-key exit 2 well before ever reaching the `--out` write --
+    which would make this test pass "by accident" at main for an unrelated reason,
+    never actually exercising the bug. Asserting the specific message Typer's own
+    argument validation produces (distinct from the API-key message) is what
+    actually pins `dir_okay=False`, regardless of what runs after it.
+    """
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps({"task_name": "x", "results": []}), encoding="utf-8")
+    out_dir = tmp_path / "a_directory"
+    out_dir.mkdir()
+
+    result = runner.invoke(
+        test_app, ["judge", str(report_path), "--spec", "x", "--out", str(out_dir)]
+    )
+
+    assert result.exit_code == 2
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "is a directory" in result.output
+    assert "--out" in result.output
+
+
 def test_judge_cli_exits_2_without_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     report_path = tmp_path / "report.json"
@@ -551,6 +579,31 @@ def test_judge_cli_requires_spec_or_suite(tmp_path: Path, monkeypatch: pytest.Mo
     result = runner.invoke(test_app, ["judge", str(report_path)])
     assert result.exit_code == 1
     assert "--spec or --suite" in result.output
+
+
+def test_judge_cli_rejects_spec_and_suite_together_C_10(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--spec` and `--suite` together must error, not silently prefer --spec.
+
+    Before this fix, `resolved_spec = spec` ran unconditionally, so a `--suite` flag
+    passed alongside `--spec` was never even checked for existence -- a stale --spec
+    left over in a CI invocation while --suite was updated would judge against the
+    wrong spec with no warning. `lint-spec` already errors on the equivalent pair
+    (spec text and --file together); this mirrors it.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps({"task_name": "x", "results": []}), encoding="utf-8")
+
+    # The point of the test: a --suite that does not even exist is still rejected,
+    # because the pair is refused before either is read.
+    result = runner.invoke(
+        test_app,
+        ["judge", str(report_path), "--spec", "do the thing", "--suite", "does_not_exist.yaml"],
+    )
+    assert result.exit_code == 1
+    assert "not both" in result.output
 
 
 # --------------------------------------------------------------- finding 5: disagreements

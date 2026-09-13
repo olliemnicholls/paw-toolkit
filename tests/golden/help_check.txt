@@ -12,7 +12,7 @@ exit code: 0
 ╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ --backend         -b                         <str>   Backend engine: mock | real [default: mock]                     │
 │ --auto-recompile      --no-auto-recompile            Enable active learning (overrides suite.yaml if set)            │
-│ --json                                       <path>  Write the run's TestRunReport as JSON to this path (input for   │
+│ --json                                       <file>  Write the run's TestRunReport as JSON to this path (input for   │
 │                                                      `paw-test judge`)                                               │
 │ --adapter                                    <path>  Run this suite against a different compiled .paw adapter,       │
 │                                                      overriding the suite.yaml's own adapter_path -- so one suite    │

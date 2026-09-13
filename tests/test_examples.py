@@ -49,7 +49,25 @@ def test_date_normalizer_cli_invocation() -> None:
 
     The example needs a redesign to be a good demo again -- filed as an addendum
     finding on the parent track, not attempted here.
+
+    **C-2 collateral, 2026-09-13.** This test writes to the example's real (non-tmp)
+    `.paw_demo_dates/` directory, not a fixture, so its outcome used to be independent
+    of whether an adapter already existed there -- `check`'s pre-C-2 guard exempted
+    any adapter declaring `backend: "mock"`, which this one does, so recompilation
+    always proceeded either way. After C-2 (any existing adapter, mock or not, blocks
+    auto-recompile), running `test_date_normalizer_example_smoke` first in this same
+    file leaves a real adapter on disk that this test then finds already present --
+    deterministic under pytest's default (unrandomized) in-file ordering, not a flake
+    -- and the run takes the read-only path instead of the active-learning path this
+    test exists to pin. Clearing the directory first makes the test self-contained
+    regardless of what ran before it in the same process, which is what its assertions
+    below already assumed.
     """
+    demo_dir = Path(__file__).parent.parent / "examples" / "date_normalizer" / ".paw_demo_dates"
+    if demo_dir.exists():
+        import shutil
+        shutil.rmtree(demo_dir)
+
     suite_path = Path(__file__).parent.parent / "examples" / "date_normalizer" / "suite.yaml"
     result = runner.invoke(paw_test_app, ["check", str(suite_path)])
 

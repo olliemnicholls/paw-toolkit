@@ -471,7 +471,25 @@ def run_active_learning_loop(
             # suite.py's load_suite -- validated again here, immediately before the
             # write, so this holds for any config that reached this loop by a path
             # other than load_suite() too.
-            ensure_contained(config.adapter_path, Path.cwd(), label="adapter_path")
+            #
+            # M-2: load_suite() now resolves a relative adapter_path against the
+            # suite file's own directory (not CWD) and validates containment against
+            # that same root, then stores the result back as an absolute path -- so
+            # by the time a load_suite()-produced config reaches here,
+            # config.adapter_path is always already absolute and already validated
+            # against the *correct* root, which is not necessarily CWD (a suite
+            # invoked from a different directory than the one it lives in is exactly
+            # the scenario M-2 fixes). Re-checking an already-absolute path against
+            # CWD here would reintroduce that same CWD-coupling one step later and
+            # break that scenario. What this line still must catch is a *relative*,
+            # traversal-capable adapter_path on a config that was hand-built in
+            # Python and never went through load_suite() at all -- for that caller,
+            # CWD is the only sensible root, since there is no suite file to anchor
+            # to. Absolute paths from load_suite() skip this redundant check
+            # entirely, not because they are trusted less, but because they were
+            # already checked against the root that actually matters.
+            if not Path(config.adapter_path).is_absolute():
+                ensure_contained(config.adapter_path, Path.cwd(), label="adapter_path")
             active_backend.compile(
                 spec=config.spec,
                 examples=dataset,

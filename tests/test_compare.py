@@ -1102,3 +1102,112 @@ def test_h5_both_sides_abstain_counters_are_independent(
     assert report.b_expected_matched == 3
     assert report.a_expected_denominator.scored == 0
     assert report.b_expected_denominator.scored == 3
+
+
+# =====================================================================================
+# C-4 / C-5 (bug-hunt-remediation, Track H)
+# =====================================================================================
+
+
+def _write_real_manifest(path: Path, program_id: str) -> None:
+    path.write_text(
+        json.dumps({"backend": "programasweights", "program_id": program_id, "compiler": "paw-4b"}),
+        encoding="utf-8",
+    )
+
+
+def test_compare_warns_when_real_manifests_run_through_the_mock_backend_C_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`compare`'s default backend must not silently answer for real adapters.
+
+    Before this fix, two `programasweights` manifests compared with no `--backend`
+    flag (the default, `mock`) both degraded to the same `[mock:<input>]` placeholder
+    on every case -- `MockPAWBackend` cannot read either manifest -- and the CLI's own
+    gate had already read both manifests and seen `backend == "programasweights"` on
+    both, and said nothing. Reproduced: "No differences" printed for two adapters that
+    were never actually compared.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_real_manifest(tmp_path / "a.paw", "prog_aaa")
+    _write_real_manifest(tmp_path / "b.paw", "prog_bbb")
+    # A strict assertion the mock's `[mock:<input>]` fallback placeholder cannot
+    # satisfy -- _H5_SUITE's max_length:100 is too permissive to fail on it, which
+    # would leave a_pass_count/b_pass_count nonzero and never exercise the
+    # suppression this test is about.
+    (tmp_path / "suite.yaml").write_text(
+        _H5_SUITE.replace(
+            "  - rule: max_length\n    value: 100\n",
+            "  - rule: regex_match\n    pattern: '^RG-\\d$'\n",
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(test_app, ["compare", "a.paw", "b.paw", "suite.yaml", "--no-fuzz"])
+    out = result.output
+
+    assert "declare a different backend" in out
+    assert "No differences" not in out
+    assert "both sides failed every case" in out
+
+
+def test_compare_no_differences_still_prints_for_a_genuine_clean_mock_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-4's suppression is scoped to the all-failing case, not to every clean run."""
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE, encoding="utf-8")
+
+    result = runner.invoke(test_app, ["compare", "a.paw", "b.paw", "suite.yaml", "--no-fuzz"])
+    out = result.output
+
+    assert "declare a different backend" not in out
+    assert "No differences" in out
+
+
+def test_compare_report_carries_backend_and_requested_backend_C_5(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `--json` consumer must be able to tell what backend actually ran.
+
+    Before this fix, neither `CompareReport` nor `TestRunReport` had a `backend`
+    field at all -- the real-to-mock fallback announcement was stdout-only Rich text,
+    invisible to any JSON artifact and to any caller that redirected stdout.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE, encoding="utf-8")
+    json_out = tmp_path / "report.json"
+
+    result = runner.invoke(
+        test_app,
+        ["compare", "a.paw", "b.paw", "suite.yaml", "--no-fuzz", "--json", str(json_out)],
+    )
+    assert result.exit_code == 0
+    data = json.loads(json_out.read_text(encoding="utf-8"))
+    assert data["backend"] == "MockPAWBackend"
+    assert data["requested_backend"] == "mock"
+
+
+def test_compare_json_at_a_directory_is_refused_cleanly_C_12(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same fix as `check --json`'s (C-12): a directory `--json` argument must be
+    refused up front, not crash after the whole comparison completes."""
+    monkeypatch.chdir(tmp_path)
+    _write_lookup_adapter(tmp_path / "a.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    _write_lookup_adapter(tmp_path / "b.paw", {f"case-{i}": f"RG-{i}" for i in range(3)})
+    (tmp_path / "suite.yaml").write_text(_H5_SUITE, encoding="utf-8")
+    json_out_dir = tmp_path / "a_directory"
+    json_out_dir.mkdir()
+
+    result = runner.invoke(
+        test_app,
+        ["compare", "a.paw", "b.paw", "suite.yaml", "--no-fuzz", "--json", str(json_out_dir)],
+    )
+
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)

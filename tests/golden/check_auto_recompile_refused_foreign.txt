@@ -1,10 +1,12 @@
 $ paw-test check suite.yaml
 exit code: 0
 --- stdout ---
-Note: auto-recompile is disabled: foreign.paw is a programasweights adapter, and recompiling would replace it with a
-mock stub built from this CLI's demo teacher.
+Note: auto-recompile is disabled: <WORKDIR.......................................................>/foreign.paw already
+exists (a programasweights adapter), and recompiling would replace it with a mock stub built from this CLI's demo
+teacher.
   Running assertions read-only. Recompile it with the backend that produced it, from code.
-Running paw.test check on: golden_date_normalizer (foreign.paw) (backend: MockPAWBackend)
+Running paw.test check on: golden_date_normalizer
+(<WORKDIR.......................................................>/foreign.paw) (backend: MockPAWBackend)
   [PASS] Input: 'today' -> '2026-09-11'
   [PASS] Input: 'new year' -> '2026-01-01'
   [PASS] Input: 'February 30th' -> 'INVALID'
