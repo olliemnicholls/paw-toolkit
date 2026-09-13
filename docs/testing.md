@@ -62,12 +62,16 @@ overwrites the adapter in place (and, on a real backend, costs a paid upstream c
 CLI runs **read-only against `--backend real`**: `auto_recompile` is forced off with a
 printed notice, and passing `--auto-recompile` explicitly is refused rather than allowed,
 because stub labels must never become training signal for a paid compile. Drive the loop
-from code, with a real teacher, when you want it to actually repair something. Against the
-mock backend (the default) it recompiles freely, but that is **not** harmless either:
-`MockPAWBackend.compile()` writes a real file, so recompiling replaces whatever
-`adapter_path` points at with a mock stub containing the demo teacher's invented labels.
-`paw-test check` therefore refuses to recompile any adapter that does not identify itself
-as a mock manifest, so a real compiled adapter cannot be destroyed by a stray run.
+from code, with a real teacher, when you want it to actually repair something.
+
+Against the mock backend (the default), `paw-test check` will compile a *fresh* adapter —
+there is nothing at `adapter_path` yet to lose. But it **refuses to recompile any adapter
+that already exists**, mock or real, printing a notice instead: `MockPAWBackend.compile()`
+writes a real file, so overwriting one in place would replace it with a mock stub containing
+the demo teacher's invented labels, and an existing adapter is as much a real artifact as any
+other. If you want the stub teacher to repair an existing mock adapter, delete it first (the
+same opt-out this guard uses for a first compile), or drive the loop from code with a real
+teacher.
 
 ## Why the loop made no progress
 

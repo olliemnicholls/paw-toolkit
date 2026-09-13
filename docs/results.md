@@ -58,6 +58,7 @@ compiler can.
 | Question | Result |
 |---|---|
 | Adapter file deleted after a real compile | Calls fell back to the teacher; no crash |
+| A served adapter call that hangs indefinitely | Falls back to the teacher after `adapter_timeout_s` (10 s by default) instead of blocking the caller forever |
 | Shadow mode on a recorded 20-ticket replay, shipped defaults | 12 of 20 on every window (cyclic) or 11 to 13 of 20 (random draw); parked after five windows, never promoted. Zero compiles, zero paid calls |
 | Chance of a weak adapter being promoted by luck | An adapter that agrees on a random 60% of inputs passes one 20-sample window with probability 5.1%, about 23% across the five windows before it is parked. Raise `shadow_window` if that matters; at 50 the per-window chance is below 0.3% |
 | Post-promotion audit at 5% | 68 teacher calls over 1,200 served calls (5.7%); zero at the default rate. A 20-sample audit window catches a drift to 60% agreement on only about 40% of windows, so size `audit_window` for the drift you care about |

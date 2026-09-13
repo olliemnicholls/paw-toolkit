@@ -16,6 +16,22 @@ also exposed, so the official OpenAI and Anthropic client libraries work with `b
 pointed at the server. `GET /health` (liveness) and `GET /ready` (readiness) are the only
 unauthenticated routes; `GET /metrics` and every inference route require the bearer token.
 
+## Rate limiting, CORS, and reverse proxies
+
+Each client is capped at 120 requests/minute by default (`PAW_RATE_LIMIT_PER_MINUTE`;
+`0` disables it), plus a combined ceiling across every client of 20,000/minute
+(`PAW_RATE_LIMIT_GLOBAL_PER_MINUTE`) so no amount of address-rotation by one caller can
+starve everyone else. The client is identified by the connecting socket address, which is
+correct for a direct connection but **the same for every caller** if the server sits behind
+a reverse proxy or load balancer — set `PAW_TRUST_PROXY_HEADER=1` in that case so the
+limiter reads the real client address from `X-Forwarded-For` instead. Only set it when a
+proxy you control is actually the one setting that header: a caller directly attached to
+the server can otherwise put anything it likes in `X-Forwarded-For` and evade the limiter
+entirely.
+
+No cross-origin browser access is allowed by default. Set `PAW_CORS_ORIGINS` to a
+comma-separated allowlist of origins to permit it.
+
 ## Readiness
 
 `/ready` returns 503 until the adapter has served one successful call, or until the
