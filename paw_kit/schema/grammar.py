@@ -1062,6 +1062,23 @@ def _render_node(node: Any, flags: REFlags, source: str) -> Tuple[str, bool]:
         return _render_char_group(node.chars, node.negated, flags, source), True
 
     if isinstance(node, _Repeated):
+        # A reversed quantifier bound written directly into a `Field(pattern=...)`
+        # source regex (e.g. `a{5,2}`) is not currently reachable end-to-end --
+        # pydantic itself rejects all such spellings at class-build time with its own
+        # `SchemaError`, before a model carrying one could ever reach the compiler --
+        # but `_render_quantifier`'s own assertion for this exact condition claims
+        # "the caller should have raised PAWSchemaError before reaching the renderer",
+        # which was false for this caller specifically: nothing upstream of it
+        # validated a regex-embedded bound the way `_resolve_length_bounds` validates
+        # a pydantic-constraint one. Raised here directly so the invariant holds for
+        # both callers uniformly, rather than resting entirely on pydantic's own
+        # unrelated rejection to keep this branch unreachable.
+        if node.max is not None and node.min > node.max:
+            raise PAWSchemaError(
+                f"Pattern quantifier {{{node.min},{node.max}}} has a minimum greater "
+                "than its maximum: no repetition count can satisfy both, so there is "
+                "no legal value this pattern could ever match."
+            )
         inner, atomic = _render_node(node.base, flags, source)
         if not inner:
             return "", True

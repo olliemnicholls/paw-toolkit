@@ -1377,6 +1377,24 @@ def test_regex_logits_processor_wraps_interegular_exceptions_S_15() -> None:
         RegexLogitsProcessor(regex_pattern=r"\bword\b", vocabulary={0: "a"}, eos_token_id=1)
 
 
+def test_regex_logits_processor_wraps_reversed_quantifier_bare_exception_S_22() -> None:
+    """A reversed quantifier bound must surface as PAWSchemaError too, not the bare
+    `Exception: Can't multiply an FSM by -3` interegular raises for it.
+
+    `a{5,2}` (min > max) parses fine -- interegular's own parser does not reject it --
+    and only fails inside `to_fsm()`, with an exception type `Unsupported`/
+    `InvalidSyntax` do not cover (S-15's wrapper). Distinct from S-15's own patterns:
+    those fail to *parse*; this one parses and fails to *compile*.
+    """
+    import paw_kit.schema.logits_processor as lp
+
+    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
+        lp._compile_fsm_safe("a{5,2}")
+
+    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
+        RegexLogitsProcessor(regex_pattern="a{5,2}", vocabulary={0: "a", 1: "b"})
+
+
 # --- S-3 / S-3b: Field(pattern=...) is translated through the AST, not spliced --------
 
 
@@ -1581,6 +1599,24 @@ def test_refusal_names_the_construct_it_cannot_compile_S_3() -> None:
 
     with pytest.raises(PAWSchemaError, match=r"Escape \\b is not implemented"):
         _translate_field_pattern(r"\bfoo\b")
+
+
+def test_render_node_rejects_reversed_quantifier_in_pattern_source() -> None:
+    """`_Repeated`'s branch in `_render_node` did not route through
+    `_resolve_length_bounds` at all, so a reversed quantifier bound written
+    directly into a `Field(pattern=...)` source regex (e.g. `a{5,2}`) reached
+    `_render_quantifier`'s own defensive assertion, whose message claims "the
+    caller should have raised PAWSchemaError before reaching the renderer" --
+    false for this caller specifically, nothing upstream validated it. Not
+    currently reachable via a real pydantic model (pydantic itself rejects `a{5,2}`
+    at class-build time with its own SchemaError, before any model carrying it
+    could reach the compiler) -- exercised directly against the translator instead,
+    which is what actually renders a `Field(pattern=...)` source string.
+    """
+    from paw_kit.schema.grammar import _translate_field_pattern
+
+    with pytest.raises(PAWSchemaError, match="minimum greater than its maximum"):
+        _translate_field_pattern("a{5,2}")
 
 
 def test_interegular_ast_surface_is_still_what_the_translator_expects() -> None:
