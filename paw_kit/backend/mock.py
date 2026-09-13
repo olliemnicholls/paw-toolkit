@@ -17,11 +17,15 @@ from paw_kit.backend.manifest_lineage import (
 )
 
 # Mirrors programasweights.MANIFEST_VERSION -- see that module's constant for what
-# bumped it. The mock backend has no upstream `program_id`/`compiler`/`compiled_at`
-# concept of its own, so those three fields stay absent here; everything else in the
-# v2 lineage schema (spec hash, folded example ids, parent linkage, compile wall
-# time, compiler_snapshot) applies equally to a mock manifest.
-MANIFEST_VERSION = 2
+# bumped it, including D-ADD-1's v2->v3 (moved in lockstep here too: a mock and a
+# real manifest sharing one version number that means two different things would
+# be exactly the confusion this field exists to prevent). The mock backend has no
+# upstream `program_id`/`compiler`/`compiled_at` concept of its own, so those three
+# fields stay absent here; everything else in the schema (spec hash, folded example
+# ids, parent linkage, compile wall time, compiler_snapshot) applies equally to a
+# mock manifest. `public_requested`/`public_confirmed`/`cached_program_id` (the v3
+# fields) are real-backend-only concepts with no mock equivalent -- also absent.
+MANIFEST_VERSION = 3
 
 # PAW-BACKEND-03: caps how many distinct adapter_path entries MockPAWBackend keeps
 # resident in memory at once, evicted least-recently-used. Without this, a
