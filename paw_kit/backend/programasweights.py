@@ -91,13 +91,18 @@ FAST_COMPILER = "paw-4b-qwen3-0.6b"
 FINETUNE_COMPILER = "paw-ft-bs48"
 
 MANIFEST_BACKEND_NAME = "programasweights"
-# Bumped when compile() started recording lineage (spec/full-spec hashes, which
+# v1 -> v2: compile() started recording lineage (spec/full-spec hashes, which
 # examples were actually folded, parent-manifest linkage, compile wall time, and
-# whatever compiler_snapshot the SDK returns). `read_manifest` does not gate on this
-# -- a version-1 manifest (no `manifest_version` key at all) must keep loading
-# unchanged; this constant exists for `paw-inspect`/`paw-kit history` to display, not
-# to reject anything.
-MANIFEST_VERSION = 2
+# whatever compiler_snapshot the SDK returns).
+# v2 -> v3 (D-ADD-1): A-2 removed `public` and added `public_requested`,
+# `public_confirmed`, `public_confirmed_reason`, and `cached_program_id` -- a
+# strictly larger, key-set-changing edit than v1->v2's purely additive one, so a
+# pre-A-2 and a post-A-2 manifest need their own distinguishing version too (the
+# whole reason this field exists). `read_manifest` does not gate on this -- a
+# version-1 manifest (no `manifest_version` key at all) must keep loading unchanged
+# -- this constant exists for `paw-inspect`/`paw-kit history` to display, not to
+# reject anything.
+MANIFEST_VERSION = 3
 _MAX_MANIFEST_BYTES = 64 * 1024
 _MAX_CACHED_FUNCTIONS = 8  # each holds a loaded llama.cpp model; keep this small
 

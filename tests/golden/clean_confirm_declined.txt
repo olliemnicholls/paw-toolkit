@@ -1,7 +1,7 @@
 $ paw-kit clean
 exit code: 0
 --- stdout ---
-Purging 1 files in '.paw':
+Purging 1 file in '.paw':
   - a.paw
 Permanently delete these 1 file(s)? [y/N]: n
 Aborted -- no files were deleted.

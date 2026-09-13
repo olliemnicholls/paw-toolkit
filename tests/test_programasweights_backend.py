@@ -364,7 +364,7 @@ def test_precheck_failure_is_swallowed_and_manifest_records_null(key: None, tmp_
 # ---------------------------------------------------------------- manifest v2 / lineage
 
 
-def test_manifest_v2_records_lineage_fields(key: None, tmp_path: Path) -> None:
+def test_manifest_v3_records_lineage_fields(key: None, tmp_path: Path) -> None:
     sdk = FakeSDK()
     backend = ProgramAsWeightsBackend(sdk=sdk, max_spec_examples=1)
     out = tmp_path / "a.paw"
@@ -373,7 +373,10 @@ def test_manifest_v2_records_lineage_fields(key: None, tmp_path: Path) -> None:
     backend.compile("Classify tickets.", examples, str(out))
 
     manifest = json.loads(out.read_text())
-    assert manifest["manifest_version"] == 2
+    # D-ADD-1: bumped 2 -> 3 -- A-2 removed `public` and added `public_requested`/
+    # `public_confirmed`/`public_confirmed_reason`/`cached_program_id`, a strictly
+    # larger change than the purely additive one that took this constant 1 -> 2.
+    assert manifest["manifest_version"] == 3
     assert manifest["spec_sha256"] == hashlib.sha256(b"Classify tickets.").hexdigest()
     # full_spec_sha256 is the hash of the spec *with* the folded example appended --
     # distinct from spec_sha256 because max_spec_examples=1 folds one example in.

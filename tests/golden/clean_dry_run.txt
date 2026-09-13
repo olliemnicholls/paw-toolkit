@@ -1,5 +1,5 @@
 $ paw-kit clean --dry-run
 exit code: 0
 --- stdout ---
-Dry run: would remove 1 files in '.paw':
+Dry run: would remove 1 file in '.paw':
   - a.paw

@@ -104,6 +104,16 @@ def _compile_fsm_safe(pattern: str) -> FSM:
         # `paw_kit` keys on. `loader.py:74-79` happens to wrap anything that is not a
         # `PAWSchemaError`, so the real beneficiary is `RegexLogitsProcessor.__init__`,
         # which has no such wrapper and is a public export.
+        #
+        # S-22: `Unsupported`/`InvalidSyntax` do not cover every way this call can fail.
+        # A reversed quantifier bound (`a{5,2}`, min > max) parses fine -- interegular's
+        # own parser does not reject it -- and fails inside `to_fsm()` with a bare
+        # `Exception: Can't multiply an FSM by -3`, escaping both this wrapper and
+        # `RegexLogitsProcessor` uncaught. Caught by type below (bare `except Exception`,
+        # narrower than `BaseException`, so `KeyboardInterrupt`/`SystemExit` still
+        # propagate) rather than by adding a third named exception class: interegular
+        # does not export one for this failure mode, and `_compile`'s only job is
+        # calling into interegular, so nothing else can reach this branch.
         try:
             fsm = interegular.parse_pattern(pattern).to_fsm()
         except (Unsupported, InvalidSyntax) as exc:
@@ -112,6 +122,13 @@ def _compile_fsm_safe(pattern: str) -> FSM:
                 "Grammar-constrained decoding needs a pattern expressible as a finite "
                 "automaton; zero-width assertions (\\b, \\B), lookaround, "
                 "backreferences and Unicode property classes (\\p{...}) are not."
+            ) from exc
+        except Exception as exc:
+            raise PAWSchemaError(
+                f"Cannot compile the pattern into a DFA: {type(exc).__name__}: {exc}. "
+                "The pattern parsed but interegular could not turn it into a finite "
+                "automaton -- a reversed quantifier bound (e.g. {5,2}, where the "
+                "minimum exceeds the maximum) is one known cause."
             ) from exc
         if len(fsm.states) > _MAX_FSM_STATES:
             raise PAWSchemaError(

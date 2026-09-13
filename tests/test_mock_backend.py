@@ -216,7 +216,7 @@ def test_mock_backend_rejects_malformed_adapter_shape_PAW_BACKEND_04(tmp_path: P
 # ---------------------------------------------------------------- manifest v2 / lineage
 
 
-def test_mock_compile_writes_v2_manifest_fields(tmp_path: Path) -> None:
+def test_mock_compile_writes_v3_manifest_fields(tmp_path: Path) -> None:
     """MockPAWBackend.compile() records the same lineage fields as
     ProgramAsWeightsBackend.compile() (manifest_version, hashes, folded example ids,
     parent linkage, timing) -- see paw_kit.backend.manifest_lineage."""
@@ -227,7 +227,10 @@ def test_mock_compile_writes_v2_manifest_fields(tmp_path: Path) -> None:
     backend.compile("Classify tickets.", examples, str(out))
 
     manifest = json.loads(out.read_text())
-    assert manifest["manifest_version"] == 2
+    # D-ADD-1: bumped 2 -> 3 alongside A-2's manifest-shape change (see
+    # backend/mock.py's own comment on MANIFEST_VERSION for why the mock's
+    # constant moves in lockstep with programasweights.py's).
+    assert manifest["manifest_version"] == 3
     assert manifest["spec_sha256"] == hashlib.sha256(b"Classify tickets.").hexdigest()
     assert manifest["full_spec_sha256"] is None
     assert len(manifest["folded_example_ids"]) == 2

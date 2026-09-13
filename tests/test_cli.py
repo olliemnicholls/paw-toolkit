@@ -634,6 +634,77 @@ def test_cli_history_appended_twice_and_printed(tmp_path: Path) -> None:
     assert "1" in out and "2" in out
 
 
+def test_cli_history_compiled_at_is_short_timestamp_G_6(tmp_path: Path) -> None:
+    """`history` must render `compiled_at` through `_short_timestamp`, the same way
+    `report` already renders `promoted_at`/`demoted_at` -- otherwise the same kind of
+    value prints two different ways depending on which command shows it.
+
+    `compiled_at` is only ever written by `ProgramAsWeightsBackend` (the real
+    backend writes it; `MockPAWBackend` has none, by design -- see `mock.py`'s own
+    comment), so the sidecar line is built directly here rather than via a real
+    compile, matching the field a real backend's history line actually carries.
+    """
+    adapter = tmp_path / "a.paw"
+    adapter.write_text(json.dumps({"backend": "programasweights"}), encoding="utf-8")
+    raw_compiled_at = "2026-09-13T02:30:45Z"
+    assert len(raw_compiled_at) > 19  # a full ISO-8601 timestamp
+    history_path = tmp_path / "a.paw.history.jsonl"
+    history_path.write_text(json.dumps({"compiled_at": raw_compiled_at}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["history", str(adapter)])
+    out = strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert raw_compiled_at not in out
+    # Rich's narrow "Compiled At" column wraps the date and time onto two table
+    # lines with a border between them, so check each half rather than one
+    # contiguous "date time" string.
+    short = raw_compiled_at[:19].replace("T", " ")
+    date_part, time_part = short.split(" ")
+    assert date_part in out
+    assert time_part in out
+
+
+def test_cli_history_reads_the_rotated_generation_D_ADD_2(tmp_path: Path) -> None:
+    """`history` must show the rotated-out `.1` generation too, oldest first.
+
+    `manifest_lineage.py`'s rotation (`_HISTORY_ROTATIONS = 1`) moves a full sidecar
+    to `<adapter>.history.jsonl.1` so a long-lived adapter's lineage stays bounded --
+    but before this fix, `history` read only the live file, so the oldest lineage was
+    retained on disk but invisible to the one command that exists to show it.
+    """
+    adapter = tmp_path / "a.paw"
+    adapter.write_text(json.dumps({"backend": "programasweights"}), encoding="utf-8")
+    rotated = tmp_path / "a.paw.history.jsonl.1"
+    rotated.write_text(json.dumps({"program_id": "prog_old", "compiler": "fast"}) + "\n", encoding="utf-8")
+    live = tmp_path / "a.paw.history.jsonl"
+    live.write_text(json.dumps({"program_id": "prog_new", "compiler": "finetune"}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["history", str(adapter)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 0
+    assert "prog_old" in out
+    assert "prog_new" in out
+    # Oldest first: the rotated entry's row number must precede the live entry's.
+    assert out.index("prog_old") < out.index("prog_new")
+
+
+def test_cli_history_reads_only_the_rotated_generation_when_live_file_is_absent_D_ADD_2(
+    tmp_path: Path,
+) -> None:
+    """A `.1` generation with no live file yet (freshly rotated) is not an error."""
+    adapter = tmp_path / "a.paw"
+    adapter.write_text(json.dumps({"backend": "programasweights"}), encoding="utf-8")
+    rotated = tmp_path / "a.paw.history.jsonl.1"
+    rotated.write_text(json.dumps({"program_id": "prog_old"}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["history", str(adapter)])
+    out = strip_ansi(result.output)
+
+    assert result.exit_code == 0
+    assert "prog_old" in out
+
+
 def test_cli_history_missing_log_errors(tmp_path: Path) -> None:
     result = runner.invoke(app, ["history", str(tmp_path / "nope.paw")])
     assert result.exit_code == 1
@@ -684,6 +755,9 @@ def test_cli_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     res_dry = runner.invoke(app, ["clean", "--cache-dir", str(cache_dir), "--dry-run"])
     assert res_dry.exit_code == 0
     assert "Dry run" in res_dry.output
+    # G-3: "1 file", not "1 files".
+    assert "1 file in" in res_dry.output
+    assert "1 files in" not in res_dry.output
     assert f1.exists()
 
     # Real clean, declining the confirmation prompt: file survives
@@ -1305,6 +1379,56 @@ def test_check_real_backend_refuses_explicit_auto_recompile(tmp_path, monkeypatc
     assert "demo stub" in strip_ansi(result.output)
 
 
+def test_check_recompile_announcement_is_per_iteration_not_whole_run_B_CLI_1(tmp_path, monkeypatch):
+    """"Recompiling..." must announce only the iterations that actually recompiled.
+
+    Before this fix the announcement was gated on `recompiles_performed > 0`, a
+    whole-run aggregate: once any iteration recompiled, every later non-final
+    iteration was announced as recompiling too, even one that skipped its own
+    recompile because the teacher's label was unchanged (idempotent) from the one
+    already compiled. Reproduced here: the CLI's own demo teacher answers
+    "2026-01-01" for "today", which matches this suite's `expected`, so iteration 1
+    genuinely recompiles -- and every later iteration re-offers the identical label,
+    so none of them do (H-9). The backend keeps failing regardless (infer always
+    returns "WRONG"), so the loop runs to `max_iterations` without ever succeeding.
+    """
+    from paw_kit.backend.mock import MockPAWBackend
+
+    def _always_wrong(self, *a, **kw):
+        return "WRONG"
+
+    monkeypatch.setattr(MockPAWBackend, "infer", _always_wrong)
+
+    suite = tmp_path / "suite.yaml"
+    suite.write_text(
+        "task_name: bcli1\n"
+        'spec: "Normalize a date."\n'
+        'adapter_path: "fresh.paw"\n'
+        "standard_cases:\n"
+        '  - input: "today"\n'
+        '    expected: "2026-01-01"\n'
+        "assertions:\n"
+        "  - rule: max_length\n"
+        "    value: 10\n"
+        "active_learning:\n"
+        "  auto_recompile: true\n"
+        "  max_iterations: 3\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(paw_test_app, ["check", "suite.yaml", "--backend", "mock"])
+    out = strip_ansi(result.output)
+
+    iter1 = out.index("Iteration 1:")
+    iter2 = out.index("Iteration 2:")
+    iter3 = out.index("Iteration 3:")
+    # Announced exactly once, between iterations 1 and 2 -- not before iteration 3,
+    # and not a second time between 2 and 3.
+    assert out.count("Recompiling adapter") == 1
+    action_at = out.index("Recompiling adapter")
+    assert iter1 < action_at < iter2 < iter3
+
+
 def test_check_mock_backend_recompiles_freely_when_no_adapter_exists_yet(tmp_path, monkeypatch):
     """The first-compile case (no existing file at adapter_path) stays unaffected.
 
@@ -1553,7 +1677,7 @@ def test_no_unescaped_console_interpolations():
         "report.pass_rate", "report.passed_cases", "report.total_cases",
         "rep.pass_rate", "rep.passed_cases", "rep.total_cases",
         "al_report.iterations_run",
-        "len(files_to_remove)", "len(rows)", "len(dirs_skipped)", "len(failed)",
+        "len(files_to_remove)", "len(rows)", "len(dirs_skipped)", "len(failed)", "file_word",
         "'Dry run: would remove' if dry_run else 'Purging'",
     }
 

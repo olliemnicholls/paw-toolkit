@@ -1901,6 +1901,16 @@ def test_h9_idempotent_teacher_does_not_buy_a_second_recompile(
     # however many iterations re-confirmed the same label.
     assert report.repaired_edge_cases == 1
     assert report.stuck_reason == "no_new_examples"
+    # B-CLI-1: this run is exactly the mixed shape the finding describes -- iteration 1
+    # genuinely recompiles, every later iteration skips (idempotent teacher). Before
+    # this fix there was no per-iteration record at all; the CLI announced every
+    # non-final iteration as "Recompiling..." whenever the *whole run's* aggregate
+    # (`recompiles_performed > 0`) was positive, which is true starting at iteration 1
+    # and stays true -- so every later, non-recompiling iteration would have
+    # misannounced too under the old aggregate gate.
+    assert report.recompiled_after_iteration[0] is True
+    assert all(x is False for x in report.recompiled_after_iteration[1:])
+    assert len(report.recompiled_after_iteration) == len(report.iteration_reports)
 
 
 def test_h9_stuck_reason_is_set_when_max_iterations_is_one(

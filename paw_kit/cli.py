@@ -727,16 +727,19 @@ def check(
 
     for i, rep in enumerate(al_report.iteration_reports, 1):
         console.print(f"\n[bold]Iteration {i}:[/bold] {rep.passed_cases}/{rep.total_cases} passed ({rep.pass_rate:.1f}%)")
-        # Gated on a recompile having actually happened. This line used to print
-        # whenever an iteration failed and another followed, regardless of whether the
-        # loop recompiled -- so a run that skipped every recompile (no new examples,
-        # H-9; or no falsifiable failures, H-8(b)) announced work it did not do. That
-        # is the campaign report's Pattern 4, and it became newly reachable once H-8(b)
-        # made "queried nothing this iteration" a normal outcome.
+        # Gated on a recompile having actually happened *after this iteration*
+        # (B-CLI-1), not on the whole run's aggregate. This line used to print
+        # whenever an iteration failed and another followed, regardless of whether
+        # THIS iteration's recompile was skipped (no new examples, H-9; or no
+        # falsifiable failures, H-8(b)) -- so a mixed run where iteration 1 skipped
+        # its recompile but iteration 2 genuinely recompiled misannounced iteration 1
+        # once the run-wide aggregate turned positive. That is the campaign report's
+        # Pattern 4, and it became newly reachable once H-8(b) made "queried nothing
+        # this iteration" a normal outcome.
         if (
             not rep.is_success
             and i < len(al_report.iteration_reports)
-            and al_report.recompiles_performed > 0
+            and al_report.recompiled_after_iteration[i - 1]
         ):
             console.print("  [cyan][ACTION][/cyan] Recompiling adapter with augmented edge-case pairs...")
 
@@ -1598,37 +1601,56 @@ def history(
     to say, "the manifest minus its spec text". That described a one-key deny-list the
     mock backend's traced `examples` walked straight past; it is an allow-list now (see
     `paw_kit.backend.manifest_lineage._HISTORY_ALLOWED_FIELDS`). The sidecar is also
-    capped and rotated, so a long-lived adapter's oldest lines move to
-    `<adapter>.history.jsonl.1`, which this command does not read.
+    capped and rotated (`manifest_lineage._HISTORY_ROTATIONS`, currently 1): a
+    long-lived adapter's oldest lines move to `<adapter>.history.jsonl.1`, read here
+    too (D-ADD-2) and listed before the live file's lines, so lineage does not go
+    dark the moment an adapter is recompiled enough times to fill one generation.
     """
     log_path = _history_path(adapter_path)
-    if not log_path.is_file():
+    # D-ADD-2: the rotated-out generation is the *oldest* lineage, not extra detail --
+    # `manifest_lineage.py`'s own rotation exists precisely so a long-lived adapter's
+    # earlier compiles are not lost outright, and this was the one command that could
+    # not see them. Missing entirely (a freshly-rotated adapter, or one that has never
+    # filled its first generation) is not an error; only a *present-but-unreadable*
+    # rotated file is treated the same as an oversized/unreadable live file below.
+    rotated_path = Path(str(log_path) + ".1")
+    if not log_path.is_file() and not rotated_path.is_file():
         console.print(f"[bold red]Error:[/bold red] no history log at '{_e(log_path)}'.")
         raise typer.Exit(code=1)
-    if log_path.stat().st_size > _MAX_HISTORY_FILE_BYTES:
-        console.print(
-            f"[bold red]Error:[/bold red] history log '{_e(log_path)}' exceeds "
-            f"{_e(_MAX_HISTORY_FILE_BYTES)} bytes."
-        )
-        raise typer.Exit(code=1)
 
-    # C-8: one non-UTF-8 byte anywhere in the append-only sidecar used to raise an
-    # uncaught `UnicodeDecodeError` traceback here -- defeating the 20 lines above
-    # that defend this same read against size and JSON corruption. `errors="replace"`
-    # degrades that one line's un-decodable bytes to U+FFFD (which then fails
-    # `json.loads` and is skipped by the existing per-line guard below, exactly like
-    # any other malformed line) instead of taking the whole command down.
+    def _read_entries(path: Path) -> List[dict]:
+        if path.stat().st_size > _MAX_HISTORY_FILE_BYTES:
+            console.print(
+                f"[bold red]Error:[/bold red] history log '{_e(path)}' exceeds "
+                f"{_e(_MAX_HISTORY_FILE_BYTES)} bytes."
+            )
+            raise typer.Exit(code=1)
+        # C-8: one non-UTF-8 byte anywhere in the append-only sidecar used to raise an
+        # uncaught `UnicodeDecodeError` traceback here -- defeating the checks above
+        # that defend this same read against size and JSON corruption. `errors="replace"`
+        # degrades that one line's un-decodable bytes to U+FFFD (which then fails
+        # `json.loads` and is skipped by the existing per-line guard below, exactly like
+        # any other malformed line) instead of taking the whole command down.
+        found: List[dict] = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                found.append(parsed)
+        return found
+
+    # Oldest first, overall: the rotated generation predates everything in the live
+    # file by construction (rotation only happens when the live file is full).
     entries: List[dict] = []
-    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            parsed = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(parsed, dict):
-            entries.append(parsed)
+    if rotated_path.is_file():
+        entries.extend(_read_entries(rotated_path))
+    if log_path.is_file():
+        entries.extend(_read_entries(log_path))
 
     if not entries:
         console.print(f"[dim]No lineage entries recorded in '{_e(log_path)}'.[/dim]")
@@ -1649,7 +1671,11 @@ def history(
         wall_str = f"{compile_wall_s:.3f}" if isinstance(compile_wall_s, (int, float)) else "-"
         table.add_row(
             str(i),
-            _e(entry.get("compiled_at") or "-"),
+            # G-6: `report`'s table already renders this same kind of value through
+            # `_short_timestamp` -- printing the raw ISO string here instead is the
+            # exact "two commands render the same field two different ways" shape
+            # this campaign keeps closing.
+            _e(_short_timestamp(entry.get("compiled_at"))),
             _e(entry.get("backend") or "-"),
             _e(entry.get("program_id") or "-"),
             _e(entry.get("compiler") or "-"),
@@ -1853,9 +1879,13 @@ def clean(
     files_to_remove = [e for e in all_entries if e.is_file()]
     dirs_skipped = [e for e in all_entries if e.is_dir()]
 
+    # G-3: "1 files" -- ordinary English pluralization, not a defect a user would ever
+    # not notice by eye, but exactly the kind of small honesty gap the campaign exists
+    # to close, and no finding-specific reason not to while this line is already open.
+    file_word = "file" if len(files_to_remove) == 1 else "files"
     console.print(
         f"[bold yellow]{'Dry run: would remove' if dry_run else 'Purging'}[/bold yellow] "
-        f"{len(files_to_remove)} files in '{_e(cache_dir)}':"
+        f"{len(files_to_remove)} {file_word} in '{_e(cache_dir)}':"
     )
     for file in files_to_remove:
         console.print(f"  - {_e(file.name)}")
