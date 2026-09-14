@@ -69,7 +69,7 @@ def test_llama_cpp_gpu_offload_false_is_warn_not_fail(monkeypatch: pytest.Monkey
     assert result.status == "WARN"
     assert "CPU-only" in result.detail
     assert "90x" in result.remedy
-    assert "measurements/README.md" in result.remedy
+    assert "docs/install.md" in result.remedy
 
 
 def test_llama_cpp_gpu_offload_raises_is_warn(monkeypatch: pytest.MonkeyPatch) -> None:
