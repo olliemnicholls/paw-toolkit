@@ -254,25 +254,51 @@ class MockPAWBackend(AbstractPAWBackend):
         """Check availability. Always True for pure-Python mock backend."""
         return True
 
+    def _get_or_create_adapter(self, adapter_path: str) -> Dict[str, Any]:
+        """Retrieve existing adapter from memory, or load from disk if present, or synthesize a stub."""
+        with self._lock:
+            adapter = self._adapters.get(adapter_path)
+            if adapter is not None:
+                self._adapters.move_to_end(adapter_path)
+                return adapter
+
+        # Double-checked locking: perform bounded disk I/O outside the lock so
+        # concurrent operations on other adapters are not serialized.
+        loaded = self._load_adapter_from_disk(adapter_path)
+
+        with self._lock:
+            adapter = self._adapters.get(adapter_path)
+            if adapter is not None:
+                self._adapters.move_to_end(adapter_path)
+                return adapter
+
+            if loaded is not None:
+                adapter = loaded
+            else:
+                adapter = {
+                    "spec": "",
+                    "examples": [],
+                    "rules": {},
+                    "default_response": None,
+                }
+            self._put_adapter_locked(adapter_path, adapter)
+            return adapter
+
     def register_rule(self, adapter_path: str, input_text: str, output: str) -> None:
         """Register a canned deterministic response for a specific input."""
+        adapter = self._get_or_create_adapter(adapter_path)
         with self._lock:
-            if adapter_path not in self._adapters:
-                self._put_adapter_locked(
-                    adapter_path, {"spec": "", "examples": [], "rules": {}, "default_response": None}
-                )
-            self._adapters[adapter_path]["rules"][input_text] = output
-            self._adapters.move_to_end(adapter_path)
+            adapter.setdefault("rules", {})[input_text] = output
+            if adapter_path in self._adapters:
+                self._adapters.move_to_end(adapter_path)
 
     def set_default_response(self, adapter_path: str, output: str) -> None:
         """Set a default response for an adapter when no rule or example matches."""
+        adapter = self._get_or_create_adapter(adapter_path)
         with self._lock:
-            if adapter_path not in self._adapters:
-                self._put_adapter_locked(
-                    adapter_path, {"spec": "", "examples": [], "rules": {}, "default_response": None}
-                )
-            self._adapters[adapter_path]["default_response"] = output
-            self._adapters.move_to_end(adapter_path)
+            adapter["default_response"] = output
+            if adapter_path in self._adapters:
+                self._adapters.move_to_end(adapter_path)
 
     def get_adapter(self, adapter_path: str) -> Optional[Dict[str, Any]]:
         """Retrieve in-memory adapter state."""

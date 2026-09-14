@@ -4,7 +4,7 @@ import hashlib
 import json
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import httpx
 import pytest
@@ -1343,3 +1343,262 @@ def test_cached_program_id_is_none_unless_the_precheck_named_a_real_one_A_2(
     with pytest.warns(UserWarning, match="already has a compiled program"):
         backend.compile("spec", [], str(out))
     assert json.loads(out.read_text())["cached_program_id"] is None
+
+
+# ---------------------------------------------------------------- D-1 & D-2 tests
+
+
+def test_d2_staleness_cross_process_recompile_resolves_new_program_id(key: None, tmp_path: Path) -> None:
+    """D-2 staleness: a manifest rewritten at adapter_path by any other process or instance
+    causes the next infer() to resolve and load the NEW program_id."""
+    from paw_kit.atomicio import atomic_write_text
+
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out = str(tmp_path / "t.paw")
+    backend.compile("spec v1", [], out)
+
+    assert backend.infer(out, "in1") == "out(prog-fast):in1"
+    assert len(sdk.function_calls) == 1
+    assert sdk.function_calls[0]["program_id"] == "prog-fast"
+
+    # Simulate another process/instance recompiling into the same manifest path:
+    # rewrite the manifest via atomic_write_text (which does temp file + os.replace,
+    # moving the inode as in production) with a new program_id.
+    manifest_data = json.loads(Path(out).read_text(encoding="utf-8"))
+    manifest_data["program_id"] = "prog-v2"
+    atomic_write_text(out, json.dumps(manifest_data))
+
+    assert backend.infer(out, "in2") == "out(prog-v2):in2"
+    assert len(sdk.function_calls) == 2
+    assert sdk.function_calls[1]["program_id"] == "prog-v2"
+
+
+def test_d2_cost_same_program_id_does_not_reload(key: None, tmp_path: Path) -> None:
+    """D-2 cost: a manifest rewrite that leaves program_id unchanged must NOT reload the model.
+
+    This catches an over-eager fix that reloads on any stat change without checking program_id.
+    """
+    from paw_kit.atomicio import atomic_write_text
+
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out = str(tmp_path / "t.paw")
+    backend.compile("spec v1", [], out)
+
+    assert backend.infer(out, "in1") == "out(prog-fast):in1"
+    assert len(sdk.function_calls) == 1
+
+    # Rewrite the manifest with atomic_write_text (moving inode/mtime) but SAME program_id
+    manifest_data = json.loads(Path(out).read_text(encoding="utf-8"))
+    manifest_data["compile_wall_s"] = 99.9  # metadata change
+    atomic_write_text(out, json.dumps(manifest_data))
+
+    assert backend.infer(out, "in2") == "out(prog-fast):in2"
+    # Cost check: function() was called exactly ONCE across both infers!
+    assert len(sdk.function_calls) == 1
+
+
+def test_d2_steady_state_no_reload(key: None, tmp_path: Path) -> None:
+    """D-2 steady state: N infers against an untouched manifest invoke function() exactly once."""
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out)
+
+    for i in range(10):
+        assert backend.infer(out, f"x{i}") == f"out(prog-fast):x{i}"
+    assert len(sdk.function_calls) == 1
+
+
+def test_d2_eviction_safety_in_flight_caller_no_teardown(key: None, tmp_path: Path) -> None:
+    """D-2 eviction safety (regression test for the no-teardown safety invariant F3.3):
+
+    Eviction drops the dict reference and NOTHING ELSE. Never call close(), _cleanup_resources(),
+    reset(), or any teardown method on an evicted callable.
+    An in-flight caller's reference keeps the underlying llama.cpp model alive; closing it
+    at eviction would cause a use-after-free.
+    """
+    import concurrent.futures
+    from paw_kit.atomicio import atomic_write_text
+    from paw_kit.backend.programasweights import _MAX_CACHED_FUNCTIONS
+
+    teardown_invoked: List[Tuple[str, str]] = []
+
+    class ClosableFunction:
+        def __init__(self, program_id: str):
+            self.program_id = program_id
+            self.closed = False
+
+        def __call__(self, text: str, **kwargs: Any) -> str:
+            if self.closed:
+                raise RuntimeError(f"USE-AFTER-FREE: callable for {self.program_id} was closed!")
+            return f"out({self.program_id}):{text}"
+
+        def close(self) -> None:
+            self.closed = True
+            teardown_invoked.append((self.program_id, "close"))
+
+        def _cleanup_resources(self) -> None:
+            self.closed = True
+            teardown_invoked.append((self.program_id, "_cleanup_resources"))
+
+    class TeardownTrackingSDK(FakeSDK):
+        def function(self, program_id: str, **kw: Any):
+            super().function(program_id, **kw)
+            return ClosableFunction(program_id)
+
+    sdk = TeardownTrackingSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    main_path = str(tmp_path / "main.paw")
+    backend.compile("spec main", [], main_path)
+
+    # Simulate an in-flight caller taking a reference to the callable under lock,
+    # then releasing the lock (as infer() does before calling fn(...)).
+    held_caller_fn = backend._get_function(main_path)
+    assert not held_caller_fn.closed
+
+    # Arm (a): Evict via invalidation (manifest rewritten with different program_id)
+    # from another thread.
+    manifest_data = json.loads(Path(main_path).read_text(encoding="utf-8"))
+    manifest_data["program_id"] = "prog-new"
+    atomic_write_text(main_path, json.dumps(manifest_data))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        fut = executor.submit(backend.infer, main_path, "from_thread_a")
+        res_other = fut.result(timeout=5)
+        assert res_other == "out(prog-new):from_thread_a"
+
+    # Now complete the held caller's call: it must succeed and teardown must NOT have fired.
+    assert held_caller_fn("held_input_a") == "out(prog-fast):held_input_a"
+    assert held_caller_fn.closed is False
+    assert teardown_invoked == []
+
+    # Arm (b): Evict via LRU overflow (drive _MAX_CACHED_FUNCTIONS + 1 distinct adapters)
+    # from another thread.
+    # First, re-acquire a held reference to current main_path function:
+    held_caller_fn_b = backend._get_function(main_path)
+    assert not held_caller_fn_b.closed
+
+    def flood_lru() -> None:
+        for idx in range(_MAX_CACHED_FUNCTIONS + 2):
+            p = str(tmp_path / f"flood_{idx}.paw")
+            backend.compile(f"spec flood {idx}", [], p)
+            backend._get_function(p)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        fut = executor.submit(flood_lru)
+        fut.result(timeout=10)
+
+    # Verify main_path was evicted from backend._functions
+    with backend._lock:
+        assert main_path not in backend._functions
+
+    # Now complete the held caller's call: must succeed without exception, teardown never called!
+    assert held_caller_fn_b("held_input_b") == "out(prog-new):held_input_b"
+    assert held_caller_fn_b.closed is False
+    assert teardown_invoked == []
+
+
+def test_d2_fallback_chain_deleted_manifest_engages_teacher(key: None, tmp_path: Path) -> None:
+    """D-2 fallback chain: deleting the manifest file between two served calls on a real
+    @compile_on_hit-decorated, ready-state task engages the teacher and increments
+    get_fail_open_count().
+
+    This proves that the os.stat FileNotFoundError raise site falls open correctly end-to-end.
+    """
+    import os
+    from paw_kit import compile_on_hit
+
+    sdk = FakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    cache_dir = str(tmp_path / "paw_cache_d2_fallback")
+    teacher_calls = 0
+
+    @compile_on_hit(
+        spec="D2 fallback task",
+        threshold=1,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(text: str) -> str:
+        nonlocal teacher_calls
+        teacher_calls += 1
+        return f"teacher:{text}"
+
+    # Call 1: traces and compiles, transitions to ready state
+    out1 = svc("hello")
+    assert out1 == "teacher:hello"
+    assert teacher_calls == 1
+
+    # Call 2: served by adapter via infer() -> _get_function
+    out2 = svc("hello")
+    assert out2 == "out(prog-fast):hello"
+    assert teacher_calls == 1
+    assert svc.get_fail_open_count() == 0
+
+    # Delete the manifest file from disk
+    adapter_path = svc.db.get_adapter_path(svc.task_id)  # type: ignore[attr-defined]
+    os.remove(adapter_path)
+
+    # Call 3: infer() hits os.stat -> FileNotFoundError -> fails open to teacher!
+    out3 = svc("hello")
+    assert out3 == "teacher:hello"
+    assert teacher_calls == 2  # Teacher was engaged!
+    assert svc.get_fail_open_count() == 1  # fail open count climbed!
+
+
+def test_d1_honest_availability_and_doctor_routing(key: None, tmp_path: Path) -> None:
+    """D-1: is_available() docstring clarifies import-only check, and inference failure
+    re-raises / chains with an error message naming `paw-kit doctor`.
+    """
+    import inspect
+
+    backend = ProgramAsWeightsBackend(sdk=FakeSDK())
+    # 1. is_available docstring check
+    doc = inspect.getdoc(backend.is_available)
+    assert doc is not None
+    assert "paw-kit doctor" in doc
+    assert "import" in doc.lower()
+
+    # 2. Module docstring check
+    import paw_kit.backend.programasweights as mod
+    mod_doc = inspect.getdoc(mod)
+    assert mod_doc is not None
+    assert "paw-kit doctor" in mod_doc
+    assert "is_available()" in mod_doc
+
+    # 3. Exception in _paw().function(...) chains and mentions doctor
+    class BrokenFunctionSDK(FakeSDK):
+        def function(self, program_id: str, **kw: Any):
+            raise OSError("libllama.so: cannot open shared object file")
+
+    broken_backend = ProgramAsWeightsBackend(sdk=BrokenFunctionSDK())
+    out = str(tmp_path / "t.paw")
+    broken_backend.compile("spec", [], out)
+
+    with pytest.raises(RuntimeError, match="paw-kit doctor") as exc_info:
+        broken_backend.infer(out, "test")
+    assert isinstance(exc_info.value.__cause__, OSError)
+    assert "libllama.so" in str(exc_info.value.__cause__)
+    assert "llama_cpp" in str(exc_info.value)
+    assert "GPU offload" in str(exc_info.value)
+
+    # 4. Exception in fn(...) callable itself chains and mentions doctor
+    class BrokenCallableSDK(FakeSDK):
+        def function(self, program_id: str, **kw: Any):
+            def bad_fn(text: str, **call_kw: Any) -> str:
+                raise RuntimeError("llama_decode failed with code -1")
+
+            return bad_fn
+
+    broken_callable_backend = ProgramAsWeightsBackend(sdk=BrokenCallableSDK())
+    out2 = str(tmp_path / "t2.paw")
+    broken_callable_backend.compile("spec", [], out2)
+
+    with pytest.raises(RuntimeError, match="paw-kit doctor") as exc_info2:
+        broken_callable_backend.infer(out2, "test")
+    assert isinstance(exc_info2.value.__cause__, RuntimeError)
+    assert "llama_decode failed" in str(exc_info2.value.__cause__)

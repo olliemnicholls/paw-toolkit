@@ -351,3 +351,66 @@ def test_strict_misses_message_names_the_input_and_adapter(tmp_path: Path) -> No
 
     with pytest.raises(MockAdapterMiss, match="mystery input"):
         backend.infer(adapter_path, "mystery input")
+
+
+# --- D-3: mock mutators must not shadow real on-disk adapters ------------------
+
+
+def test_d3_mock_register_rule_does_not_shadow_on_disk_examples(tmp_path: Path) -> None:
+    """D-3: register_rule against a path holding a real on-disk mock adapter preserves
+    that adapter's spec and examples; a subsequent infer() of a memorised example
+    still returns the example's output, not the [mock:...] sentinel."""
+    backend = MockPAWBackend()
+    adapter_path = str(tmp_path / "m1.paw")
+    examples = [{"input": "cat", "output": "feline"}]
+    backend.compile(spec="Identify animals", examples=examples, output_path=adapter_path)
+
+    # Drop from in-memory cache (simulates a fresh instance or LRU eviction)
+    backend.reset()
+    assert backend.get_adapter(adapter_path) is None
+
+    # Register a new rule for a different input
+    backend.register_rule(adapter_path, "dog", "canine")
+
+    # The registered rule resolves
+    assert backend.infer(adapter_path, "dog") == "canine"
+    # CRITICAL: The memorized example from disk is NOT shadowed!
+    assert backend.infer(adapter_path, "cat") == "feline"
+
+
+def test_d3_mock_set_default_response_does_not_shadow_on_disk_examples(tmp_path: Path) -> None:
+    """D-3: set_default_response against a path holding a real on-disk mock adapter preserves
+    that adapter's spec and examples; a subsequent infer() of a memorised example
+    still returns the example's output, not the default response or sentinel."""
+    backend = MockPAWBackend()
+    adapter_path = str(tmp_path / "m2.paw")
+    examples = [{"input": "cat", "output": "feline"}]
+    backend.compile(spec="Identify animals", examples=examples, output_path=adapter_path)
+
+    # Drop from in-memory cache
+    backend.reset()
+    assert backend.get_adapter(adapter_path) is None
+
+    # Set default response
+    backend.set_default_response(adapter_path, "unknown_animal")
+
+    # Unmatched input gets the default response
+    assert backend.infer(adapter_path, "bird") == "unknown_animal"
+    # CRITICAL: The memorized example from disk is NOT shadowed!
+    assert backend.infer(adapter_path, "cat") == "feline"
+
+
+def test_d3_mock_mutators_synthesize_stub_when_file_absent(tmp_path: Path) -> None:
+    """D-3 negative: against a path with nothing on disk, mutators still synthesize
+    an empty stub and behave exactly as before. (Green at main by design)."""
+    backend = MockPAWBackend()
+    missing_path = str(tmp_path / "nonexistent.paw")
+
+    backend.register_rule(missing_path, "hello", "world")
+    assert backend.infer(missing_path, "hello") == "world"
+    assert backend.infer(missing_path, "other") == "[mock:other]"
+
+    backend2 = MockPAWBackend()
+    missing_path2 = str(tmp_path / "nonexistent2.paw")
+    backend2.set_default_response(missing_path2, "def_val")
+    assert backend2.infer(missing_path2, "any") == "def_val"

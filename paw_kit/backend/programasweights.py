@@ -12,7 +12,7 @@ paper's authors (https://github.com/programasweights/programasweights-python):
   `programasweights.function(...)` (local llama.cpp inference on a frozen Qwen3-0.6B
   or GPT-2 interpreter, GPU if available) and calls it.
 
-Two honest limitations, both inherited from the upstream API as of September 2026:
+Three honest limitations, all reflecting upstream SDK behavior as of September 2026:
 
 1. **The upstream compiler does not accept training examples.** It generates its own
    from the spec via teacher models. paw-kit's traced examples (from `@compile_on_hit`)
@@ -25,6 +25,12 @@ Two honest limitations, both inherited from the upstream API as of September 202
    during decoding here. It is accepted for interface compatibility and ignored (with a
    one-time warning). Schema safety for this backend comes from `paw_kit.schema.load`'s
    *post-hoc* Pydantic validation plus fail-open fallback, not from constrained decoding.
+3. **`is_available()` only proves SDK importability.** `is_available()` verifies that
+   the `programasweights` package is importable (or an injected double is present), but
+   proves nothing about whether the underlying llama.cpp runtime actually works, whether
+   GPU offload is functional, or whether required model weights are cached. A half-built
+   or CPU-only llama.cpp installation surfaces on `infer()`; run `paw-kit doctor` to
+   verify runtime health before serving production traffic.
 
 Privacy: upstream's `paw.compile`/`paw.compile_async` default to `public=True`, which
 lists the compiled program on programasweights.com with its full spec text readable by
@@ -67,7 +73,7 @@ import os
 from pathlib import Path
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import warnings
 
 import httpx
@@ -222,7 +228,9 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         self.ephemeral = ephemeral
         self.compile_retries = compile_retries
         self._sdk = sdk
-        self._functions: "OrderedDict[str, Callable[..., str]]" = OrderedDict()
+        self._functions: (
+            "OrderedDict[str, Tuple[Tuple[int, int, int], str, Callable[..., str]]]"
+        ) = OrderedDict()
         self._lock = threading.Lock()
         self._warned_grammar = False
 
@@ -241,8 +249,14 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         return self._sdk
 
     def is_available(self) -> bool:
-        """True if the SDK is importable (or injected). Does not check the API key: inference
-        on an already-cached program works without one."""
+        """True if the SDK is importable (or injected).
+
+        Proves that the `programasweights` package can be imported (or an injected double
+        is present), but does not check whether the underlying llama.cpp runtime works,
+        whether GPU offload is functional, or whether model weights are cached. Does not
+        check the API key: inference on an already-cached program works without one.
+        Use `paw-kit doctor` for deeper environment and runtime diagnostics.
+        """
         return self._sdk is not None or _sdk_installed()
 
     def has_api_key(self) -> bool:
@@ -748,23 +762,76 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         return data
 
     def _get_function(self, adapter_path: str) -> Callable[..., str]:
-        with self._lock:
-            fn = self._functions.get(adapter_path)
-            if fn is not None:
-                self._functions.move_to_end(adapter_path)
-                return fn
+        # PAW-BACKEND-D2: A single os.stat call does double duty -- its FileNotFoundError
+        # is the existence check (letting callers fall open via their existing handlers),
+        # and its (mtime_ns, size, ino) triple is the staleness component.
+        # Known limitation: this staleness check relies on st_ino changing on recompile
+        # (true for the normal case since manifests are written via atomic_write_text's
+        # os.replace), and degrades to "no worse than before" (not worse, not better) on
+        # filesystems where st_ino is unreliable (e.g. some SMB/FUSE mounts) --
+        # mtime and size still move in that case.
+        st = os.stat(adapter_path)
+        stat_identity = (st.st_mtime_ns, st.st_size, st.st_ino)
 
+        with self._lock:
+            cached = self._functions.get(adapter_path)
+            if cached is not None:
+                cached_stat, cached_program_id, cached_fn = cached
+                if cached_stat == stat_identity:
+                    self._functions.move_to_end(adapter_path)
+                    return cached_fn
+
+        # Either a cache miss or stat_identity differed. Re-read manifest to resolve program_id.
         manifest = self.read_manifest(adapter_path)
         program_id = manifest.get("program_id") or manifest["slug"]
+
+        with self._lock:
+            cached = self._functions.get(adapter_path)
+            if cached is not None:
+                cached_stat, cached_program_id, cached_fn = cached
+                if cached_stat == stat_identity:
+                    self._functions.move_to_end(adapter_path)
+                    return cached_fn
+                if cached_program_id == program_id:
+                    # program_id unchanged: refresh stat_identity without reloading model.
+                    self._functions[adapter_path] = (stat_identity, program_id, cached_fn)
+                    self._functions.move_to_end(adapter_path)
+                    return cached_fn
+                # program_id changed: evict the stale entry.
+                #
+                # SAFETY INVARIANT (A-11 / F3.3): drop the reference and NOTHING ELSE.
+                # No close(), no _cleanup_resources(), no reset(), no teardown of any
+                # kind. `infer()` releases `self._lock` before calling the cached
+                # callable, so an in-flight caller's own reference is the only thing
+                # keeping the underlying llama.cpp model alive once this entry is
+                # evicted -- closing/resetting it here would free that model out from
+                # under a running call. See bug-hunt-D-money-privacy.md's disposition
+                # of A-11 for the full analysis; this comment is intentionally
+                # unmissable because D-2 is what turns eviction from rare into
+                # routine, which is exactly what makes "let's free it too" look like
+                # a plausible next edit.
+                self._functions.pop(adapter_path, None)
+
         kwargs: Dict[str, Any] = {"n_ctx": self.n_ctx, "offline": self.offline}
         if self.n_gpu_layers is not None:
             kwargs["n_gpu_layers"] = self.n_gpu_layers
-        fn = self._paw().function(program_id, **kwargs)
+
+        paw = self._paw()
+        try:
+            fn = paw.function(program_id, **kwargs)
+        except Exception as exc:
+            raise RuntimeError(
+                f"ProgramAsWeights failed to load function for program {program_id!r}: {exc}. "
+                "Run `paw-kit doctor` to diagnose environment issues (checks llama_cpp importability, "
+                "GPU offload support, and local model cache)."
+            ) from exc
 
         with self._lock:
-            self._functions[adapter_path] = fn
+            self._functions[adapter_path] = (stat_identity, program_id, fn)
             self._functions.move_to_end(adapter_path)
             while len(self._functions) > _MAX_CACHED_FUNCTIONS:
+                # SAFETY INVARIANT (A-11 / F3.3): LRU eviction drops the reference only --
+                # no teardown or resource release on evicted callable.
                 self._functions.popitem(last=False)
         return fn
 
@@ -782,7 +849,14 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         call_kwargs: Dict[str, Any] = {}
         if self.max_tokens is not None:
             call_kwargs["max_tokens"] = self.max_tokens
-        out = fn(input_text, **call_kwargs)
+        try:
+            out = fn(input_text, **call_kwargs)
+        except Exception as exc:
+            raise RuntimeError(
+                f"ProgramAsWeights inference failed for {adapter_path!r}: {exc}. "
+                "Run `paw-kit doctor` to diagnose environment issues (checks llama_cpp importability, "
+                "GPU offload support, and local model cache)."
+            ) from exc
         return out if isinstance(out, str) else str(out)
 
     def reset(self) -> None:
