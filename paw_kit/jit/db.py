@@ -300,7 +300,21 @@ class TraceDB:
         `OperationalError("cannot start a transaction within a transaction")`, which
         `_with_write_retry` would catch and retry five times with exponential backoff
         before re-raising -- laundering a programming error into ~0.75s of latency and
-        a lock-shaped message that says nothing about the real cause.
+        a lock-shaped message that says nothing about the real cause. This guard is
+        deliberately a silent no-op (reuse the ambient transaction), not a raise: a
+        caller may legitimately already hold an externally-opened write transaction
+        (`test_write_txn_does_not_begin_inside_an_open_transaction_D_1` pins exactly
+        this), and this method must not refuse that case.
+
+        **Write-inside-read is refused separately, and by a different signal (D-4
+        detail 2/3).** `conn.in_transaction` alone cannot tell "an ambient write
+        transaction is open" apart from "a `_read_txn()` is open on this thread" --
+        both just read `True`. Writing inside a `BEGIN DEFERRED` read transaction
+        would silently execute (subject to a `SQLITE_BUSY` upgrade failure) and then
+        commit the read snapshot prematurely on this method's exit, which is worse
+        than an error. `_read_txn()` stamps `self._local.reading` for exactly this
+        check; this method raises on it *before* touching `conn.in_transaction` at
+        all, so the two guards cannot be confused with each other.
 
         **`_init_db` deliberately does not use this.** `PRAGMA journal_mode=WAL` issued
         inside an open transaction on a fresh database returns `"delete"` and leaves
@@ -311,10 +325,84 @@ class TraceDB:
         the WAL guarantee that this module's concurrency story rests on.
         """
         conn = self._conn
+        if getattr(self._local, "reading", False):
+            raise AssertionError(
+                "Cannot open a write transaction while a _read_txn() is open on this "
+                "thread -- the write would execute inside a BEGIN DEFERRED snapshot "
+                "and could commit it prematurely on exit."
+            )
         with conn:
             if not conn.in_transaction:
                 conn.execute("BEGIN IMMEDIATE;")
             yield conn
+
+    @contextmanager
+    def _read_txn(self) -> Iterator[sqlite3.Connection]:
+        """One read transaction providing snapshot consistency across reads (D-4).
+
+        Methods issuing multiple reads that must observe a single consistent point
+        in time (such as `get_agreement_stats` and `get_task_report`) must use this.
+        It issues an explicit `BEGIN DEFERRED` when no transaction is active, holding
+        a snapshot for the duration and committing on normal exit.
+
+        In WAL journal mode (guaranteed by `_init_db` and regression-tested by
+        `test_init_db_leaves_journal_mode_wal_D_1`), SQLite deferred transactions
+        establish a read snapshot at their first read that writers on other
+        connections do not block and are not blocked by. This provides snapshot
+        consistency at zero contention cost. If the database ever loses WAL mode,
+        however, deferred transactions acquire shared read locks that block writers,
+        silently becoming as contention-heavy as `_write_txn()`.
+
+        It is deliberately `BEGIN DEFERRED` rather than `BEGIN IMMEDIATE` because a
+        read workload does not need SQLite's single writer lock. Reusing `_write_txn`
+        here would serialise read methods against concurrent writes like
+        `record_shadow_pair`, re-imposing the exact writer contention that J-7
+        measured and eliminated.
+
+        Re-entrancy is guarded on `conn.in_transaction` plus a local `began` flag,
+        never a private depth counter:
+        1. Read-inside-read: `get_task_report` calls `get_shadow_config` and
+           `get_agreement_stats`. The inner call detects `conn.in_transaction` is
+           already True (`began = False`), leaves transaction management to the
+           outer call, and does not commit prematurely.
+        2. Read-inside-write: if called inside an open `_write_txn()`, `_read_txn()`
+           detects `conn.in_transaction` is True, begins nothing, and lets the outer
+           write transaction's commit/rollback govern. A private depth counter would
+           have issued a nested `BEGIN DEFERRED`, raising `OperationalError` which
+           `_with_write_retry` would launder into ~0.75s of retry backoff.
+        3. Write-inside-read: `_write_txn()` explicitly refuses any invocation while
+           `self._local.reading` is set, so that a write cannot silently execute
+           inside a deferred read transaction (which risks `SQLITE_BUSY` on lock
+           upgrade and commits the read snapshot prematurely on exit). This is a
+           *separate* signal from `conn.in_transaction` -- see `_write_txn`'s own
+           docstring for why: `conn.in_transaction` alone cannot tell a `_read_txn()`
+           apart from a caller-opened write transaction, and `_write_txn()` must
+           remain a silent no-op against the latter
+           (`test_write_txn_does_not_begin_inside_an_open_transaction_D_1`).
+
+        Exception safety uses commit-on-success / rollback-on-exception (`except` +
+        `else`), never a bare `finally: commit`, ensuring failed read transactions
+        (such as D-9's `ValueError` guard) are cleanly rolled back without leaking an
+        open transaction or committing partial work. `self._local.reading` is cleared
+        on the same two paths, and only by the call that set it (`began`), so nested
+        reads neither clear it early nor leave it stuck past the outermost exit.
+        """
+        conn = self._conn
+        began = not conn.in_transaction
+        if began:
+            conn.execute("BEGIN DEFERRED;")
+            self._local.reading = True
+        try:
+            yield conn
+        except BaseException:
+            if began:
+                conn.rollback()
+                self._local.reading = False
+            raise
+        else:
+            if began:
+                conn.commit()
+                self._local.reading = False
 
     def _note_write(self, counter: Dict[str, int], task_id: str, interval: int) -> bool:
         """Bump a per-task prune clock and report whether a prune is now due (D-5).
@@ -1371,91 +1459,92 @@ class TraceDB:
         and purely an artifact of process-wide pool sizing rather than of this
         task, that a second named counter was not worth adding for it here.
         """
-        rows = self._conn.execute(
-            """
-            SELECT verdict, COUNT(*) AS n FROM (
-                SELECT verdict FROM shadow_pairs
-                WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                  AND verdict NOT IN ('teacher_error', 'pool_exhausted')
-                ORDER BY id DESC LIMIT ?
-            ) GROUP BY verdict;
-            """,
-            (task_id, state_epoch, phase, window),
-        ).fetchall()
-        boundary_id = self._conn.execute(
-            """
-            SELECT MIN(id) AS boundary_id FROM (
-                SELECT id FROM shadow_pairs
-                WHERE task_id = ? AND state_epoch = ? AND phase = ?
-                  AND verdict NOT IN ('teacher_error', 'pool_exhausted')
-                ORDER BY id DESC LIMIT ?
-            );
-            """,
-            (task_id, state_epoch, phase, window),
-        ).fetchone()["boundary_id"]
-        if boundary_id is None:
-            teacher_errors = 0
-        else:
-            teacher_errors = self._conn.execute(
-                "SELECT COUNT(*) AS n FROM shadow_pairs "
-                "WHERE task_id = ? AND state_epoch = ? AND phase = ? "
-                "AND verdict = 'teacher_error' AND id >= ?;",
-                (task_id, state_epoch, phase, boundary_id),
-            ).fetchone()["n"]
-        seq = self._conn.execute(
-            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
-            "WHERE task_id = ? AND state_epoch = ?;",
-            (task_id, state_epoch),
-        ).fetchone()["max_seq"]
+        with self._read_txn():
+            rows = self._conn.execute(
+                """
+                SELECT verdict, COUNT(*) AS n FROM (
+                    SELECT verdict FROM shadow_pairs
+                    WHERE task_id = ? AND state_epoch = ? AND phase = ?
+                      AND verdict NOT IN ('teacher_error', 'pool_exhausted')
+                    ORDER BY id DESC LIMIT ?
+                ) GROUP BY verdict;
+                """,
+                (task_id, state_epoch, phase, window),
+            ).fetchall()
+            boundary_id = self._conn.execute(
+                """
+                SELECT MIN(id) AS boundary_id FROM (
+                    SELECT id FROM shadow_pairs
+                    WHERE task_id = ? AND state_epoch = ? AND phase = ?
+                      AND verdict NOT IN ('teacher_error', 'pool_exhausted')
+                    ORDER BY id DESC LIMIT ?
+                );
+                """,
+                (task_id, state_epoch, phase, window),
+            ).fetchone()["boundary_id"]
+            if boundary_id is None:
+                teacher_errors = 0
+            else:
+                teacher_errors = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM shadow_pairs "
+                    "WHERE task_id = ? AND state_epoch = ? AND phase = ? "
+                    "AND verdict = 'teacher_error' AND id >= ?;",
+                    (task_id, state_epoch, phase, boundary_id),
+                ).fetchone()["n"]
+            seq = self._conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM shadow_pairs "
+                "WHERE task_id = ? AND state_epoch = ?;",
+                (task_id, state_epoch),
+            ).fetchone()["max_seq"]
 
-        counts = {row["verdict"]: row["n"] for row in rows}
-        agree = counts.get("agree", 0)
-        disagree = counts.get("disagree", 0)
-        error = counts.get("error", 0)
-        samples = agree + disagree + error
-        # D-9: refuse to do arithmetic over a window the retention cap cannot fill.
-        #
-        # A window is scored only at `samples == window`, and pruning bounds `samples`
-        # by `shadow_max_pairs`. With the cap below the window nothing ever completes,
-        # so neither promotion nor demotion can *ever* fire -- silently, with
-        # `paw-kit report` showing a healthy rate over a short window. The shipped
-        # decorator rejects the combination at decoration time; any other caller of
-        # these public methods did not, which is why the guard also belongs here, in
-        # the method that actually does the arithmetic.
-        #
-        # `seq` is the right witness: it is monotone over countable comparisons at this
-        # epoch and survives pruning, so `seq >= window` means at least a window's
-        # worth has been recorded. If fewer than `window` of them are still retained,
-        # retention is the reason and no amount of further traffic will help.
-        #
-        # This raises. `_with_write_retry` catches only `OperationalError`, so it
-        # propagates -- reaching `ShadowRunner._maybe_transition`, whose own
-        # `except Exception: return` swallows it (the comparison is simply not scored,
-        # the caller was served by the teacher either way) and `get_task_report`, where
-        # it surfaces to `paw-kit report`. Neither weakens the fail-open invariant:
-        # nothing on the request path calls this.
-        if window > 0 and seq >= window and samples < window:
-            raise ValueError(
-                f"task {task_id!r} at epoch {state_epoch} has recorded {seq} "
-                f"comparisons but retains only {samples} of the {window} a window "
-                "needs: the retention cap (shadow_max_pairs) is below the window, so "
-                "no window can ever complete and neither promotion nor demotion can "
-                "ever fire. Raise shadow_max_pairs to at least twice "
-                "max(shadow_window, audit_window), or lower the window."
-            )
-        return {
-            "phase": phase,
-            "window": window,
-            "samples": samples,
-            "agree": agree,
-            "disagree": disagree,
-            # An adapter that throws is at least as unfit to serve as one that answers
-            # wrongly, so an error counts against the promotion denominator.
-            "error": error,
-            "teacher_error": teacher_errors,
-            "rate": (agree / samples) if samples else None,
-            "seq": seq,
-        }
+            counts = {row["verdict"]: row["n"] for row in rows}
+            agree = counts.get("agree", 0)
+            disagree = counts.get("disagree", 0)
+            error = counts.get("error", 0)
+            samples = agree + disagree + error
+            # D-9: refuse to do arithmetic over a window the retention cap cannot fill.
+            #
+            # A window is scored only at `samples == window`, and pruning bounds `samples`
+            # by `shadow_max_pairs`. With the cap below the window nothing ever completes,
+            # so neither promotion nor demotion can *ever* fire -- silently, with
+            # `paw-kit report` showing a healthy rate over a short window. The shipped
+            # decorator rejects the combination at decoration time; any other caller of
+            # these public methods did not, which is why the guard also belongs here, in
+            # the method that actually does the arithmetic.
+            #
+            # `seq` is the right witness: it is monotone over countable comparisons at this
+            # epoch and survives pruning, so `seq >= window` means at least a window's
+            # worth has been recorded. If fewer than `window` of them are still retained,
+            # retention is the reason and no amount of further traffic will help.
+            #
+            # This raises. `_with_write_retry` catches only `OperationalError`, so it
+            # propagates -- reaching `ShadowRunner._maybe_transition`, whose own
+            # `except Exception: return` swallows it (the comparison is simply not scored,
+            # the caller was served by the teacher either way) and `get_task_report`, where
+            # it surfaces to `paw-kit report`. Neither weakens the fail-open invariant:
+            # nothing on the request path calls this.
+            if window > 0 and seq >= window and samples < window:
+                raise ValueError(
+                    f"task {task_id!r} at epoch {state_epoch} has recorded {seq} "
+                    f"comparisons but retains only {samples} of the {window} a window "
+                    "needs: the retention cap (shadow_max_pairs) is below the window, so "
+                    "no window can ever complete and neither promotion nor demotion can "
+                    "ever fire. Raise shadow_max_pairs to at least twice "
+                    "max(shadow_window, audit_window), or lower the window."
+                )
+            return {
+                "phase": phase,
+                "window": window,
+                "samples": samples,
+                "agree": agree,
+                "disagree": disagree,
+                # An adapter that throws is at least as unfit to serve as one that answers
+                # wrongly, so an error counts against the promotion denominator.
+                "error": error,
+                "teacher_error": teacher_errors,
+                "rate": (agree / samples) if samples else None,
+                "seq": seq,
+            }
 
     def get_recent_disagreements(self, task_id: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Newest-first tail of `verdict in ('disagree', 'error')` rows for a task.
@@ -1485,74 +1574,75 @@ class TraceDB:
         `get_status` deliberately keeps its bare-`str` signature and return; this is
         the additive rich API rather than a change to it.
         """
-        cur = self._conn.execute("SELECT * FROM tasks WHERE task_id = ?;", (task_id,))
-        row = cur.fetchone()
-        if row is None:
-            base: Dict[str, Any] = {
-                "task_id": task_id, "status": "tracing", "adapter_path": None,
-                "call_count": 0, "compile_attempts": 0, "state_epoch": 0,
-                "created_at": None, "updated_at": None, "shadow_started_at": None,
-                "promoted_at": None, "promoted_agreement": None,
-                "demoted_at": None, "demoted_agreement": None, "fail_open_count": 0,
-            }
-        else:
-            record = dict(row)
-            base = {
-                "task_id": task_id,
-                "status": record.get("status") or "tracing",
-                "adapter_path": record.get("adapter_path"),
-                "call_count": record.get("call_count") or 0,
-                "compile_attempts": record.get("compile_attempts") or 0,
-                "state_epoch": record.get("state_epoch") or 0,
-                "created_at": record.get("created_at"),
-                "updated_at": record.get("updated_at"),
-                "shadow_started_at": record.get("shadow_started_at"),
-                "promoted_at": record.get("promoted_at"),
-                "promoted_agreement": record.get("promoted_agreement"),
-                "demoted_at": record.get("demoted_at"),
-                "demoted_agreement": record.get("demoted_agreement"),
-                "fail_open_count": record.get("fail_open_count") or 0,
-            }
+        with self._read_txn():
+            cur = self._conn.execute("SELECT * FROM tasks WHERE task_id = ?;", (task_id,))
+            row = cur.fetchone()
+            if row is None:
+                base: Dict[str, Any] = {
+                    "task_id": task_id, "status": "tracing", "adapter_path": None,
+                    "call_count": 0, "compile_attempts": 0, "state_epoch": 0,
+                    "created_at": None, "updated_at": None, "shadow_started_at": None,
+                    "promoted_at": None, "promoted_agreement": None,
+                    "demoted_at": None, "demoted_agreement": None, "fail_open_count": 0,
+                }
+            else:
+                record = dict(row)
+                base = {
+                    "task_id": task_id,
+                    "status": record.get("status") or "tracing",
+                    "adapter_path": record.get("adapter_path"),
+                    "call_count": record.get("call_count") or 0,
+                    "compile_attempts": record.get("compile_attempts") or 0,
+                    "state_epoch": record.get("state_epoch") or 0,
+                    "created_at": record.get("created_at"),
+                    "updated_at": record.get("updated_at"),
+                    "shadow_started_at": record.get("shadow_started_at"),
+                    "promoted_at": record.get("promoted_at"),
+                    "promoted_agreement": record.get("promoted_agreement"),
+                    "demoted_at": record.get("demoted_at"),
+                    "demoted_agreement": record.get("demoted_agreement"),
+                    "fail_open_count": record.get("fail_open_count") or 0,
+                }
 
-        config = self.get_shadow_config(task_id) or {}
-        status = base["status"]
-        if status == "shadow":
-            phase: Optional[str] = "shadow"
-            window = int(config.get("shadow_window") or 0)
-        elif status == "ready":
-            phase = "audit"
-            window = int(config.get("audit_window") or 0)
-        else:
-            phase = None
-            window = 0
+            config = self.get_shadow_config(task_id) or {}
+            status = base["status"]
+            if status == "shadow":
+                phase: Optional[str] = "shadow"
+                window = int(config.get("shadow_window") or 0)
+            elif status == "ready":
+                phase = "audit"
+                window = int(config.get("audit_window") or 0)
+            else:
+                phase = None
+                window = 0
 
-        if phase is None:
-            agreement = {
-                "phase": None, "rate": None, "window": 0, "samples": 0,
-                "agree": 0, "disagree": 0, "error": 0, "teacher_error": 0,
-                "stalled": False,
-            }
-        else:
-            stats = self.get_agreement_stats(task_id, base["state_epoch"], window, phase)
-            # Finding 2: `stalled` mirrors ShadowRunner._maybe_transition's own "past
-            # the stall point" check exactly (`seq > _SHADOW_STALL_FACTOR * window`,
-            # `shadow` phase only -- `audit` never stalls, there is no audit subsample
-            # guard) so that a task the runner has stopped evaluating for promotion at
-            # this epoch does not read, from `get_agreement()`/`paw-kit report` alone,
-            # like one still converging.
-            stalled = (
-                phase == "shadow" and window > 0
-                and stats["seq"] > _SHADOW_STALL_FACTOR * window
-            )
-            agreement = {
-                "phase": phase, "rate": stats["rate"], "window": window,
-                "samples": stats["samples"], "agree": stats["agree"],
-                "disagree": stats["disagree"], "error": stats["error"],
-                "teacher_error": stats["teacher_error"],
-                "stalled": stalled,
-            }
-        base["agreement"] = agreement
-        return base
+            if phase is None:
+                agreement = {
+                    "phase": None, "rate": None, "window": 0, "samples": 0,
+                    "agree": 0, "disagree": 0, "error": 0, "teacher_error": 0,
+                    "stalled": False,
+                }
+            else:
+                stats = self.get_agreement_stats(task_id, base["state_epoch"], window, phase)
+                # Finding 2: `stalled` mirrors ShadowRunner._maybe_transition's own "past
+                # the stall point" check exactly (`seq > _SHADOW_STALL_FACTOR * window`,
+                # `shadow` phase only -- `audit` never stalls, there is no audit subsample
+                # guard) so that a task the runner has stopped evaluating for promotion at
+                # this epoch does not read, from `get_agreement()`/`paw-kit report` alone,
+                # like one still converging.
+                stalled = (
+                    phase == "shadow" and window > 0
+                    and stats["seq"] > _SHADOW_STALL_FACTOR * window
+                )
+                agreement = {
+                    "phase": phase, "rate": stats["rate"], "window": window,
+                    "samples": stats["samples"], "agree": stats["agree"],
+                    "disagree": stats["disagree"], "error": stats["error"],
+                    "teacher_error": stats["teacher_error"],
+                    "stalled": stalled,
+                }
+            base["agreement"] = agreement
+            return base
 
     def _prune_shadow_pairs_locked(self, task_id: str, max_pairs: int) -> None:
         """Oldest-first retention on `shadow_pairs`. Caller must be inside `_write_txn`.

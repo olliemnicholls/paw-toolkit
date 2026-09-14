@@ -13,6 +13,7 @@ single-process tests passed against the broken code for the whole of its life.
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import contextlib
 import multiprocessing
 import os
 from pathlib import Path
@@ -76,6 +77,36 @@ def _w_sync_shadow_config(db_path: str, task_id: str, n: int) -> None:
         # change: sync_shadow_config short-circuits on an unchanged config.
         db.sync_shadow_config(task_id, {"shadow_window": os.getpid() * 10000 + i})
     db.close()
+
+
+def _w_promote_demote_transitions(db_path: str, task_id: str, cycles: int) -> None:
+    db = TraceDB(db_path=db_path)
+    for _ in range(cycles):
+        status, _, epoch = db.get_task_routing(task_id)
+        assert status == "shadow"
+        for j in range(5):
+            db.record_shadow_pair(task_id, epoch, "shadow", f"p-{epoch}-{j}", "t", "a", "agree")
+        won = db.try_promote(task_id, epoch, 1.0, 5)
+        assert won
+
+        status, _, epoch = db.get_task_routing(task_id)
+        assert status == "ready"
+        for j in range(5):
+            db.record_shadow_pair(task_id, epoch, "audit", f"p-{epoch}-{j}", "t", "a", "agree")
+        won = db.try_demote(task_id, epoch, 1.0, 5)
+        assert won
+    db.close()
+
+
+def _w_poll_task_reports(db_path: str, task_id: str, n_reads: int, queue: Any) -> None:
+    db = TraceDB(db_path=db_path)
+    reports = []
+    for _ in range(n_reads):
+        rep = db.get_task_report(task_id)
+        reports.append(rep)
+        time.sleep(0.002)
+    db.close()
+    queue.put(reports)
 
 
 def _run_procs(target: Callable[..., None], db_path: str, task_id: str,
@@ -1962,5 +1993,444 @@ def test_reclaim_epoch_is_right_when_the_task_never_left_epoch_zero_J_5(
             "SELECT state_epoch FROM state_transitions WHERE task_id = 't' "
             "AND reason = 'stale_compile_lease';",
         ) == [(1,)], "the audit row names an epoch the task never had"
+    finally:
+        db.close()
+
+
+# --- D-4: snapshot consistency across reads (_read_txn) -------------------------
+
+
+def test_get_agreement_stats_snapshot_consistency_across_threads_D_4(
+    tmp_path: Path,
+) -> None:
+    """Reader thread in get_agreement_stats observes a single coherent snapshot.
+
+    While paused between internal SELECTs, a concurrent writer commits a countable
+    pair and a teacher_error row on its own connection. Under _read_txn()'s
+    BEGIN DEFERRED snapshot in WAL mode, the reader observes the state before the
+    write: samples == seq == 3 and teacher_error == 0.
+    """
+    db_file = tmp_path / "thread_snapshot.db"
+    db = TraceDB(db_path=str(db_file))
+    try:
+        for i in range(3):
+            db.record_shadow_pair("t", 0, "shadow", f"i{i}", "t", "a", "agree")
+
+        writer_start = threading.Event()
+        writer_done = threading.Event()
+        res: Dict[str, Any] = {}
+
+        def reader() -> None:
+            conn = db._conn
+
+            def trace(sql: str) -> None:
+                if "SELECT COUNT(*) AS n FROM shadow_pairs" in sql and "teacher_error" in sql:
+                    writer_start.set()
+                    writer_done.wait(timeout=5.0)
+
+            conn.set_trace_callback(trace)
+            try:
+                res["stats"] = db.get_agreement_stats("t", 0, 5, "shadow")
+            finally:
+                conn.set_trace_callback(None)
+
+        t_reader = threading.Thread(target=reader)
+        t_reader.start()
+
+        assert writer_start.wait(timeout=5.0), "Reader failed to reach the trace callback"
+        # Writer commits on its own connection/thread while reader is paused
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(
+                lambda: (
+                    db.record_shadow_pair("t", 0, "shadow", "i3", "t", "a", "agree"),
+                    db.record_shadow_pair("t", 0, "shadow", "i4", "t", "a", "teacher_error"),
+                )
+            ).result()
+        writer_done.set()
+        t_reader.join(timeout=5.0)
+
+        stats = res["stats"]
+        # Coherent snapshot at T0 (before writer committed):
+        assert stats["samples"] == 3
+        assert stats["seq"] == 3
+        assert stats["teacher_error"] == 0
+        assert stats["agree"] == 3
+        assert stats["rate"] == 1.0
+    finally:
+        db.close()
+
+
+def test_get_agreement_stats_neutered_read_txn_produces_incoherent_snapshot_D_4(
+    tmp_path: Path,
+) -> None:
+    """Neutered _read_txn (autocommit) produces an incoherent mix of T0 and T1.
+
+    Proves the snapshot consistency test above is meaningful: without _read_txn(),
+    the verdict aggregate runs at T0 (samples=3) while the subsequent teacher_error
+    and seq queries run at T1 after the writer committed (teacher_error=1, seq=4).
+    The resulting dictionary mixes pre- and post-write values (seq > samples,
+    teacher_error > 0 despite 0 teacher errors in the 3 samples counted).
+    """
+    db_file = tmp_path / "thread_neutered.db"
+    db = TraceDB(db_path=str(db_file))
+    try:
+        for i in range(3):
+            db.record_shadow_pair("t", 0, "shadow", f"i{i}", "t", "a", "agree")
+
+        # Neuter _read_txn to be a no-op passthrough context manager
+        @contextlib.contextmanager
+        def _neutered_read_txn():
+            yield db._conn
+
+        db._read_txn = _neutered_read_txn  # type: ignore[assignment]
+
+        writer_start = threading.Event()
+        writer_done = threading.Event()
+        res: Dict[str, Any] = {}
+
+        def reader() -> None:
+            conn = db._conn
+
+            def trace(sql: str) -> None:
+                if "SELECT COUNT(*) AS n FROM shadow_pairs" in sql and "teacher_error" in sql:
+                    writer_start.set()
+                    writer_done.wait(timeout=5.0)
+
+            conn.set_trace_callback(trace)
+            try:
+                res["stats"] = db.get_agreement_stats("t", 0, 5, "shadow")
+            finally:
+                conn.set_trace_callback(None)
+
+        t_reader = threading.Thread(target=reader)
+        t_reader.start()
+
+        assert writer_start.wait(timeout=5.0), "Reader failed to reach the trace callback"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(
+                lambda: (
+                    db.record_shadow_pair("t", 0, "shadow", "i3", "t", "a", "agree"),
+                    db.record_shadow_pair("t", 0, "shadow", "i4", "t", "a", "teacher_error"),
+                )
+            ).result()
+        writer_done.set()
+        t_reader.join(timeout=5.0)
+
+        stats = res["stats"]
+        # Incoherent mix: samples from T0, seq and teacher_error from T1:
+        assert stats["samples"] == 3
+        assert stats["seq"] == 4, "seq should have observed the post-write value 4"
+        assert stats["teacher_error"] == 1, (
+            "teacher_error should have observed the post-write value 1"
+        )
+        assert stats["seq"] > stats["samples"], (
+            "incoherence: seq > samples with 0 pruned rows"
+        )
+    finally:
+        db.close()
+
+
+def test_task_report_snapshot_consistency_across_processes_D_4(
+    tmp_path: Path,
+) -> None:
+    """Multiprocess: get_task_report observes mutually coherent epoch and stats.
+
+    A concurrent worker process repeatedly records shadow/audit pairs and executes
+    try_promote / try_demote transitions across epochs. Every get_task_report result
+    observed across processes must describe a single instant: status == 'shadow'
+    must always report agreement phase == 'shadow' at an odd epoch, and status == 'ready'
+    must always report agreement phase == 'audit' at an even epoch with promoted_at
+    and promoted_agreement set.
+    """
+    db_path = str(tmp_path / "mp_report.db")
+    task_id = "mp_report_task"
+    db = TraceDB(db_path=db_path)
+    try:
+        db.record_trace(task_id, "seed", "seed", 1.0)
+        db.set_status(task_id, "shadow")
+        db.sync_shadow_config(task_id, {"shadow_window": 5, "audit_window": 5})
+    finally:
+        db.close()
+
+    q: multiprocessing.Queue = multiprocessing.Queue()
+    pw = multiprocessing.Process(
+        target=_w_promote_demote_transitions, args=(db_path, task_id, 15)
+    )
+    pr = multiprocessing.Process(
+        target=_w_poll_task_reports, args=(db_path, task_id, 50, q)
+    )
+    pw.start()
+    pr.start()
+    pw.join(timeout=30)
+    pr.join(timeout=30)
+    assert pw.exitcode == 0, "writer process failed"
+    assert pr.exitcode == 0, "reader process failed"
+
+    reports = q.get(timeout=5)
+    assert len(reports) == 50
+    for rep in reports:
+        status = rep["status"]
+        phase = rep["agreement"]["phase"]
+        epoch = rep["state_epoch"]
+        if status == "shadow":
+            assert phase == "shadow", (
+                f"incoherent: status {status} but agreement phase {phase}"
+            )
+            assert epoch % 2 == 1, f"shadow status at unexpected epoch {epoch}"
+        elif status == "ready":
+            assert phase == "audit", (
+                f"incoherent: status {status} but agreement phase {phase}"
+            )
+            assert epoch % 2 == 0, f"ready status at unexpected epoch {epoch}"
+            assert rep["promoted_at"] is not None
+            assert rep["promoted_agreement"] == 1.0
+        else:
+            pytest.fail(f"unexpected status {status}")
+
+
+def test_read_txn_does_not_block_a_concurrent_writer_D_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader holding _read_txn() does not acquire a write lock or block writers.
+
+    Under WAL mode, _read_txn uses BEGIN DEFERRED so writers on other threads/
+    connections can commit concurrently without waiting. In contrast, if _read_txn
+    were implemented using _write_txn (BEGIN IMMEDIATE), the writer would be blocked
+    by SQLite's exclusive writer lock.
+    """
+    db_file = tmp_path / "read_concurrent_writer.db"
+    db = TraceDB(db_path=str(db_file))
+    try:
+        db.set_status("t1", "tracing")
+
+        # Arm 1: Normal _read_txn does not block concurrent writer
+        reader_holding = threading.Event()
+        release_reader = threading.Event()
+
+        def reader() -> None:
+            with db._read_txn():
+                db._conn.execute("SELECT status FROM tasks WHERE task_id = 't1';").fetchone()
+                reader_holding.set()
+                release_reader.wait(timeout=5.0)
+
+        t_reader = threading.Thread(target=reader)
+        t_reader.start()
+        assert reader_holding.wait(timeout=5.0), "Reader failed to enter _read_txn"
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            writer_future = pool.submit(lambda: db.set_status("t1", "shadow"))
+            writer_future.result(timeout=3.0)
+
+        assert release_reader.is_set() is False, "Reader should still be holding transaction"
+
+        release_reader.set()
+        t_reader.join(timeout=5.0)
+        assert not t_reader.is_alive()
+
+        # Arm 2: Counter-proof -- monkeypatch _read_txn to reuse _write_txn
+        @contextlib.contextmanager
+        def _bad_read_txn(self: TraceDB):
+            with self._write_txn() as conn:
+                yield conn
+
+        monkeypatch.setattr(TraceDB, "_read_txn", _bad_read_txn)
+
+        bad_reader_holding = threading.Event()
+        bad_release_reader = threading.Event()
+
+        def bad_reader() -> None:
+            with db._read_txn():
+                bad_reader_holding.set()
+                bad_release_reader.wait(timeout=5.0)
+
+        t_bad_reader = threading.Thread(target=bad_reader)
+        t_bad_reader.start()
+        assert bad_reader_holding.wait(timeout=5.0), "Bad reader failed to enter"
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            bad_writer_future = pool.submit(lambda: db.set_status("t1", "ready"))
+            # Writer must be blocked by SQLite busy lock while reader holds _write_txn
+            with pytest.raises(TimeoutError):
+                bad_writer_future.result(timeout=0.3)
+
+            # Releasing the reader allows the writer to unblock and finish
+            bad_release_reader.set()
+            bad_writer_future.result(timeout=5.0)
+
+        t_bad_reader.join(timeout=5.0)
+        assert not t_bad_reader.is_alive()
+    finally:
+        db.close()
+
+
+def test_get_task_report_read_inside_read_does_not_end_outer_transaction_early_D_4(
+    tmp_path: Path,
+) -> None:
+    """Read-inside-read nesting reuses ambient transaction without early commit.
+
+    get_task_report opens an outer _read_txn() and internally calls
+    get_shadow_config and get_agreement_stats (which also uses _read_txn()).
+    The inner read transaction must detect conn.in_transaction is already True,
+    becoming a no-op that neither begins nor commits a separate transaction.
+    Exactly one BEGIN DEFERRED and exactly one COMMIT must be issued for the entire
+    call, and conn.in_transaction must be False after get_task_report returns.
+    """
+    db_file = tmp_path / "task_report_reentrancy.db"
+    db = TraceDB(db_path=str(db_file))
+    try:
+        db.set_status("t1", "shadow")
+        db.sync_shadow_config("t1", {"shadow_window": 5, "audit_window": 5})
+        epoch = db.get_task_routing("t1")[2]
+        db.record_shadow_pair("t1", epoch, "shadow", "i1", "t", "a", "agree")
+
+        traces: List[str] = []
+        conn = db._conn
+        conn.set_trace_callback(traces.append)
+        try:
+            report = db.get_task_report("t1")
+        finally:
+            conn.set_trace_callback(None)
+
+        begins = [s for s in traces if "BEGIN" in s.upper()]
+        commits = [s for s in traces if "COMMIT" in s.upper()]
+
+        assert len(begins) == 1, f"Expected exactly 1 BEGIN statement, saw: {begins}"
+        assert "DEFERRED" in begins[0].upper(), f"Expected BEGIN DEFERRED, got: {begins[0]}"
+        assert len(commits) == 1, f"Expected exactly 1 COMMIT statement, saw: {commits}"
+        assert not conn.in_transaction, "Connection in_transaction must be False after return"
+        assert report["agreement"]["phase"] == "shadow"
+        assert report["agreement"]["samples"] == 1
+    finally:
+        db.close()
+
+
+def test_get_agreement_stats_read_inside_write_does_not_raise_D_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read inside write nesting reuses ambient write transaction without error.
+
+    If _read_txn() is called inside an active _write_txn(), it detects that
+    conn.in_transaction is already True (began = False) and does not issue a
+    nested BEGIN DEFERRED.
+
+    A rejected design using a private depth counter (tracking read depth rather than
+    conn.in_transaction) would see read depth 0 inside an ambient _write_txn and
+    attempt to issue BEGIN DEFERRED, raising sqlite3.OperationalError ("cannot start
+    a transaction within a transaction"). In production that error would be caught
+    by _with_write_retry and retried with exponential backoff (~0.75s latency).
+    With conn.in_transaction guarding re-entrancy, the call completes instantly
+    without error.
+    """
+    db_file = tmp_path / "read_inside_write.db"
+    db = TraceDB(db_path=str(db_file))
+    try:
+        db.set_status("t1", "shadow")
+        epoch = db.get_task_routing("t1")[2]
+        db.record_shadow_pair("t1", epoch, "shadow", "i1", "t", "a", "agree")
+
+        # Arm 1: Normal implementation executes fast inside _write_txn without OperationalError
+        t0 = time.perf_counter()
+        with db._write_txn():
+            stats = db.get_agreement_stats("t1", epoch, 5, "shadow")
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 0.5, f"Call took {elapsed:.4f}s, exceeding backoff floor (~0.75s)"
+        assert isinstance(stats, dict)
+        assert stats["phase"] == "shadow"
+        assert stats["samples"] == 1
+        assert stats["agree"] == 1
+        assert stats["rate"] == 1.0
+        assert not db._conn.in_transaction
+
+        # Arm 2: Counter-proof showing why the rejected depth-counter design fails
+        @contextlib.contextmanager
+        def _depth_counter_read_txn(self: TraceDB):
+            depth = getattr(self._local, "read_depth", 0)
+            self._local.read_depth = depth + 1
+            if depth == 0:
+                self._conn.execute("BEGIN DEFERRED;")
+            try:
+                yield self._conn
+            finally:
+                self._local.read_depth -= 1
+                if depth == 0:
+                    self._conn.commit()
+
+        monkeypatch.setattr(TraceDB, "_read_txn", _depth_counter_read_txn)
+        with pytest.raises(
+            sqlite3.OperationalError, match="cannot start a transaction within a transaction"
+        ):
+            with db._write_txn():
+                db.get_agreement_stats("t1", epoch, 5, "shadow")
+    finally:
+        db.close()
+
+
+def test_get_agreement_stats_exception_safety_rolls_back_not_commits_D_4(
+    tmp_path: Path,
+) -> None:
+    """Read transactions roll back on exception and do not leak transactions.
+
+    When get_agreement_stats encounters D-9's ValueError guard (window > 0 and
+    seq >= window and samples < window):
+    (a) The ValueError propagates unchanged to the caller.
+    (b) conn.in_transaction is False immediately after the exception.
+    (c) A subsequent db._write_txn() on the same connection can still be entered
+        and issues a real BEGIN IMMEDIATE (proving the transaction wasn't left open).
+    (d) Any raw writes staged inside a failing _read_txn() are rolled back,
+        not committed.
+    """
+    db_file = tmp_path / "exception_safety.db"
+    db = TraceDB(db_path=str(db_file))
+    try:
+        # Construct state triggering D-9's guard: window=5, seq=5, samples=1
+        with db._conn as conn:
+            conn.execute(
+                """
+                INSERT INTO shadow_pairs
+                    (task_id, state_epoch, seq, phase, input_payload, teacher_output,
+                     adapter_output, verdict, error_type, teacher_latency_ms,
+                     adapter_latency_ms, timestamp)
+                VALUES ('t1', 0, 5, 'shadow', 'in', 't', 'a', 'agree', NULL, 1.0, 1.0, '2026-01-01T00:00:00');
+                """
+            )
+
+        # (a) Assert ValueError propagates unchanged
+        with pytest.raises(ValueError, match="the retention cap .* is below the window") as exc_info:
+            db.get_agreement_stats("t1", 0, window=5, phase="shadow")
+        assert "t1" in str(exc_info.value)
+
+        # (b) Assert conn.in_transaction is False immediately after the exception
+        assert not db._conn.in_transaction, "Connection was left in a transaction after ValueError"
+
+        # (c) Assert subsequent db._write_txn() on same connection issues BEGIN IMMEDIATE
+        traces: List[str] = []
+        conn = db._conn
+        conn.set_trace_callback(traces.append)
+        try:
+            with db._write_txn():
+                conn.execute("SELECT 1;")
+        finally:
+            conn.set_trace_callback(None)
+
+        begins = [s for s in traces if "BEGIN" in s.upper()]
+        assert len(begins) == 1, f"Expected 1 BEGIN statement in subsequent write txn, got: {begins}"
+        assert "IMMEDIATE" in begins[0].upper(), f"Expected BEGIN IMMEDIATE, got: {begins[0]}"
+        assert not conn.in_transaction
+
+        # (d) Confirm rollback-on-exception: raw write inside _read_txn is not committed
+        with pytest.raises(ValueError):
+            with db._read_txn():
+                db._conn.execute(
+                    """
+                    INSERT INTO tasks (task_id, call_count, status, state_epoch, created_at, updated_at)
+                    VALUES ('uncommitted_task', 0, 'tracing', 0, '2026-01-01', '2026-01-01');
+                    """
+                )
+                db.get_agreement_stats("t1", 0, window=5, phase="shadow")
+
+        assert not db._conn.in_transaction
+        cur = db._conn.execute("SELECT * FROM tasks WHERE task_id = 'uncommitted_task';")
+        assert cur.fetchone() is None, "Uncommitted write inside failed _read_txn was not rolled back!"
     finally:
         db.close()
