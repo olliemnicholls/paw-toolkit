@@ -53,6 +53,18 @@ _COMPILE_LEASE_SECONDS = 7200.0
 # (`_SHADOW_DEADLINE_POOL`) -- two pools, not one shared one, so a wedged
 # adapter on the served path cannot exhaust capacity a shadow comparison needs,
 # and vice versa (see this track's Dependency check).
+#
+# Residual limitation, stated plainly rather than glossed over: this pool IS
+# shared across every task's served calls in the process. One wedged or
+# sufficiently slow adapter can occupy every slot, forcing every *other*
+# task's calls to fail open to their own teacher for as long as it holds
+# them -- not a crash, not silent (it fails open correctly, per the project's
+# core invariant), but an availability/cost surprise with no cross-task
+# isolation. It is bounded by `adapter_timeout_s` per wedged call (see
+# `compile_on_hit`'s docstring below) and, if a further call arrives once
+# every slot is genuinely wedged, that call fails open immediately rather
+# than queueing and paying the deadline too. This is the served-path
+# counterpart of the limitation `shadow.py` already states for its own pool.
 _SERVED_POOL_MAX_WORKERS = 4
 _SERVED_DEADLINE_POOL = DeadlinePool(max_workers=_SERVED_POOL_MAX_WORKERS, name="paw-served-deadline")
 

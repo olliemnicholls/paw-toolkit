@@ -45,6 +45,25 @@ to know:
   backend later breaks; after that point it carries no more signal than `/health`. Do not
   wire it as a Kubernetes readiness probe expecting eviction on failure.
 
+## Concurrency and slow adapters
+
+A `paw-serve` process shares one small worker pool across every compiled function it
+serves. If one adapter wedges or runs slowly, it can occupy every slot in that pool,
+which makes calls to your *other*, healthy adapters fail open to their own teacher too
+(correctly, not silently) for as long as the wedged one holds them. This is not a crash
+and not data loss — a further call, once the pool is genuinely full, fails open
+immediately rather than queueing behind the wedged one and paying its deadline too — but
+it is a cost and availability surprise if you are not expecting it.
+
+Two levers, in order of what to try first:
+
+- Lower `adapter_timeout_s` (on `@compile_on_hit`) for adapters where a slow or wedged
+  backend call should give up quickly, so a single bad call occupies a slot for less time.
+- If several latency-sensitive tasks share one process and you want real isolation between
+  them, run them in separate `paw-serve` processes instead of one process serving all of
+  them — a process boundary is currently the only way to give one task's calls their own
+  pool.
+
 ## Docker
 
 ```bash

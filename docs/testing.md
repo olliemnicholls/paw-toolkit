@@ -138,3 +138,7 @@ needs the `judge` extra; see [install](./install.md#the-judge-extra).
 spec-authoring mistakes: an unpinned output format, a forced choice with no way to
 abstain, a schema with every field required, an over-long spec, and examples in a single
 form. It is advice, not a gate.
+
+An `Optional`/defaulted field gives the model a representable "not applicable" — it can
+emit `null` — but under grammar-constrained decoding the key itself is still always
+emitted; "optional" means nullable, not omittable.

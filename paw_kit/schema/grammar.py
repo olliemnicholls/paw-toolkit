@@ -1718,6 +1718,19 @@ def _pydantic_to_regex_impl(
             claimed[key] = field_name
 
     field_patterns: List[str] = []
+    # Deliberate: every field, `Optional`/defaulted or not, renders as a MANDATORY grammar
+    # key -- never omittable, only nullable. `is_required()` and a field's default are not
+    # part of this compiler's input at all (see `_fingerprint_model_fields`'s docstring
+    # above for the full, deliberately-closed input set); the key is always present in the
+    # object, and its value regex always accepts `null` when the field is `Optional`. This
+    # gives the decoder a deterministic next key to emit at every position rather than a
+    # choice of "emit or skip", and it means the compiled grammar is narrower than
+    # pydantic's own acceptance (it never accepts less than what pydantic requires, but it
+    # can reject a shorter, also-valid JSON form pydantic would accept) -- never wider.
+    # Making optional keys actually omittable is a real but separate piece of work (roughly
+    # O(n^2) regex growth to preserve a fixed key order across a variable set of present
+    # keys, plus a corresponding widening of `_fingerprint_model_fields`'s input set); see
+    # `grammar-omittable-optional-keys` if this ever needs revisiting.
     for field_name, field_info in fields.items():
         # S-5: the key(s) pydantic will VALIDATE, which is the field name only when the
         # field carries no alias. `_json_string_literal_regex` rather than
