@@ -7,7 +7,12 @@ fired while this metadata was being added.
 """
 
 from pathlib import Path
+import shutil
+import subprocess
 import tomllib
+
+import pytest
+
 
 _PYPROJECT_PATH = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
@@ -116,3 +121,36 @@ def test_build_backend_floor_supports_the_license_expression() -> None:
         f"hatchling floor {floor} predates PEP 639 support; either raise it to 1.27.0 "
         "or stop using the SPDX string form of [project].license"
     )
+
+
+def test_tool_uv_settings_discovery_parses_clean() -> None:
+    """The [tool.uv] table must declare required-version and parse without warnings.
+
+    An unknown key anywhere in [tool.uv] causes uv to emit a
+    'Failed to parse ... during settings discovery' warning and silently discard
+    ordinary settings in the table. Assert that [tool.uv] is present and valid,
+    and that invoking uv against this pyproject.toml emits no such warning.
+    """
+    data = _load_pyproject()
+    assert "tool" in data and "uv" in data["tool"], "[tool.uv] table is missing"
+    assert "required-version" in data["tool"]["uv"], "[tool.uv].required-version is missing"
+
+    uv_bin = shutil.which("uv")
+    if uv_bin is None:
+        pytest.skip("uv binary not found on PATH")
+
+    result = subprocess.run(
+        [uv_bin, "lock", "--check"],
+        cwd=_PYPROJECT_PATH.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"uv lock --check failed:\n{result.stderr}"
+    assert "Failed to parse" not in result.stderr, (
+        f"uv settings discovery warning in stderr:\n{result.stderr}"
+    )
+    assert "during settings discovery" not in result.stderr, (
+        f"uv settings discovery warning in stderr:\n{result.stderr}"
+    )
+

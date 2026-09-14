@@ -79,9 +79,17 @@ If PyTorch is installed in the same environment, prefer the source build: torch 
 in its own newer `nvidia-*` CUDA packages, and a prebuilt wheel that finds those at load
 time instead of the system CUDA can crash on GPU init.
 
-## A note on `uv run`
+## A note on `uv sync`
 
-`uv run` without `--no-sync` re-syncs the environment to the lockfile, which evicts
-anything installed outside it, including the upstream SDK and a hand-built CUDA
-`llama-cpp-python`. If you have installed either by hand, run tools with
-`uv run --no-sync`.
+`uv sync` performs an exact sync by default, which evicts anything installed outside
+the lockfile, including a hand-built CUDA `llama-cpp-python`. If you have installed
+custom packages or builds by hand, sync with `uv sync --inexact`.
+
+Under exact-sync semantics, `uv sync --extra real` and `uv sync --extra judge` are
+mutually evicting: running `uv sync --extra judge` uninstalls the `real` extra
+(and vice versa). To install both, pass them together in one command:
+
+```bash
+uv sync --extra real --extra judge   # or pass --inexact
+```
+
