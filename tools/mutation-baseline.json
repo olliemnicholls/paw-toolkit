@@ -1,21 +1,21 @@
 {
   "schema": 1,
-  "generated": "2026-09-12T11:18:49+0100",
-  "commit": "c53b77b07fd35fd9803e739ce1a33b21be6a01ae",
-  "note": "Surviving mutants per module, measured by tools/mutate.py. A survivor is a semantic change the suite does not notice. Counts are full-suite survivors: a mutant that survives its module's fast test selection is re-run against the whole suite, and only then counted. Regenerate a module with  and merge it in by hand -- writing --write-baseline's output wholesale drops every module it did not measure and silently un-gates them. paw_kit/schema/grammar.py and paw_kit/schema/logits_processor.py were regenerated at the end of Track E; paw_kit/jit/db.py, decorator.py, shadow.py, agreement.py and paw_kit/atomicio.py were regenerated at 2026-09-11T22:16 (bug-hunt-remediation, post Track G and Track B) -- atomicio.py went from no entry at all to 0/5 (100% kill) after Track G added coverage for its two D-3/D-8 survivors. paw_kit/test/matching.py, runner.py, compare.py and active.py are UNCHANGED here and are now stale: Track B improved all four (matching 1/30, runner 18/82, compare 17/73, active 14/56 -- all at or below what is recorded below, confirmed independently by the campaign, but not yet regenerated into this file). Since the gate only fails on an INCREASE past the recorded count, this does not open a gate hole; it is accuracy debt for whoever next regenerates paw_kit/test/*, not a correctness bug. | 2026-09-12: merged in five Track F/D modules (jit/compiler.py 5/11, backend/programasweights.py 42/95, backend/manifest_lineage.py 7/14, serve/server.py 33/88, serve/docker.py 2/11). Two mutants (programasweights.py:452 bool or>and, server.py:248 const False>True) hit the full-suite recheck's 600s timeout and are counted as survivors (SURVIVED_TIMEOUT) per tools/mutate.py's own is_survivor() semantics, NOT excluded from the count -- manually verified by direct reproduction (mutated copy, 90s wall-clock kill, zero output) that both are genuine unbounded hangs, not run-to-run flakiness or ambient contention: the first forces _wait_for_job's status string permanently empty so it never matches a terminal state and polls to its own deadline; the second flips the ASGI body-buffering loop's exit default so an unbounded receive() is awaited forever -- both are the exact defect shapes X-3 and A-5 are open to fix, so this baseline intentionally records them as tolerated pre-fix survivors for Track F/D's own Phase F diffs to be measured against, not as a tooling gap. --write-baseline's normal refusal on any timeout was bypassed deliberately after this manual verification; see conductor/tracks/bug-hunt-remediation.md's status log.",
+  "generated": "2026-09-14T00:39:23+0100",
+  "commit": "a8fddfb605838d52f071fa8788adcab5a1b9e248",
+  "note": "Surviving mutants per module, measured by tools/mutate.py. A survivor is a semantic change the suite does not notice. Counts are full-suite survivors: a mutant that survives its module's fast test selection is re-run against the whole suite, and only then counted. Regenerate with `uv run --no-sync python tools/mutate.py --write-baseline tools/mutation-baseline.json`; see tools/README-mutate.md.",
   "totals": {
-    "mutations": 995,
-    "survivors": 321
+    "mutations": 1171,
+    "survivors": 307
   },
   "modules": {
     "paw_kit/test/matching.py": {
-      "mutations": 11,
+      "mutations": 30,
       "survivors": 1,
       "survivors_detail": [
         {
-          "id": "paw_kit/test/matching.py:45:7:bool:and>or",
+          "id": "paw_kit/test/matching.py:125:7:bool:and>or",
           "fingerprint": "paw_kit/test/matching.py|bool|and>or|a_is_json and b_is_json",
-          "line": 45,
+          "line": 125,
           "col": 7,
           "kind": "bool",
           "old": "and",
@@ -27,13 +27,13 @@
       ]
     },
     "paw_kit/test/runner.py": {
-      "mutations": 69,
-      "survivors": 22,
+      "mutations": 82,
+      "survivors": 18,
       "survivors_detail": [
         {
-          "id": "paw_kit/test/runner.py:23:37:int:120>121",
+          "id": "paw_kit/test/runner.py:24:37:int:120>121",
           "fingerprint": "paw_kit/test/runner.py|int|120>121|120",
-          "line": 23,
+          "line": 24,
           "col": 37,
           "kind": "int",
           "old": "120",
@@ -43,9 +43,9 @@
           "source_line": "_EXPECTED_MISMATCH_TRUNCATE_LENGTH = 120"
         },
         {
-          "id": "paw_kit/test/runner.py:28:19:cmp:<=><",
+          "id": "paw_kit/test/runner.py:29:19:cmp:<=><",
           "fingerprint": "paw_kit/test/runner.py|cmp|<=><|len(text) <= length",
-          "line": 28,
+          "line": 29,
           "col": 19,
           "kind": "cmp",
           "old": "<=",
@@ -55,9 +55,9 @@
           "source_line": "return text if len(text) <= length else text[:length] + \"...\""
         },
         {
-          "id": "paw_kit/test/runner.py:37:34:int:1000>1001",
+          "id": "paw_kit/test/runner.py:38:34:int:1000>1001",
           "fingerprint": "paw_kit/test/runner.py|int|1000>1001|1000",
-          "line": 37,
+          "line": 38,
           "col": 34,
           "kind": "int",
           "old": "1000",
@@ -67,9 +67,9 @@
           "source_line": "_MAX_REGEX_MATCH_PATTERN_LENGTH = 1000"
         },
         {
-          "id": "paw_kit/test/runner.py:51:7:cmp:>>>=",
+          "id": "paw_kit/test/runner.py:52:7:cmp:>>>=",
           "fingerprint": "paw_kit/test/runner.py|cmp|>>>=|len(pattern) > _MAX_REGEX_MATCH_PATTERN_LENGTH",
-          "line": 51,
+          "line": 52,
           "col": 7,
           "kind": "cmp",
           "old": ">",
@@ -79,9 +79,9 @@
           "source_line": "if len(pattern) > _MAX_REGEX_MATCH_PATTERN_LENGTH:"
         },
         {
-          "id": "paw_kit/test/runner.py:52:15:const:False>True",
+          "id": "paw_kit/test/runner.py:53:15:const:False>True",
           "fingerprint": "paw_kit/test/runner.py|const|False>True|False",
-          "line": 52,
+          "line": 53,
           "col": 15,
           "kind": "const",
           "old": "False",
@@ -91,9 +91,9 @@
           "source_line": "return False, f\"regex_match pattern exceeds the maximum of {_MAX_REGEX_MATCH_PATTERN_LENGTH} charac\u2026"
         },
         {
-          "id": "paw_kit/test/runner.py:53:7:cmp:>>>=",
+          "id": "paw_kit/test/runner.py:54:7:cmp:>>>=",
           "fingerprint": "paw_kit/test/runner.py|cmp|>>>=|len(output) > _MAX_REGEX_MATCH_OUTPUT_LENGTH",
-          "line": 53,
+          "line": 54,
           "col": 7,
           "kind": "cmp",
           "old": ">",
@@ -103,9 +103,9 @@
           "source_line": "if len(output) > _MAX_REGEX_MATCH_OUTPUT_LENGTH:"
         },
         {
-          "id": "paw_kit/test/runner.py:54:15:const:False>True",
+          "id": "paw_kit/test/runner.py:55:15:const:False>True",
           "fingerprint": "paw_kit/test/runner.py|const|False>True|False",
-          "line": 54,
+          "line": 55,
           "col": 15,
           "kind": "const",
           "old": "False",
@@ -115,9 +115,9 @@
           "source_line": "return False, f\"output exceeds the maximum of {_MAX_REGEX_MATCH_OUTPUT_LENGTH} characters for regex\u2026"
         },
         {
-          "id": "paw_kit/test/runner.py:62:65:int:1>2",
+          "id": "paw_kit/test/runner.py:63:65:int:1>2",
           "fingerprint": "paw_kit/test/runner.py|int|1>2|1",
-          "line": 62,
+          "line": 63,
           "col": 65,
           "kind": "int",
           "old": "1",
@@ -127,9 +127,9 @@
           "source_line": "executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)"
         },
         {
-          "id": "paw_kit/test/runner.py:73:31:const:False>True",
+          "id": "paw_kit/test/runner.py:74:31:const:False>True",
           "fingerprint": "paw_kit/test/runner.py|const|False>True|False",
-          "line": 73,
+          "line": 74,
           "col": 31,
           "kind": "const",
           "old": "False",
@@ -139,9 +139,9 @@
           "source_line": "executor.shutdown(wait=False)"
         },
         {
-          "id": "paw_kit/test/runner.py:111:15:const:False>True",
+          "id": "paw_kit/test/runner.py:112:15:const:False>True",
           "fingerprint": "paw_kit/test/runner.py|const|False>True|False",
-          "line": 111,
+          "line": 112,
           "col": 15,
           "kind": "const",
           "old": "False",
@@ -151,9 +151,9 @@
           "source_line": "__test__ = False"
         },
         {
-          "id": "paw_kit/test/runner.py:115:23:int:0>1",
+          "id": "paw_kit/test/runner.py:121:23:int:0>1",
           "fingerprint": "paw_kit/test/runner.py|int|0>1|0",
-          "line": 115,
+          "line": 121,
           "col": 23,
           "kind": "int",
           "old": "0",
@@ -163,9 +163,9 @@
           "source_line": "total_cases: int = 0"
         },
         {
-          "id": "paw_kit/test/runner.py:116:24:int:0>1",
+          "id": "paw_kit/test/runner.py:122:24:int:0>1",
           "fingerprint": "paw_kit/test/runner.py|int|0>1|0",
-          "line": 116,
+          "line": 122,
           "col": 24,
           "kind": "int",
           "old": "0",
@@ -175,9 +175,9 @@
           "source_line": "passed_cases: int = 0"
         },
         {
-          "id": "paw_kit/test/runner.py:117:24:int:0>1",
+          "id": "paw_kit/test/runner.py:123:24:int:0>1",
           "fingerprint": "paw_kit/test/runner.py|int|0>1|0",
-          "line": 117,
+          "line": 123,
           "col": 24,
           "kind": "int",
           "old": "0",
@@ -187,21 +187,9 @@
           "source_line": "failed_cases: int = 0"
         },
         {
-          "id": "paw_kit/test/runner.py:125:26:int:0>1",
+          "id": "paw_kit/test/runner.py:160:28:int:0>1",
           "fingerprint": "paw_kit/test/runner.py|int|0>1|0",
-          "line": 125,
-          "col": 26,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "expected_total: int = 0"
-        },
-        {
-          "id": "paw_kit/test/runner.py:126:28:int:0>1",
-          "fingerprint": "paw_kit/test/runner.py|int|0>1|0",
-          "line": 126,
+          "line": 160,
           "col": 28,
           "kind": "int",
           "old": "0",
@@ -211,9 +199,9 @@
           "source_line": "expected_matched: int = 0"
         },
         {
-          "id": "paw_kit/test/runner.py:133:37:int:0>1",
+          "id": "paw_kit/test/runner.py:180:37:int:0>1",
           "fingerprint": "paw_kit/test/runner.py|int|0>1|0",
-          "line": 133,
+          "line": 180,
           "col": 37,
           "kind": "int",
           "old": "0",
@@ -223,33 +211,9 @@
           "source_line": "expected_matched_unquoted: int = 0"
         },
         {
-          "id": "paw_kit/test/runner.py:159:15:cmp:>>>=",
-          "fingerprint": "paw_kit/test/runner.py|cmp|>>>=|self.expected_total > 0",
-          "line": 159,
-          "col": 15,
-          "kind": "cmp",
-          "old": ">",
-          "new": ">=",
-          "expr_before": "self.expected_total > 0",
-          "expr_after": "self.expected_total >= 0",
-          "source_line": "if self.expected_total > 0"
-        },
-        {
-          "id": "paw_kit/test/runner.py:159:37:int:0>1",
-          "fingerprint": "paw_kit/test/runner.py|int|0>1|0",
-          "line": 159,
-          "col": 37,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "if self.expected_total > 0"
-        },
-        {
-          "id": "paw_kit/test/runner.py:196:19:const:False>True",
+          "id": "paw_kit/test/runner.py:299:19:const:False>True",
           "fingerprint": "paw_kit/test/runner.py|const|False>True|False",
-          "line": 196,
+          "line": 299,
           "col": 19,
           "kind": "const",
           "old": "False",
@@ -259,9 +223,9 @@
           "source_line": "return False, \"regex_match requires a 'pattern' field\""
         },
         {
-          "id": "paw_kit/test/runner.py:245:15:const:False>True",
+          "id": "paw_kit/test/runner.py:362:15:const:False>True",
           "fingerprint": "paw_kit/test/runner.py|const|False>True|False",
-          "line": 245,
+          "line": 362,
           "col": 15,
           "kind": "const",
           "old": "False",
@@ -271,9 +235,9 @@
           "source_line": "__test__ = False"
         },
         {
-          "id": "paw_kit/test/runner.py:286:51:int:1000>1001",
+          "id": "paw_kit/test/runner.py:412:51:int:1000>1001",
           "fingerprint": "paw_kit/test/runner.py|int|1000>1001|1000",
-          "line": 286,
+          "line": 412,
           "col": 51,
           "kind": "int",
           "old": "1000",
@@ -281,29 +245,17 @@
           "expr_before": "1000",
           "expr_after": "1001",
           "source_line": "latency = (time.perf_counter() - t0) * 1000"
-        },
-        {
-          "id": "paw_kit/test/runner.py:307:19:bool:and>or",
-          "fingerprint": "paw_kit/test/runner.py|bool|and>or|config.abstain_value is not None and out == config.abstain_value",
-          "line": 307,
-          "col": 19,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "config.abstain_value is not None and out == config.abstain_value",
-          "expr_after": "config.abstain_value is not None or out == config.abstain_value",
-          "source_line": "if config.abstain_value is not None and out == config.abstain_value:"
         }
       ]
     },
     "paw_kit/test/compare.py": {
-      "mutations": 39,
-      "survivors": 18,
+      "mutations": 73,
+      "survivors": 17,
       "survivors_detail": [
         {
-          "id": "paw_kit/test/compare.py:34:22:int:1>2",
+          "id": "paw_kit/test/compare.py:35:22:int:1>2",
           "fingerprint": "paw_kit/test/compare.py|int|1>2|1",
-          "line": 34,
+          "line": 35,
           "col": 22,
           "kind": "int",
           "old": "1",
@@ -313,9 +265,9 @@
           "source_line": "_MAX_MANIFEST_BYTES = 1 * 1024 * 1024"
         },
         {
-          "id": "paw_kit/test/compare.py:34:26:int:1024>1025",
+          "id": "paw_kit/test/compare.py:35:26:int:1024>1025",
           "fingerprint": "paw_kit/test/compare.py|int|1024>1025|1024",
-          "line": 34,
+          "line": 35,
           "col": 26,
           "kind": "int",
           "old": "1024",
@@ -325,9 +277,9 @@
           "source_line": "_MAX_MANIFEST_BYTES = 1 * 1024 * 1024"
         },
         {
-          "id": "paw_kit/test/compare.py:34:33:int:1024>1025",
+          "id": "paw_kit/test/compare.py:35:33:int:1024>1025",
           "fingerprint": "paw_kit/test/compare.py|int|1024>1025|1024",
-          "line": 34,
+          "line": 35,
           "col": 33,
           "kind": "int",
           "old": "1024",
@@ -337,9 +289,9 @@
           "source_line": "_MAX_MANIFEST_BYTES = 1 * 1024 * 1024"
         },
         {
-          "id": "paw_kit/test/compare.py:59:11:bool:or>and",
+          "id": "paw_kit/test/compare.py:60:11:bool:or>and",
           "fingerprint": "paw_kit/test/compare.py|bool|or>and|not path.is_file() or path.stat().st_size > _MAX_MANIFEST_BYTES",
-          "line": 59,
+          "line": 60,
           "col": 11,
           "kind": "bool",
           "old": "or",
@@ -349,9 +301,9 @@
           "source_line": "if not path.is_file() or path.stat().st_size > _MAX_MANIFEST_BYTES:"
         },
         {
-          "id": "paw_kit/test/compare.py:59:33:cmp:>>>=",
+          "id": "paw_kit/test/compare.py:60:33:cmp:>>>=",
           "fingerprint": "paw_kit/test/compare.py|cmp|>>>=|path.stat().st_size > _MAX_MANIFEST_BYTES",
-          "line": 59,
+          "line": 60,
           "col": 33,
           "kind": "cmp",
           "old": ">",
@@ -361,9 +313,9 @@
           "source_line": "if not path.is_file() or path.stat().st_size > _MAX_MANIFEST_BYTES:"
         },
         {
-          "id": "paw_kit/test/compare.py:180:15:const:False>True",
+          "id": "paw_kit/test/compare.py:196:15:const:False>True",
           "fingerprint": "paw_kit/test/compare.py|const|False>True|False",
-          "line": 180,
+          "line": 196,
           "col": 15,
           "kind": "const",
           "old": "False",
@@ -373,9 +325,9 @@
           "source_line": "__test__ = False"
         },
         {
-          "id": "paw_kit/test/compare.py:193:23:int:0>1",
+          "id": "paw_kit/test/compare.py:216:23:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 193,
+          "line": 216,
           "col": 23,
           "kind": "int",
           "old": "0",
@@ -385,9 +337,9 @@
           "source_line": "total_cases: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:194:27:int:0>1",
+          "id": "paw_kit/test/compare.py:217:27:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 194,
+          "line": 217,
           "col": 27,
           "kind": "int",
           "old": "0",
@@ -397,9 +349,9 @@
           "source_line": "identical_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:201:28:int:0>1",
+          "id": "paw_kit/test/compare.py:224:28:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 201,
+          "line": 224,
           "col": 28,
           "kind": "int",
           "old": "0",
@@ -409,9 +361,9 @@
           "source_line": "equivalent_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:208:37:int:0>1",
+          "id": "paw_kit/test/compare.py:231:37:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 208,
+          "line": 231,
           "col": 37,
           "kind": "int",
           "old": "0",
@@ -421,9 +373,9 @@
           "source_line": "equivalent_unquoted_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:209:24:int:0>1",
+          "id": "paw_kit/test/compare.py:232:24:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 209,
+          "line": 232,
           "col": 24,
           "kind": "int",
           "old": "0",
@@ -433,9 +385,9 @@
           "source_line": "a_pass_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:210:24:int:0>1",
+          "id": "paw_kit/test/compare.py:233:24:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 210,
+          "line": 233,
           "col": 24,
           "kind": "int",
           "old": "0",
@@ -445,9 +397,9 @@
           "source_line": "b_pass_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:211:29:int:0>1",
+          "id": "paw_kit/test/compare.py:234:29:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 211,
+          "line": 234,
           "col": 29,
           "kind": "int",
           "old": "0",
@@ -457,9 +409,9 @@
           "source_line": "only_a_pass_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:212:29:int:0>1",
+          "id": "paw_kit/test/compare.py:235:29:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 212,
+          "line": 235,
           "col": 29,
           "kind": "int",
           "old": "0",
@@ -469,9 +421,9 @@
           "source_line": "only_b_pass_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:218:25:int:0>1",
+          "id": "paw_kit/test/compare.py:241:25:int:0>1",
           "fingerprint": "paw_kit/test/compare.py|int|0>1|0",
-          "line": 218,
+          "line": 241,
           "col": 25,
           "kind": "int",
           "old": "0",
@@ -481,9 +433,9 @@
           "source_line": "errored_count: int = 0"
         },
         {
-          "id": "paw_kit/test/compare.py:272:46:int:1000>1001",
+          "id": "paw_kit/test/compare.py:364:46:int:1000>1001",
           "fingerprint": "paw_kit/test/compare.py|int|1000>1001|1000",
-          "line": 272,
+          "line": 364,
           "col": 46,
           "kind": "int",
           "old": "1000",
@@ -493,9 +445,9 @@
           "source_line": "latency_ms = (time.perf_counter() - t0) * 1000"
         },
         {
-          "id": "paw_kit/test/compare.py:341:22:int:1>2",
+          "id": "paw_kit/test/compare.py:444:22:int:1>2",
           "fingerprint": "paw_kit/test/compare.py|int|1>2|1",
-          "line": 341,
+          "line": 444,
           "col": 22,
           "kind": "int",
           "old": "1",
@@ -503,29 +455,17 @@
           "expr_before": "1",
           "expr_after": "2",
           "source_line": "only_b += 1"
-        },
-        {
-          "id": "paw_kit/test/compare.py:342:11:bool:or>and",
-          "fingerprint": "paw_kit/test/compare.py|bool|or>and|err_a or err_b",
-          "line": 342,
-          "col": 11,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "err_a or err_b",
-          "expr_after": "err_a and err_b",
-          "source_line": "if err_a or err_b:"
         }
       ]
     },
     "paw_kit/test/active.py": {
-      "mutations": 40,
-      "survivors": 15,
+      "mutations": 59,
+      "survivors": 14,
       "survivors_detail": [
         {
-          "id": "paw_kit/test/active.py:136:26:int:0>1",
+          "id": "paw_kit/test/active.py:180:26:int:0>1",
           "fingerprint": "paw_kit/test/active.py|int|0>1|0",
-          "line": 136,
+          "line": 180,
           "col": 26,
           "kind": "int",
           "old": "0",
@@ -535,9 +475,9 @@
           "source_line": "iterations_run: int = 0"
         },
         {
-          "id": "paw_kit/test/active.py:138:23:const:False>True",
+          "id": "paw_kit/test/active.py:182:23:const:False>True",
           "fingerprint": "paw_kit/test/active.py|const|False>True|False",
-          "line": 138,
+          "line": 182,
           "col": 23,
           "kind": "const",
           "old": "False",
@@ -547,9 +487,9 @@
           "source_line": "recompiled: bool = False"
         },
         {
-          "id": "paw_kit/test/active.py:139:31:int:0>1",
+          "id": "paw_kit/test/active.py:183:31:int:0>1",
           "fingerprint": "paw_kit/test/active.py|int|0>1|0",
-          "line": 139,
+          "line": 183,
           "col": 31,
           "kind": "int",
           "old": "0",
@@ -559,9 +499,9 @@
           "source_line": "repaired_edge_cases: int = 0"
         },
         {
-          "id": "paw_kit/test/active.py:140:23:const:False>True",
+          "id": "paw_kit/test/active.py:184:23:const:False>True",
           "fingerprint": "paw_kit/test/active.py|const|False>True|False",
-          "line": 140,
+          "line": 184,
           "col": 23,
           "kind": "const",
           "old": "False",
@@ -571,9 +511,9 @@
           "source_line": "is_success: bool = False"
         },
         {
-          "id": "paw_kit/test/active.py:142:33:int:0>1",
+          "id": "paw_kit/test/active.py:186:33:int:0>1",
           "fingerprint": "paw_kit/test/active.py|int|0>1|0",
-          "line": 142,
+          "line": 186,
           "col": 33,
           "kind": "int",
           "old": "0",
@@ -583,9 +523,9 @@
           "source_line": "rejected_labels_count: int = 0"
         },
         {
-          "id": "paw_kit/test/active.py:144:32:int:0>1",
+          "id": "paw_kit/test/active.py:188:32:int:0>1",
           "fingerprint": "paw_kit/test/active.py|int|0>1|0",
-          "line": 144,
+          "line": 188,
           "col": 32,
           "kind": "int",
           "old": "0",
@@ -595,9 +535,9 @@
           "source_line": "recompiles_performed: int = 0"
         },
         {
-          "id": "paw_kit/test/active.py:145:30:int:0>1",
+          "id": "paw_kit/test/active.py:189:30:int:0>1",
           "fingerprint": "paw_kit/test/active.py|int|0>1|0",
-          "line": 145,
+          "line": 189,
           "col": 30,
           "kind": "int",
           "old": "0",
@@ -607,9 +547,9 @@
           "source_line": "recompiles_skipped: int = 0"
         },
         {
-          "id": "paw_kit/test/active.py:155:34:int:500>501",
+          "id": "paw_kit/test/active.py:217:34:int:500>501",
           "fingerprint": "paw_kit/test/active.py|int|500>501|500",
-          "line": 155,
+          "line": 217,
           "col": 34,
           "kind": "int",
           "old": "500",
@@ -619,21 +559,21 @@
           "source_line": "_REJECTED_LABEL_TRUNCATE_LENGTH = 500"
         },
         {
-          "id": "paw_kit/test/active.py:182:21:bool:or>and",
-          "fingerprint": "paw_kit/test/active.py|bool|or>and|backend or get_default_backend()",
-          "line": 182,
-          "col": 21,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "backend or get_default_backend()",
-          "expr_after": "backend and get_default_backend()",
-          "source_line": "active_backend = backend or get_default_backend()"
+          "id": "paw_kit/test/active.py:231:57:const:False>True",
+          "fingerprint": "paw_kit/test/active.py|const|False>True|False",
+          "line": 231,
+          "col": 57,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "json.dumps(dataset, sort_keys=True, ensure_ascii=False).encode(\"utf-8\")"
         },
         {
-          "id": "paw_kit/test/active.py:192:99:int:1>2",
+          "id": "paw_kit/test/active.py:310:99:int:1>2",
           "fingerprint": "paw_kit/test/active.py|int|1>2|1",
-          "line": 192,
+          "line": 310,
           "col": 99,
           "kind": "int",
           "old": "1",
@@ -643,9 +583,21 @@
           "source_line": "max_iter = config.active_learning.max_iterations if config.active_learning.auto_recompile else 1"
         },
         {
-          "id": "paw_kit/test/active.py:198:25:int:0>1",
+          "id": "paw_kit/test/active.py:313:21:int:0>1",
           "fingerprint": "paw_kit/test/active.py|int|0>1|0",
-          "line": 198,
+          "line": 313,
+          "col": 21,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "total_repaired = 0"
+        },
+        {
+          "id": "paw_kit/test/active.py:316:25:int:0>1",
+          "fingerprint": "paw_kit/test/active.py|int|0>1|0",
+          "line": 316,
           "col": 25,
           "kind": "int",
           "old": "0",
@@ -655,9 +607,9 @@
           "source_line": "recompiles_skipped = 0"
         },
         {
-          "id": "paw_kit/test/active.py:201:41:int:1>2",
+          "id": "paw_kit/test/active.py:333:41:int:1>2",
           "fingerprint": "paw_kit/test/active.py|int|1>2|1",
-          "line": 201,
+          "line": 333,
           "col": 41,
           "kind": "int",
           "old": "1",
@@ -667,21 +619,9 @@
           "source_line": "for iteration in range(1, max_iter + 1):"
         },
         {
-          "id": "paw_kit/test/active.py:302:36:int:1>2",
+          "id": "paw_kit/test/active.py:520:34:int:1>2",
           "fingerprint": "paw_kit/test/active.py|int|1>2|1",
-          "line": 302,
-          "col": 36,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "recompiles_performed += 1"
-        },
-        {
-          "id": "paw_kit/test/active.py:304:34:int:1>2",
-          "fingerprint": "paw_kit/test/active.py|int|1>2|1",
-          "line": 304,
+          "line": 520,
           "col": 34,
           "kind": "int",
           "old": "1",
@@ -689,29 +629,17 @@
           "expr_before": "1",
           "expr_after": "2",
           "source_line": "recompiles_skipped += 1"
-        },
-        {
-          "id": "paw_kit/test/active.py:311:38:int:1>2",
-          "fingerprint": "paw_kit/test/active.py|int|1>2|1",
-          "line": 311,
-          "col": 38,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "final_report = iteration_reports[-1]"
         }
       ]
     },
     "paw_kit/schema/grammar.py": {
-      "mutations": 196,
+      "mutations": 199,
       "survivors": 17,
       "survivors_detail": [
         {
-          "id": "paw_kit/schema/grammar.py:493:11:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:504:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS",
-          "line": 493,
+          "line": 504,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -721,9 +649,9 @@
           "source_line": "or len(unbounded_regex) > _MAX_UNROLLED_COLLECTION_CHARS"
         },
         {
-          "id": "paw_kit/schema/grammar.py:884:15:const:True>False",
+          "id": "paw_kit/schema/grammar.py:895:15:const:True>False",
           "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
-          "line": 884,
+          "line": 895,
           "col": 15,
           "kind": "const",
           "old": "True",
@@ -733,9 +661,9 @@
           "source_line": "return True, a_chars & b_chars"
         },
         {
-          "id": "paw_kit/schema/grammar.py:925:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:936:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|code < 32 or 127 <= code <= 159",
-          "line": 925,
+          "line": 936,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -745,9 +673,9 @@
           "source_line": "if code < 0x20 or 0x7F <= code <= 0x9F:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:945:10:cmp:<><=",
+          "id": "paw_kit/schema/grammar.py:956:10:cmp:<><=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|<><=|start < len(codes)",
-          "line": 945,
+          "line": 956,
           "col": 10,
           "kind": "cmp",
           "old": "<",
@@ -757,9 +685,9 @@
           "source_line": "while start < len(codes):"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1044:19:const:True>False",
+          "id": "paw_kit/schema/grammar.py:1055:19:const:True>False",
           "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
-          "line": 1044,
+          "line": 1055,
           "col": 19,
           "kind": "const",
           "old": "True",
@@ -769,9 +697,9 @@
           "source_line": "return \"\", True"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1056:23:const:True>False",
+          "id": "paw_kit/schema/grammar.py:1084:23:const:True>False",
           "fingerprint": "paw_kit/schema/grammar.py|const|True>False|True",
-          "line": 1056,
+          "line": 1084,
           "col": 23,
           "kind": "const",
           "old": "True",
@@ -781,9 +709,9 @@
           "source_line": "return \"\", True"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1297:7:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1325:7:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|seen is None",
-          "line": 1297,
+          "line": 1325,
           "col": 7,
           "kind": "cmp",
           "old": "is",
@@ -793,9 +721,9 @@
           "source_line": "if seen is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1323:17:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1351:17:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|val is None",
-          "line": 1323,
+          "line": 1351,
           "col": 17,
           "kind": "cmp",
           "old": "is",
@@ -805,9 +733,9 @@
           "source_line": "elif val is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1408:32:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1436:32:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(args) > 1",
-          "line": 1408,
+          "line": 1436,
           "col": 32,
           "kind": "cmp",
           "old": ">",
@@ -817,9 +745,9 @@
           "source_line": "value_type = args[1] if len(args) > 1 else Any"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1483:7:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1511:7:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|seen is None",
-          "line": 1483,
+          "line": 1511,
           "col": 7,
           "kind": "cmp",
           "old": "is",
@@ -829,9 +757,9 @@
           "source_line": "if seen is None:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1534:30:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1562:30:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|args[1] is Ellipsis",
-          "line": 1534,
+          "line": 1562,
           "col": 30,
           "kind": "cmp",
           "old": "is",
@@ -841,9 +769,9 @@
           "source_line": "if len(args) == 2 and args[1] is Ellipsis:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1547:13:cmp:is>is not",
+          "id": "paw_kit/schema/grammar.py:1575:13:cmp:is>is not",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|is>is not|annotation is Tuple",
-          "line": 1547,
+          "line": 1575,
           "col": 13,
           "kind": "cmp",
           "old": "is",
@@ -853,9 +781,9 @@
           "source_line": "elif annotation is Tuple:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1569:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:1597:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|origin is dict or annotation is dict",
-          "line": 1569,
+          "line": 1597,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -865,9 +793,9 @@
           "source_line": "if origin is dict or annotation is dict:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1571:32:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1599:32:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(args) > 1",
-          "line": 1571,
+          "line": 1599,
           "col": 32,
           "kind": "cmp",
           "old": ">",
@@ -877,9 +805,9 @@
           "source_line": "value_type = args[1] if len(args) > 1 else Any"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1589:7:bool:or>and",
+          "id": "paw_kit/schema/grammar.py:1617:7:bool:or>and",
           "fingerprint": "paw_kit/schema/grammar.py|bool|or>and|annotation is set or annotation is frozenset",
-          "line": 1589,
+          "line": 1617,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -889,9 +817,9 @@
           "source_line": "if annotation is set or annotation is frozenset:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1855:18:cmp:>>>=",
+          "id": "paw_kit/schema/grammar.py:1883:18:cmp:>>>=",
           "fingerprint": "paw_kit/schema/grammar.py|cmp|>>>=|len(_regex_cache) > _REGEX_CACHE_MAXSIZE",
-          "line": 1855,
+          "line": 1883,
           "col": 18,
           "kind": "cmp",
           "old": ">",
@@ -901,9 +829,9 @@
           "source_line": "while len(_regex_cache) > _REGEX_CACHE_MAXSIZE:"
         },
         {
-          "id": "paw_kit/schema/grammar.py:1856:42:const:False>True",
+          "id": "paw_kit/schema/grammar.py:1884:42:const:False>True",
           "fingerprint": "paw_kit/schema/grammar.py|const|False>True|False",
-          "line": 1856,
+          "line": 1884,
           "col": 42,
           "kind": "const",
           "old": "False",
@@ -943,9 +871,9 @@
           "source_line": "if len(pattern) > _MAX_PATTERN_LENGTH:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:116:11:cmp:>>>=",
+          "id": "paw_kit/schema/logits_processor.py:133:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/logits_processor.py|cmp|>>>=|len(fsm.states) > _MAX_FSM_STATES",
-          "line": 116,
+          "line": 133,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -955,9 +883,9 @@
           "source_line": "if len(fsm.states) > _MAX_FSM_STATES:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:221:15:bool:or>and",
+          "id": "paw_kit/schema/logits_processor.py:238:15:bool:or>and",
           "fingerprint": "paw_kit/schema/logits_processor.py|bool|or>and|curr is None or not self.fsm.islive(curr)",
-          "line": 221,
+          "line": 238,
           "col": 15,
           "kind": "bool",
           "old": "or",
@@ -967,9 +895,9 @@
           "source_line": "if curr is None or not self.fsm.islive(curr):"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:249:11:cmp:>>>=",
+          "id": "paw_kit/schema/logits_processor.py:266:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/logits_processor.py|cmp|>>>=|len(self._transition_cache) > _MAX_TRANSITION_CACHE_ENTRIES",
-          "line": 249,
+          "line": 266,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -979,9 +907,9 @@
           "source_line": "if len(self._transition_cache) > _MAX_TRANSITION_CACHE_ENTRIES:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:250:48:const:False>True",
+          "id": "paw_kit/schema/logits_processor.py:267:48:const:False>True",
           "fingerprint": "paw_kit/schema/logits_processor.py|const|False>True|False",
-          "line": 250,
+          "line": 267,
           "col": 48,
           "kind": "const",
           "old": "False",
@@ -991,9 +919,9 @@
           "source_line": "self._transition_cache.popitem(last=False)"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:316:11:cmp:>>>=",
+          "id": "paw_kit/schema/logits_processor.py:333:11:cmp:>>>=",
           "fingerprint": "paw_kit/schema/logits_processor.py|cmp|>>>=|len(self._allowed_tokens_cache) > _MAX_ALLOWED_TOKENS_CACHE_ENTRIES",
-          "line": 316,
+          "line": 333,
           "col": 11,
           "kind": "cmp",
           "old": ">",
@@ -1003,9 +931,9 @@
           "source_line": "if len(self._allowed_tokens_cache) > _MAX_ALLOWED_TOKENS_CACHE_ENTRIES:"
         },
         {
-          "id": "paw_kit/schema/logits_processor.py:317:52:const:False>True",
+          "id": "paw_kit/schema/logits_processor.py:334:52:const:False>True",
           "fingerprint": "paw_kit/schema/logits_processor.py|const|False>True|False",
-          "line": 317,
+          "line": 334,
           "col": 52,
           "kind": "const",
           "old": "False",
@@ -1016,1599 +944,9 @@
         }
       ]
     },
-    "paw_kit/jit/db.py": {
-      "mutations": 140,
-      "survivors": 50,
-      "survivors_detail": [
-        {
-          "id": "paw_kit/jit/db.py:17:26:int:24>25",
-          "fingerprint": "paw_kit/jit/db.py|int|24>25|24",
-          "line": 17,
-          "col": 26,
-          "kind": "int",
-          "old": "24",
-          "new": "25",
-          "expr_before": "24",
-          "expr_after": "25",
-          "source_line": "_MIN_SQLITE_VERSION = (3, 24, 0)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:17:30:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 17,
-          "col": 30,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "_MIN_SQLITE_VERSION = (3, 24, 0)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:42:21:int:5>6",
-          "fingerprint": "paw_kit/jit/db.py|int|5>6|5",
-          "line": 42,
-          "col": 21,
-          "kind": "int",
-          "old": "5",
-          "new": "6",
-          "expr_before": "5",
-          "expr_after": "6",
-          "source_line": "_DB_RETRY_ATTEMPTS = 5"
-        },
-        {
-          "id": "paw_kit/jit/db.py:61:30:int:200>201",
-          "fingerprint": "paw_kit/jit/db.py|int|200>201|200",
-          "line": 61,
-          "col": 30,
-          "kind": "int",
-          "old": "200",
-          "new": "201",
-          "expr_before": "200",
-          "expr_after": "201",
-          "source_line": "_STATE_TRANSITIONS_MAX_ROWS = 200"
-        },
-        {
-          "id": "paw_kit/jit/db.py:70:15:int:50>51",
-          "fingerprint": "paw_kit/jit/db.py|int|50>51|50",
-          "line": 70,
-          "col": 15,
-          "kind": "int",
-          "old": "50",
-          "new": "51",
-          "expr_before": "50",
-          "expr_after": "51",
-          "source_line": "_PRUNE_EVERY = 50"
-        },
-        {
-          "id": "paw_kit/jit/db.py:84:16:cmp:<=><",
-          "fingerprint": "paw_kit/jit/db.py|cmp|<=><|cap <= _PRUNE_EVERY",
-          "line": 84,
-          "col": 16,
-          "kind": "cmp",
-          "old": "<=",
-          "new": "<",
-          "expr_before": "cap <= _PRUNE_EVERY",
-          "expr_after": "cap < _PRUNE_EVERY",
-          "source_line": "return 1 if cap <= _PRUNE_EVERY else _PRUNE_EVERY"
-        },
-        {
-          "id": "paw_kit/jit/db.py:84:11:int:1>2",
-          "fingerprint": "paw_kit/jit/db.py|int|1>2|1",
-          "line": 84,
-          "col": 11,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "return 1 if cap <= _PRUNE_EVERY else _PRUNE_EVERY"
-        },
-        {
-          "id": "paw_kit/jit/db.py:91:11:cmp:<><=",
-          "fingerprint": "paw_kit/jit/db.py|cmp|<><=|sqlite3.sqlite_version_info < _MIN_SQLITE_VERSION",
-          "line": 91,
-          "col": 11,
-          "kind": "cmp",
-          "old": "<",
-          "new": "<=",
-          "expr_before": "sqlite3.sqlite_version_info < _MIN_SQLITE_VERSION",
-          "expr_after": "sqlite3.sqlite_version_info <= _MIN_SQLITE_VERSION",
-          "source_line": "if sqlite3.sqlite_version_info < _MIN_SQLITE_VERSION:"
-        },
-        {
-          "id": "paw_kit/jit/db.py:102:42:const:True>False",
-          "fingerprint": "paw_kit/jit/db.py|const|True>False|True",
-          "line": 102,
-          "col": 42,
-          "kind": "const",
-          "old": "True",
-          "new": "False",
-          "expr_before": "True",
-          "expr_after": "False",
-          "source_line": "self.db_path.parent.mkdir(parents=True, exist_ok=True)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:154:84:int:384>385",
-          "fingerprint": "paw_kit/jit/db.py|int|384>385|384",
-          "line": 154,
-          "col": 84,
-          "kind": "int",
-          "old": "384",
-          "new": "385",
-          "expr_before": "384",
-          "expr_after": "385",
-          "source_line": "self._chmod_best_effort(self.db_path.with_name(self.db_path.name + \"-wal\"), 0o600)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:155:84:int:384>385",
-          "fingerprint": "paw_kit/jit/db.py|int|384>385|384",
-          "line": 155,
-          "col": 84,
-          "kind": "int",
-          "old": "384",
-          "new": "385",
-          "expr_before": "384",
-          "expr_after": "385",
-          "source_line": "self._chmod_best_effort(self.db_path.with_name(self.db_path.name + \"-shm\"), 0o600)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:161:30:const:False>True",
-          "fingerprint": "paw_kit/jit/db.py|const|False>True|False",
-          "line": 161,
-          "col": 30,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "check_same_thread=False,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:353:59:int:2>3",
-          "fingerprint": "paw_kit/jit/db.py|int|2>3|2",
-          "line": 353,
-          "col": 59,
-          "kind": "int",
-          "old": "2",
-          "new": "3",
-          "expr_before": "2",
-          "expr_after": "3",
-          "source_line": "time.sleep(_DB_RETRY_BASE_DELAY_SECONDS * (2**attempt))"
-        },
-        {
-          "id": "paw_kit/jit/db.py:482:19:cmp:<><=",
-          "fingerprint": "paw_kit/jit/db.py|cmp|<><=|current_version < _SCHEMA_VERSION",
-          "line": 482,
-          "col": 19,
-          "kind": "cmp",
-          "old": "<",
-          "new": "<=",
-          "expr_before": "current_version < _SCHEMA_VERSION",
-          "expr_after": "current_version <= _SCHEMA_VERSION",
-          "source_line": "if current_version < _SCHEMA_VERSION:"
-        },
-        {
-          "id": "paw_kit/jit/db.py:579:26:bool:and>or",
-          "fingerprint": "paw_kit/jit/db.py|bool|and>or|previous is not None and previous != status",
-          "line": 579,
-          "col": 26,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "previous is not None and previous != status",
-          "expr_after": "previous is not None or previous != status",
-          "source_line": "changed = previous is not None and previous != status"
-        },
-        {
-          "id": "paw_kit/jit/db.py:610:33:bool:or>and",
-          "fingerprint": "paw_kit/jit/db.py|bool|or>and|previous or 'tracing'",
-          "line": 610,
-          "col": 33,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "previous or 'tracing'",
-          "expr_after": "previous and 'tracing'",
-          "source_line": "task_id, previous or \"tracing\", status, None, None, new_epoch, now"
-        },
-        {
-          "id": "paw_kit/jit/db.py:679:23:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 679,
-          "col": 23,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "return 0 if attempts is None else attempts"
-        },
-        {
-          "id": "paw_kit/jit/db.py:721:25:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 721,
-          "col": 25,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "return None, 0"
-        },
-        {
-          "id": "paw_kit/jit/db.py:739:37:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 739,
-          "col": 37,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "return (\"tracing\", None, 0)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:774:27:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 774,
-          "col": 27,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "state_epoch: int = 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:935:37:int:1>2",
-          "fingerprint": "paw_kit/jit/db.py|int|1>2|1",
-          "line": 935,
-          "col": 37,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "expected_epoch + 1, now, reason,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:965:47:const:True>False",
-          "fingerprint": "paw_kit/jit/db.py|const|True>False|True",
-          "line": 965,
-          "col": 47,
-          "kind": "const",
-          "old": "True",
-          "new": "False",
-          "expr_before": "True",
-          "expr_after": "False",
-          "source_line": "encoded = json.dumps(config, sort_keys=True)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:986:27:const:False>True",
-          "fingerprint": "paw_kit/jit/db.py|const|False>True|False",
-          "line": 986,
-          "col": 27,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "return False"
-        },
-        {
-          "id": "paw_kit/jit/db.py:988:27:const:False>True",
-          "fingerprint": "paw_kit/jit/db.py|const|False>True|False",
-          "line": 988,
-          "col": 27,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "return False"
-        },
-        {
-          "id": "paw_kit/jit/db.py:990:20:bool:and>or",
-          "fingerprint": "paw_kit/jit/db.py|bool|and>or|row['shadow_config'] is not None and row['status'] in ('shadow', 'ready')",
-          "line": 990,
-          "col": 20,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "row['shadow_config'] is not None and row['status'] in ('shadow', 'ready')",
-          "expr_after": "row['shadow_config'] is not None or row['status'] in ('shadow', 'ready')",
-          "source_line": "row[\"shadow_config\"] is not None"
-        },
-        {
-          "id": "paw_kit/jit/db.py:993:47:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 993,
-          "col": 47,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "epoch = (row[\"state_epoch\"] or 0) + (1 if changed_mid_run else 0)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:993:79:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 993,
-          "col": 79,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "epoch = (row[\"state_epoch\"] or 0) + (1 if changed_mid_run else 0)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1060:25:int:500>501",
-          "fingerprint": "paw_kit/jit/db.py|int|500>501|500",
-          "line": 1060,
-          "col": 25,
-          "kind": "int",
-          "old": "500",
-          "new": "501",
-          "expr_before": "500",
-          "expr_after": "501",
-          "source_line": "max_pairs: int = 500,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1172:11:cmp:is>is not",
-          "fingerprint": "paw_kit/jit/db.py|cmp|is>is not|boundary_id is None",
-          "line": 1172,
-          "col": 11,
-          "kind": "cmp",
-          "old": "is",
-          "new": "is not",
-          "expr_before": "boundary_id is None",
-          "expr_after": "boundary_id is not None",
-          "source_line": "if boundary_id is None:"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1213:11:cmp:>>>=",
-          "fingerprint": "paw_kit/jit/db.py|cmp|>>>=|window > 0",
-          "line": 1213,
-          "col": 11,
-          "kind": "cmp",
-          "old": ">",
-          "new": ">=",
-          "expr_before": "window > 0",
-          "expr_after": "window >= 0",
-          "source_line": "if window > 0 and seq >= window and samples < window:"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1213:20:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1213,
-          "col": 20,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "if window > 0 and seq >= window and samples < window:"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1213:26:cmp:>=>>",
-          "fingerprint": "paw_kit/jit/db.py|cmp|>=>>|seq >= window",
-          "line": 1213,
-          "col": 26,
-          "kind": "cmp",
-          "old": ">=",
-          "new": ">",
-          "expr_before": "seq >= window",
-          "expr_after": "seq > window",
-          "source_line": "if window > 0 and seq >= window and samples < window:"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1236:66:int:5>6",
-          "fingerprint": "paw_kit/jit/db.py|int|5>6|5",
-          "line": 1236,
-          "col": 66,
-          "kind": "int",
-          "old": "5",
-          "new": "6",
-          "expr_before": "5",
-          "expr_after": "6",
-          "source_line": "def get_recent_disagreements(self, task_id: str, limit: int = 5) -> List[Dict[str, Any]]:"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1269:30:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1269,
-          "col": 30,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"call_count\": 0, \"compile_attempts\": 0, \"state_epoch\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1269:53:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1269,
-          "col": 53,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"call_count\": 0, \"compile_attempts\": 0, \"state_epoch\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1269:71:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1269,
-          "col": 71,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"call_count\": 0, \"compile_attempts\": 0, \"state_epoch\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1272:82:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1272,
-          "col": 82,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"demoted_at\": None, \"demoted_agreement\": None, \"fail_open_count\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1280:58:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1280,
-          "col": 58,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"call_count\": record.get(\"call_count\") or 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1281:36:bool:or>and",
-          "fingerprint": "paw_kit/jit/db.py|bool|or>and|record.get('compile_attempts') or 0",
-          "line": 1281,
-          "col": 36,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "record.get('compile_attempts') or 0",
-          "expr_after": "record.get('compile_attempts') and 0",
-          "source_line": "\"compile_attempts\": record.get(\"compile_attempts\") or 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1297:56:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1297,
-          "col": 56,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "window = int(config.get(\"shadow_window\") or 0)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1300:55:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1300,
-          "col": 55,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "window = int(config.get(\"audit_window\") or 0)"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1303:21:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1303,
-          "col": 21,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "window = 0"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1307:55:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1307,
-          "col": 55,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"phase\": None, \"rate\": None, \"window\": 0, \"samples\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1307:69:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1307,
-          "col": 69,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"phase\": None, \"rate\": None, \"window\": 0, \"samples\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1308:25:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1308,
-          "col": 25,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1308:40:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1308,
-          "col": 40,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1308:52:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1308,
-          "col": 52,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1308:72:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1308,
-          "col": 72,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1320:38:cmp:>>>=",
-          "fingerprint": "paw_kit/jit/db.py|cmp|>>>=|window > 0",
-          "line": 1320,
-          "col": 38,
-          "kind": "cmp",
-          "old": ">",
-          "new": ">=",
-          "expr_before": "window > 0",
-          "expr_after": "window >= 0",
-          "source_line": "phase == \"shadow\" and window > 0"
-        },
-        {
-          "id": "paw_kit/jit/db.py:1320:47:int:0>1",
-          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
-          "line": 1320,
-          "col": 47,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "phase == \"shadow\" and window > 0"
-        }
-      ]
-    },
-    "paw_kit/jit/decorator.py": {
-      "mutations": 73,
-      "survivors": 22,
-      "survivors_detail": [
-        {
-          "id": "paw_kit/jit/decorator.py:47:25:int:0>1",
-          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
-          "line": 47,
-          "col": 25,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "shadow_window: int = 0,"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:49:22:int:8>9",
-          "fingerprint": "paw_kit/jit/decorator.py|int|8>9|8",
-          "line": 49,
-          "col": 22,
-          "kind": "int",
-          "old": "8",
-          "new": "9",
-          "expr_before": "8",
-          "expr_after": "9",
-          "source_line": "queue_size: int = 8,"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:63:7:bool:and>or",
-          "fingerprint": "paw_kit/jit/decorator.py|bool|and>or|db is not None and shadow_window and (db_path is not None)",
-          "line": 63,
-          "col": 7,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "db is not None and shadow_window and (db_path is not None)",
-          "expr_after": "db is not None or shadow_window or db_path is not None",
-          "source_line": "if db is not None and shadow_window and db_path is not None:"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:140:11:cmp:is>is not",
-          "fingerprint": "paw_kit/jit/decorator.py|cmp|is>is not|owner is None",
-          "line": 140,
-          "col": 11,
-          "kind": "cmp",
-          "old": "is",
-          "new": "is not",
-          "expr_before": "owner is None",
-          "expr_after": "owner is not None",
-          "source_line": "if owner is None:"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:196:7:cmp:==>!=",
-          "fingerprint": "paw_kit/jit/decorator.py|cmp|==>!=|len(args) == 1",
-          "line": 196,
-          "col": 7,
-          "kind": "cmp",
-          "old": "==",
-          "new": "!=",
-          "expr_before": "len(args) == 1",
-          "expr_after": "len(args) != 1",
-          "source_line": "if len(args) == 1 and not kwargs and isinstance(args[0], BaseModel):"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:196:20:int:1>2",
-          "fingerprint": "paw_kit/jit/decorator.py|int|1>2|1",
-          "line": 196,
-          "col": 20,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "if len(args) == 1 and not kwargs and isinstance(args[0], BaseModel):"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:197:20:int:0>1",
-          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
-          "line": 197,
-          "col": 20,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "return args[0].model_dump_json()"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:201:15:bool:or>and",
-          "fingerprint": "paw_kit/jit/decorator.py|bool|or>and|getattr(func, '__qualname__', None) or '<unknown>'",
-          "line": 201,
-          "col": 15,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "getattr(func, '__qualname__', None) or '<unknown>'",
-          "expr_after": "getattr(func, '__qualname__', None) and '<unknown>'",
-          "source_line": "name = getattr(func, \"__qualname__\", None) or \"<unknown>\""
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:257:7:cmp:<=><",
-          "fingerprint": "paw_kit/jit/decorator.py|cmp|<=><|rate <= 0",
-          "line": 257,
-          "col": 7,
-          "kind": "cmp",
-          "old": "<=",
-          "new": "<",
-          "expr_before": "rate <= 0",
-          "expr_after": "rate < 0",
-          "source_line": "if rate <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:257:15:int:0>1",
-          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
-          "line": 257,
-          "col": 15,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "if rate <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:259:11:cmp:<><=",
-          "fingerprint": "paw_kit/jit/decorator.py|cmp|<><=|rng.random() < rate",
-          "line": 259,
-          "col": 11,
-          "kind": "cmp",
-          "old": "<",
-          "new": "<=",
-          "expr_before": "rng.random() < rate",
-          "expr_after": "rng.random() <= rate",
-          "source_line": "return rng.random() < rate"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:324:7:cmp:<><=",
-          "fingerprint": "paw_kit/jit/decorator.py|cmp|<><=|audit_window < 1",
-          "line": 324,
-          "col": 7,
-          "kind": "cmp",
-          "old": "<",
-          "new": "<=",
-          "expr_before": "audit_window < 1",
-          "expr_after": "audit_window <= 1",
-          "source_line": "if audit_window < 1:"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:324:22:int:1>2",
-          "fingerprint": "paw_kit/jit/decorator.py|int|1>2|1",
-          "line": 324,
-          "col": 22,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "if audit_window < 1:"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:358:31:int:2>3",
-          "fingerprint": "paw_kit/jit/decorator.py|int|2>3|2",
-          "line": 358,
-          "col": 31,
-          "kind": "int",
-          "old": "2",
-          "new": "3",
-          "expr_before": "2",
-          "expr_after": "3",
-          "source_line": "f\"(needs at least {2 * max(shadow_window, audit_window)})\""
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:377:29:int:8>9",
-          "fingerprint": "paw_kit/jit/decorator.py|int|8>9|8",
-          "line": 377,
-          "col": 29,
-          "kind": "int",
-          "old": "8",
-          "new": "9",
-          "expr_before": "8",
-          "expr_after": "9",
-          "source_line": "shadow_queue_size: int = 8,"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:378:28:int:500>501",
-          "fingerprint": "paw_kit/jit/decorator.py|int|500>501|500",
-          "line": 378,
-          "col": 28,
-          "kind": "int",
-          "old": "500",
-          "new": "501",
-          "expr_before": "500",
-          "expr_after": "501",
-          "source_line": "shadow_max_pairs: int = 500,"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:364:21:int:50>51",
-          "fingerprint": "paw_kit/jit/decorator.py|int|50>51|50",
-          "line": 364,
-          "col": 21,
-          "kind": "int",
-          "old": "50",
-          "new": "51",
-          "expr_before": "50",
-          "expr_after": "51",
-          "source_line": "threshold: int = 50,"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:368:25:const:False>True",
-          "fingerprint": "paw_kit/jit/decorator.py|const|False>True|False",
-          "line": 368,
-          "col": 25,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "sync_compile: bool = False,"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:564:63:int:0>1",
-          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
-          "line": 564,
-          "col": 63,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "db.try_promote(task_id, state_epoch, None, 0, reason=\"shadow_disabled\")"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:577:79:int:1000>1001",
-          "fingerprint": "paw_kit/jit/decorator.py|int|1000>1001|1000",
-          "line": 577,
-          "col": 79,
-          "kind": "int",
-          "old": "1000",
-          "new": "1001",
-          "expr_before": "1000",
-          "expr_after": "1001",
-          "source_line": "served_latency_ms = (time.perf_counter() - served_start) * 1000"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:609:62:int:1000>1001",
-          "fingerprint": "paw_kit/jit/decorator.py|int|1000>1001|1000",
-          "line": 609,
-          "col": 62,
-          "kind": "int",
-          "old": "1000",
-          "new": "1001",
-          "expr_before": "1000",
-          "expr_after": "1001",
-          "source_line": "latency_ms = (time.perf_counter() - start_time) * 1000"
-        },
-        {
-          "id": "paw_kit/jit/decorator.py:668:36:int:5>6",
-          "fingerprint": "paw_kit/jit/decorator.py|int|5>6|5",
-          "line": 668,
-          "col": 36,
-          "kind": "int",
-          "old": "5",
-          "new": "6",
-          "expr_before": "5",
-          "expr_after": "6",
-          "source_line": "def _get_agreement(n: int = 5) -> Dict[str, Any]:"
-        }
-      ]
-    },
-    "paw_kit/jit/shadow.py": {
-      "mutations": 117,
-      "survivors": 59,
-      "survivors_detail": [
-        {
-          "id": "paw_kit/jit/shadow.py:102:25:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 102,
-          "col": 25,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "shadow_window: int = 0"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:103:24:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 103,
-          "col": 24,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "audit_window: int = 0"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:106:21:int:500>501",
-          "fingerprint": "paw_kit/jit/shadow.py|int|500>501|500",
-          "line": 106,
-          "col": 21,
-          "kind": "int",
-          "old": "500",
-          "new": "501",
-          "expr_before": "500",
-          "expr_after": "501",
-          "source_line": "max_pairs: int = 500"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:107:22:int:8>9",
-          "fingerprint": "paw_kit/jit/shadow.py|int|8>9|8",
-          "line": 107,
-          "col": 22,
-          "kind": "int",
-          "old": "8",
-          "new": "9",
-          "expr_before": "8",
-          "expr_after": "9",
-          "source_line": "queue_size: int = 8"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:70:18:const:True>False",
-          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
-          "line": 70,
-          "col": 18,
-          "kind": "const",
-          "old": "True",
-          "new": "False",
-          "expr_before": "True",
-          "expr_after": "False",
-          "source_line": "@dataclass(frozen=True)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:166:45:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 166,
-          "col": 45,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:166:71:int:1>2",
-          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
-          "line": 166,
-          "col": 71,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:166:76:int:1>2",
-          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
-          "line": 166,
-          "col": 76,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:168:28:cmp:not in>in",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|not in>in|key not in self._drop_warned",
-          "line": 168,
-          "col": 28,
-          "kind": "cmp",
-          "old": "not in",
-          "new": "in",
-          "expr_before": "key not in self._drop_warned",
-          "expr_after": "key in self._drop_warned",
-          "source_line": "first = key not in self._drop_warned"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:170:39:cmp:==>!=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|job.kind == 'compare'",
-          "line": 170,
-          "col": 39,
-          "kind": "cmp",
-          "old": "==",
-          "new": "!=",
-          "expr_before": "job.kind == 'compare'",
-          "expr_after": "job.kind != 'compare'",
-          "source_line": "what = \"comparison\" if job.kind == \"compare\" else \"fail-open\""
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:184:23:const:False>True",
-          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
-          "line": 184,
-          "col": 23,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "return False"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:185:19:const:True>False",
-          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
-          "line": 185,
-          "col": 19,
-          "kind": "const",
-          "old": "True",
-          "new": "False",
-          "expr_before": "True",
-          "expr_after": "False",
-          "source_line": "return True"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:191:19:const:False>True",
-          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
-          "line": 191,
-          "col": 19,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "return False"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:193:86:int:8>9",
-          "fingerprint": "paw_kit/jit/shadow.py|int|8>9|8",
-          "line": 193,
-          "col": 86,
-          "kind": "int",
-          "old": "8",
-          "new": "9",
-          "expr_before": "8",
-          "expr_after": "9",
-          "source_line": "def submit_fail_open(self, task_id: str, db_path: str, db: Any, queue_size: int = 8) -> bool:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:210:28:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 210,
-          "col": 28,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "state_epoch=0,"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:225:44:int:1>2",
-          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
-          "line": 225,
-          "col": 44,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "q = queue.Queue(maxsize=max(1, job.queue_size))"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:232:52:int:12>13",
-          "fingerprint": "paw_kit/jit/shadow.py|int|12>13|12",
-          "line": 232,
-          "col": 52,
-          "kind": "int",
-          "old": "12",
-          "new": "13",
-          "expr_before": "12",
-          "expr_after": "13",
-          "source_line": "name=f\"paw-shadow-{job.task_id[:12]}\","
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:257:71:int:1>2",
-          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
-          "line": 257,
-          "col": 71,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:268:18:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 268,
-          "col": 18,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "seq = 0"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:275:11:bool:or>and",
-          "fingerprint": "paw_kit/jit/shadow.py|bool|or>and|job.phase != 'shadow' or job.shadow_window <= 0",
-          "line": 275,
-          "col": 11,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "job.phase != 'shadow' or job.shadow_window <= 0",
-          "expr_after": "job.phase != 'shadow' and job.shadow_window <= 0",
-          "source_line": "if job.phase != \"shadow\" or job.shadow_window <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:275:36:cmp:<=><",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|<=><|job.shadow_window <= 0",
-          "line": 275,
-          "col": 36,
-          "kind": "cmp",
-          "old": "<=",
-          "new": "<",
-          "expr_before": "job.shadow_window <= 0",
-          "expr_after": "job.shadow_window < 0",
-          "source_line": "if job.phase != \"shadow\" or job.shadow_window <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:275:57:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 275,
-          "col": 57,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "if job.phase != \"shadow\" or job.shadow_window <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:278:11:cmp:<><=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|<><=|seq < _SHADOW_STALL_FACTOR * job.shadow_window",
-          "line": 278,
-          "col": 11,
-          "kind": "cmp",
-          "old": "<",
-          "new": "<=",
-          "expr_before": "seq < _SHADOW_STALL_FACTOR * job.shadow_window",
-          "expr_after": "seq <= _SHADOW_STALL_FACTOR * job.shadow_window",
-          "source_line": "if seq < _SHADOW_STALL_FACTOR * job.shadow_window:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:284:19:cmp:<><=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|<><=|self._stall_rng.random() < 1.0 / job.shadow_window",
-          "line": 284,
-          "col": 19,
-          "kind": "cmp",
-          "old": "<",
-          "new": "<=",
-          "expr_before": "self._stall_rng.random() < 1.0 / job.shadow_window",
-          "expr_after": "self._stall_rng.random() <= 1.0 / job.shadow_window",
-          "source_line": "keep = self._stall_rng.random() < (1.0 / job.shadow_window)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:308:42:cmp:is>is not",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|is>is not|rate is None",
-          "line": 308,
-          "col": 42,
-          "kind": "cmp",
-          "old": "is",
-          "new": "is not",
-          "expr_before": "rate is None",
-          "expr_after": "rate is not None",
-          "source_line": "job.task_id, \"unknown\" if rate is None else f\"{rate:.2f}\", seq,"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:313:68:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 313,
-          "col": 68,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "self._stalled[job.key] = self._stalled.get(job.key, 0) + 1"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:313:73:int:1>2",
-          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
-          "line": 313,
-          "col": 73,
-          "kind": "int",
-          "old": "1",
-          "new": "2",
-          "expr_before": "1",
-          "expr_after": "2",
-          "source_line": "self._stalled[job.key] = self._stalled.get(job.key, 0) + 1"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:326:20:cmp:not in>in",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|not in>in|marker not in self._error_logged",
-          "line": 326,
-          "col": 20,
-          "kind": "cmp",
-          "old": "not in",
-          "new": "in",
-          "expr_before": "marker not in self._error_logged",
-          "expr_after": "marker in self._error_logged",
-          "source_line": "first = marker not in self._error_logged"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:352:52:bool:and>or",
-          "fingerprint": "paw_kit/jit/shadow.py|bool|and>or|k[0] == key and k[1] < current_epoch",
-          "line": 352,
-          "col": 52,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "k[0] == key and k[1] < current_epoch",
-          "expr_after": "k[0] == key or k[1] < current_epoch",
-          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:352:52:cmp:==>!=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|k[0] == key",
-          "line": 352,
-          "col": 52,
-          "kind": "cmp",
-          "old": "==",
-          "new": "!=",
-          "expr_before": "k[0] == key",
-          "expr_after": "k[0] != key",
-          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:352:54:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 352,
-          "col": 54,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:352:68:cmp:<><=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|<><=|k[1] < current_epoch",
-          "line": 352,
-          "col": 68,
-          "kind": "cmp",
-          "old": "<",
-          "new": "<=",
-          "expr_before": "k[1] < current_epoch",
-          "expr_after": "k[1] <= current_epoch",
-          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:354:55:cmp:==>!=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|k[0] == key",
-          "line": 354,
-          "col": 55,
-          "kind": "cmp",
-          "old": "==",
-          "new": "!=",
-          "expr_before": "k[0] == key",
-          "expr_after": "k[0] != key",
-          "source_line": "for k in [k for k in self._stall_warned if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:354:57:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 354,
-          "col": 57,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "for k in [k for k in self._stall_warned if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:356:57:cmp:==>!=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|k[0] == key",
-          "line": 356,
-          "col": 57,
-          "kind": "cmp",
-          "old": "==",
-          "new": "!=",
-          "expr_before": "k[0] == key",
-          "expr_after": "k[0] != key",
-          "source_line": "for k in [k for k in self._windows_scored if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:356:59:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 356,
-          "col": 59,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "for k in [k for k in self._windows_scored if k[0] == key and k[1] < current_epoch]:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:389:68:int:1000>1001",
-          "fingerprint": "paw_kit/jit/shadow.py|int|1000>1001|1000",
-          "line": 389,
-          "col": 68,
-          "kind": "int",
-          "old": "1000",
-          "new": "1001",
-          "expr_before": "1000",
-          "expr_after": "1001",
-          "source_line": "adapter_latency = (time.perf_counter() - started) * 1000"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:400:68:int:1000>1001",
-          "fingerprint": "paw_kit/jit/shadow.py|int|1000>1001|1000",
-          "line": 400,
-          "col": 68,
-          "kind": "int",
-          "old": "1000",
-          "new": "1001",
-          "expr_before": "1000",
-          "expr_after": "1001",
-          "source_line": "teacher_latency = (time.perf_counter() - started) * 1000"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:415:27:bool:or>and",
-          "fingerprint": "paw_kit/jit/shadow.py|bool|or>and|isinstance(adapter_value, BaseModel) or job.response_model is None",
-          "line": 415,
-          "col": 27,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "isinstance(adapter_value, BaseModel) or job.response_model is None",
-          "expr_after": "isinstance(adapter_value, BaseModel) and job.response_model is None",
-          "source_line": "if isinstance(adapter_value, BaseModel) or job.response_model is None"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:415:67:cmp:is>is not",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|is>is not|job.response_model is None",
-          "line": 415,
-          "col": 67,
-          "kind": "cmp",
-          "old": "is",
-          "new": "is not",
-          "expr_before": "job.response_model is None",
-          "expr_after": "job.response_model is not None",
-          "source_line": "if isinstance(adapter_value, BaseModel) or job.response_model is None"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:464:32:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 464,
-          "col": 32,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "seq = result.get(\"seq\", 0)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:495:11:bool:or>and",
-          "fingerprint": "paw_kit/jit/shadow.py|bool|or>and|window <= 0 or seq <= 0",
-          "line": 495,
-          "col": 11,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "window <= 0 or seq <= 0",
-          "expr_after": "window <= 0 and seq <= 0",
-          "source_line": "if window <= 0 or seq <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:495:11:cmp:<=><",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|<=><|window <= 0",
-          "line": 495,
-          "col": 11,
-          "kind": "cmp",
-          "old": "<=",
-          "new": "<",
-          "expr_before": "window <= 0",
-          "expr_after": "window < 0",
-          "source_line": "if window <= 0 or seq <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:495:26:cmp:<=><",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|<=><|seq <= 0",
-          "line": 495,
-          "col": 26,
-          "kind": "cmp",
-          "old": "<=",
-          "new": "<",
-          "expr_before": "seq <= 0",
-          "expr_after": "seq < 0",
-          "source_line": "if window <= 0 or seq <= 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:502:37:cmp:>>>=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|>>>=|seq > _SHADOW_STALL_FACTOR * window",
-          "line": 502,
-          "col": 37,
-          "kind": "cmp",
-          "old": ">",
-          "new": ">=",
-          "expr_before": "seq > _SHADOW_STALL_FACTOR * window",
-          "expr_after": "seq >= _SHADOW_STALL_FACTOR * window",
-          "source_line": "if job.phase == \"shadow\" and seq > _SHADOW_STALL_FACTOR * window:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:565:19:bool:and>or",
-          "fingerprint": "paw_kit/jit/shadow.py|bool|and>or|k[1] == task_id and (db_path is None or k[0] == db_path)",
-          "line": 565,
-          "col": 19,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "k[1] == task_id and (db_path is None or k[0] == db_path)",
-          "expr_after": "k[1] == task_id or (db_path is None or k[0] == db_path)",
-          "source_line": "if k[1] == task_id and (db_path is None or k[0] == db_path)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:565:40:cmp:is>is not",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|is>is not|db_path is None",
-          "line": 565,
-          "col": 40,
-          "kind": "cmp",
-          "old": "is",
-          "new": "is not",
-          "expr_before": "db_path is None",
-          "expr_after": "db_path is not None",
-          "source_line": "if k[1] == task_id and (db_path is None or k[0] == db_path)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:573:52:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 573,
-          "col": 52,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"pending\": sum(self._pending.get(k, 0) for k in keys),"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:575:52:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 575,
-          "col": 52,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "\"stalled\": sum(self._stalled.get(k, 0) for k in keys),"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:587:51:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 587,
-          "col": 51,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "pending = sum(self._pending.get(k, 0) for k in keys)"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:590:15:cmp:>=>>",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|>=>>|time.monotonic() >= deadline",
-          "line": 590,
-          "col": 15,
-          "kind": "cmp",
-          "old": ">=",
-          "new": ">",
-          "expr_before": "time.monotonic() >= deadline",
-          "expr_after": "time.monotonic() > deadline",
-          "source_line": "if time.monotonic() >= deadline:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:591:23:const:False>True",
-          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
-          "line": 591,
-          "col": 23,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "return False"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:603:18:const:True>False",
-          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
-          "line": 603,
-          "col": 18,
-          "kind": "const",
-          "old": "True",
-          "new": "False",
-          "expr_before": "True",
-          "expr_after": "False",
-          "source_line": "while True:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:606:19:cmp:==>!=",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|pending == 0",
-          "line": 606,
-          "col": 19,
-          "kind": "cmp",
-          "old": "==",
-          "new": "!=",
-          "expr_before": "pending == 0",
-          "expr_after": "pending != 0",
-          "source_line": "if pending == 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:606:30:int:0>1",
-          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
-          "line": 606,
-          "col": 30,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "if pending == 0:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:607:27:const:True>False",
-          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
-          "line": 607,
-          "col": 27,
-          "kind": "const",
-          "old": "True",
-          "new": "False",
-          "expr_before": "True",
-          "expr_after": "False",
-          "source_line": "return True"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:608:19:cmp:>=>>",
-          "fingerprint": "paw_kit/jit/shadow.py|cmp|>=>>|time.monotonic() >= deadline",
-          "line": 608,
-          "col": 19,
-          "kind": "cmp",
-          "old": ">=",
-          "new": ">",
-          "expr_before": "time.monotonic() >= deadline",
-          "expr_after": "time.monotonic() > deadline",
-          "source_line": "if time.monotonic() >= deadline:"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:609:27:const:False>True",
-          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
-          "line": 609,
-          "col": 27,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "return False"
-        },
-        {
-          "id": "paw_kit/jit/shadow.py:612:19:const:False>True",
-          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
-          "line": 612,
-          "col": 19,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "return False"
-        }
-      ]
-    },
     "paw_kit/jit/agreement.py": {
       "mutations": 54,
-      "survivors": 20,
+      "survivors": 23,
       "survivors_detail": [
         {
           "id": "paw_kit/jit/agreement.py:25:23:int:8>9",
@@ -2659,6 +997,18 @@
           "source_line": "if a is None or b is None:"
         },
         {
+          "id": "paw_kit/jit/agreement.py:78:7:bool:and>or",
+          "fingerprint": "paw_kit/jit/agreement.py|bool|and>or|isinstance(a, str) and isinstance(b, str)",
+          "line": 78,
+          "col": 7,
+          "kind": "bool",
+          "old": "and",
+          "new": "or",
+          "expr_before": "isinstance(a, str) and isinstance(b, str)",
+          "expr_after": "isinstance(a, str) or isinstance(b, str)",
+          "source_line": "if isinstance(a, str) and isinstance(b, str):"
+        },
+        {
           "id": "paw_kit/jit/agreement.py:81:7:bool:and>or",
           "fingerprint": "paw_kit/jit/agreement.py|bool|and>or|isinstance(a, (int, float)) and isinstance(b, (int, float))",
           "line": 81,
@@ -2681,6 +1031,18 @@
           "expr_before": "isinstance(a, int) and isinstance(b, int)",
           "expr_after": "isinstance(a, int) or isinstance(b, int)",
           "source_line": "if isinstance(a, int) and isinstance(b, int):"
+        },
+        {
+          "id": "paw_kit/jit/agreement.py:94:15:cmp:==>!=",
+          "fingerprint": "paw_kit/jit/agreement.py|cmp|==>!=|_normalize_str(a) == _normalize_str(stringify_answer(b))",
+          "line": 94,
+          "col": 15,
+          "kind": "cmp",
+          "old": "==",
+          "new": "!=",
+          "expr_before": "_normalize_str(a) == _normalize_str(stringify_answer(b))",
+          "expr_after": "_normalize_str(a) != _normalize_str(stringify_answer(b))",
+          "source_line": "return _normalize_str(a) == _normalize_str(stringify_answer(b))"
         },
         {
           "id": "paw_kit/jit/agreement.py:96:15:cmp:==>!=",
@@ -2717,6 +1079,18 @@
           "expr_before": "1",
           "expr_after": "2",
           "source_line": "return all(_compare(x, y, depth + 1) for x, y in zip(a, b))"
+        },
+        {
+          "id": "paw_kit/jit/agreement.py:103:7:bool:and>or",
+          "fingerprint": "paw_kit/jit/agreement.py|bool|and>or|isinstance(a, dict) and isinstance(b, dict)",
+          "line": 103,
+          "col": 7,
+          "kind": "bool",
+          "old": "and",
+          "new": "or",
+          "expr_before": "isinstance(a, dict) and isinstance(b, dict)",
+          "expr_after": "isinstance(a, dict) or isinstance(b, dict)",
+          "source_line": "if isinstance(a, dict) and isinstance(b, dict):"
         },
         {
           "id": "paw_kit/jit/agreement.py:106:48:int:1>2",
@@ -2852,13 +1226,1507 @@
         }
       ]
     },
+    "paw_kit/jit/shadow.py": {
+      "mutations": 118,
+      "survivors": 54,
+      "survivors_detail": [
+        {
+          "id": "paw_kit/jit/shadow.py:151:25:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 151,
+          "col": 25,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "shadow_window: int = 0"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:152:24:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 152,
+          "col": 24,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "audit_window: int = 0"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:155:21:int:500>501",
+          "fingerprint": "paw_kit/jit/shadow.py|int|500>501|500",
+          "line": 155,
+          "col": 21,
+          "kind": "int",
+          "old": "500",
+          "new": "501",
+          "expr_before": "500",
+          "expr_after": "501",
+          "source_line": "max_pairs: int = 500"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:156:22:int:8>9",
+          "fingerprint": "paw_kit/jit/shadow.py|int|8>9|8",
+          "line": 156,
+          "col": 22,
+          "kind": "int",
+          "old": "8",
+          "new": "9",
+          "expr_before": "8",
+          "expr_after": "9",
+          "source_line": "queue_size: int = 8"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:106:18:const:True>False",
+          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
+          "line": 106,
+          "col": 18,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "@dataclass(frozen=True)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:237:45:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 237,
+          "col": 45,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:237:71:int:1>2",
+          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
+          "line": 237,
+          "col": 71,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:237:76:int:1>2",
+          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
+          "line": 237,
+          "col": 76,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:241:39:cmp:==>!=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|job.kind == 'compare'",
+          "line": 241,
+          "col": 39,
+          "kind": "cmp",
+          "old": "==",
+          "new": "!=",
+          "expr_before": "job.kind == 'compare'",
+          "expr_after": "job.kind != 'compare'",
+          "source_line": "what = \"comparison\" if job.kind == \"compare\" else \"fail-open\""
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:271:23:const:False>True",
+          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
+          "line": 271,
+          "col": 23,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "return False"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:272:19:const:True>False",
+          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
+          "line": 272,
+          "col": 19,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "return True"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:278:19:const:False>True",
+          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
+          "line": 278,
+          "col": 19,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "return False"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:280:86:int:8>9",
+          "fingerprint": "paw_kit/jit/shadow.py|int|8>9|8",
+          "line": 280,
+          "col": 86,
+          "kind": "int",
+          "old": "8",
+          "new": "9",
+          "expr_before": "8",
+          "expr_after": "9",
+          "source_line": "def submit_fail_open(self, task_id: str, db_path: str, db: Any, queue_size: int = 8) -> bool:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:297:28:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 297,
+          "col": 28,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "state_epoch=0,"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:319:52:int:12>13",
+          "fingerprint": "paw_kit/jit/shadow.py|int|12>13|12",
+          "line": 319,
+          "col": 52,
+          "kind": "int",
+          "old": "12",
+          "new": "13",
+          "expr_before": "12",
+          "expr_after": "13",
+          "source_line": "name=f\"paw-shadow-{job.task_id[:12]}\","
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:344:71:int:1>2",
+          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
+          "line": 344,
+          "col": 71,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "self._pending[key] = max(0, self._pending.get(key, 1) - 1)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:355:18:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 355,
+          "col": 18,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "seq = 0"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:362:11:bool:or>and",
+          "fingerprint": "paw_kit/jit/shadow.py|bool|or>and|job.phase != 'shadow' or job.shadow_window <= 0",
+          "line": 362,
+          "col": 11,
+          "kind": "bool",
+          "old": "or",
+          "new": "and",
+          "expr_before": "job.phase != 'shadow' or job.shadow_window <= 0",
+          "expr_after": "job.phase != 'shadow' and job.shadow_window <= 0",
+          "source_line": "if job.phase != \"shadow\" or job.shadow_window <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:362:36:cmp:<=><",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|<=><|job.shadow_window <= 0",
+          "line": 362,
+          "col": 36,
+          "kind": "cmp",
+          "old": "<=",
+          "new": "<",
+          "expr_before": "job.shadow_window <= 0",
+          "expr_after": "job.shadow_window < 0",
+          "source_line": "if job.phase != \"shadow\" or job.shadow_window <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:362:57:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 362,
+          "col": 57,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "if job.phase != \"shadow\" or job.shadow_window <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:365:11:cmp:<><=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|<><=|seq < _SHADOW_STALL_FACTOR * job.shadow_window",
+          "line": 365,
+          "col": 11,
+          "kind": "cmp",
+          "old": "<",
+          "new": "<=",
+          "expr_before": "seq < _SHADOW_STALL_FACTOR * job.shadow_window",
+          "expr_after": "seq <= _SHADOW_STALL_FACTOR * job.shadow_window",
+          "source_line": "if seq < _SHADOW_STALL_FACTOR * job.shadow_window:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:371:19:cmp:<><=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|<><=|self._stall_rng.random() < 1.0 / job.shadow_window",
+          "line": 371,
+          "col": 19,
+          "kind": "cmp",
+          "old": "<",
+          "new": "<=",
+          "expr_before": "self._stall_rng.random() < 1.0 / job.shadow_window",
+          "expr_after": "self._stall_rng.random() <= 1.0 / job.shadow_window",
+          "source_line": "keep = self._stall_rng.random() < (1.0 / job.shadow_window)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:395:42:cmp:is>is not",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|is>is not|rate is None",
+          "line": 395,
+          "col": 42,
+          "kind": "cmp",
+          "old": "is",
+          "new": "is not",
+          "expr_before": "rate is None",
+          "expr_after": "rate is not None",
+          "source_line": "job.task_id, \"unknown\" if rate is None else f\"{rate:.2f}\", seq,"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:400:68:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 400,
+          "col": 68,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "self._stalled[job.key] = self._stalled.get(job.key, 0) + 1"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:400:73:int:1>2",
+          "fingerprint": "paw_kit/jit/shadow.py|int|1>2|1",
+          "line": 400,
+          "col": 73,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "self._stalled[job.key] = self._stalled.get(job.key, 0) + 1"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:413:20:cmp:not in>in",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|not in>in|marker not in self._error_logged",
+          "line": 413,
+          "col": 20,
+          "kind": "cmp",
+          "old": "not in",
+          "new": "in",
+          "expr_before": "marker not in self._error_logged",
+          "expr_after": "marker in self._error_logged",
+          "source_line": "first = marker not in self._error_logged"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:439:52:bool:and>or",
+          "fingerprint": "paw_kit/jit/shadow.py|bool|and>or|k[0] == key and k[1] < current_epoch",
+          "line": 439,
+          "col": 52,
+          "kind": "bool",
+          "old": "and",
+          "new": "or",
+          "expr_before": "k[0] == key and k[1] < current_epoch",
+          "expr_after": "k[0] == key or k[1] < current_epoch",
+          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:439:52:cmp:==>!=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|k[0] == key",
+          "line": 439,
+          "col": 52,
+          "kind": "cmp",
+          "old": "==",
+          "new": "!=",
+          "expr_before": "k[0] == key",
+          "expr_after": "k[0] != key",
+          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:439:54:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 439,
+          "col": 54,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:439:68:cmp:<><=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|<><=|k[1] < current_epoch",
+          "line": 439,
+          "col": 68,
+          "kind": "cmp",
+          "old": "<",
+          "new": "<=",
+          "expr_before": "k[1] < current_epoch",
+          "expr_after": "k[1] <= current_epoch",
+          "source_line": "for k in [k for k in self._seq_cache if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:441:55:cmp:==>!=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|k[0] == key",
+          "line": 441,
+          "col": 55,
+          "kind": "cmp",
+          "old": "==",
+          "new": "!=",
+          "expr_before": "k[0] == key",
+          "expr_after": "k[0] != key",
+          "source_line": "for k in [k for k in self._stall_warned if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:441:57:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 441,
+          "col": 57,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "for k in [k for k in self._stall_warned if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:443:57:cmp:==>!=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|k[0] == key",
+          "line": 443,
+          "col": 57,
+          "kind": "cmp",
+          "old": "==",
+          "new": "!=",
+          "expr_before": "k[0] == key",
+          "expr_after": "k[0] != key",
+          "source_line": "for k in [k for k in self._windows_scored if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:443:59:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 443,
+          "col": 59,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "for k in [k for k in self._windows_scored if k[0] == key and k[1] < current_epoch]:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:486:68:int:1000>1001",
+          "fingerprint": "paw_kit/jit/shadow.py|int|1000>1001|1000",
+          "line": 486,
+          "col": 68,
+          "kind": "int",
+          "old": "1000",
+          "new": "1001",
+          "expr_before": "1000",
+          "expr_after": "1001",
+          "source_line": "adapter_latency = (time.perf_counter() - started) * 1000"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:513:68:int:1000>1001",
+          "fingerprint": "paw_kit/jit/shadow.py|int|1000>1001|1000",
+          "line": 513,
+          "col": 68,
+          "kind": "int",
+          "old": "1000",
+          "new": "1001",
+          "expr_before": "1000",
+          "expr_after": "1001",
+          "source_line": "teacher_latency = (time.perf_counter() - started) * 1000"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:583:32:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 583,
+          "col": 32,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "seq = result.get(\"seq\", 0)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:614:11:bool:or>and",
+          "fingerprint": "paw_kit/jit/shadow.py|bool|or>and|window <= 0 or seq <= 0",
+          "line": 614,
+          "col": 11,
+          "kind": "bool",
+          "old": "or",
+          "new": "and",
+          "expr_before": "window <= 0 or seq <= 0",
+          "expr_after": "window <= 0 and seq <= 0",
+          "source_line": "if window <= 0 or seq <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:614:11:cmp:<=><",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|<=><|window <= 0",
+          "line": 614,
+          "col": 11,
+          "kind": "cmp",
+          "old": "<=",
+          "new": "<",
+          "expr_before": "window <= 0",
+          "expr_after": "window < 0",
+          "source_line": "if window <= 0 or seq <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:614:26:cmp:<=><",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|<=><|seq <= 0",
+          "line": 614,
+          "col": 26,
+          "kind": "cmp",
+          "old": "<=",
+          "new": "<",
+          "expr_before": "seq <= 0",
+          "expr_after": "seq < 0",
+          "source_line": "if window <= 0 or seq <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:621:37:cmp:>>>=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|>>>=|seq > _SHADOW_STALL_FACTOR * window",
+          "line": 621,
+          "col": 37,
+          "kind": "cmp",
+          "old": ">",
+          "new": ">=",
+          "expr_before": "seq > _SHADOW_STALL_FACTOR * window",
+          "expr_after": "seq >= _SHADOW_STALL_FACTOR * window",
+          "source_line": "if job.phase == \"shadow\" and seq > _SHADOW_STALL_FACTOR * window:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:684:40:cmp:is>is not",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|is>is not|db_path is None",
+          "line": 684,
+          "col": 40,
+          "kind": "cmp",
+          "old": "is",
+          "new": "is not",
+          "expr_before": "db_path is None",
+          "expr_after": "db_path is not None",
+          "source_line": "if k[1] == task_id and (db_path is None or k[0] == db_path)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:703:52:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 703,
+          "col": 52,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"pending\": sum(self._pending.get(k, 0) for k in keys),"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:708:52:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 708,
+          "col": 52,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"stalled\": sum(self._stalled.get(k, 0) for k in keys),"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:720:51:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 720,
+          "col": 51,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "pending = sum(self._pending.get(k, 0) for k in keys)"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:723:15:cmp:>=>>",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|>=>>|time.monotonic() >= deadline",
+          "line": 723,
+          "col": 15,
+          "kind": "cmp",
+          "old": ">=",
+          "new": ">",
+          "expr_before": "time.monotonic() >= deadline",
+          "expr_after": "time.monotonic() > deadline",
+          "source_line": "if time.monotonic() >= deadline:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:724:23:const:False>True",
+          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
+          "line": 724,
+          "col": 23,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "return False"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:736:18:const:True>False",
+          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
+          "line": 736,
+          "col": 18,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "while True:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:739:19:cmp:==>!=",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|==>!=|pending == 0",
+          "line": 739,
+          "col": 19,
+          "kind": "cmp",
+          "old": "==",
+          "new": "!=",
+          "expr_before": "pending == 0",
+          "expr_after": "pending != 0",
+          "source_line": "if pending == 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:739:30:int:0>1",
+          "fingerprint": "paw_kit/jit/shadow.py|int|0>1|0",
+          "line": 739,
+          "col": 30,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "if pending == 0:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:740:27:const:True>False",
+          "fingerprint": "paw_kit/jit/shadow.py|const|True>False|True",
+          "line": 740,
+          "col": 27,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "return True"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:741:19:cmp:>=>>",
+          "fingerprint": "paw_kit/jit/shadow.py|cmp|>=>>|time.monotonic() >= deadline",
+          "line": 741,
+          "col": 19,
+          "kind": "cmp",
+          "old": ">=",
+          "new": ">",
+          "expr_before": "time.monotonic() >= deadline",
+          "expr_after": "time.monotonic() > deadline",
+          "source_line": "if time.monotonic() >= deadline:"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:742:27:const:False>True",
+          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
+          "line": 742,
+          "col": 27,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "return False"
+        },
+        {
+          "id": "paw_kit/jit/shadow.py:745:19:const:False>True",
+          "fingerprint": "paw_kit/jit/shadow.py|const|False>True|False",
+          "line": 745,
+          "col": 19,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "return False"
+        }
+      ]
+    },
+    "paw_kit/jit/decorator.py": {
+      "mutations": 79,
+      "survivors": 21,
+      "survivors_detail": [
+        {
+          "id": "paw_kit/jit/decorator.py:73:25:int:0>1",
+          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
+          "line": 73,
+          "col": 25,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "shadow_window: int = 0,"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:75:22:int:8>9",
+          "fingerprint": "paw_kit/jit/decorator.py|int|8>9|8",
+          "line": 75,
+          "col": 22,
+          "kind": "int",
+          "old": "8",
+          "new": "9",
+          "expr_before": "8",
+          "expr_after": "9",
+          "source_line": "queue_size: int = 8,"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:89:7:bool:and>or",
+          "fingerprint": "paw_kit/jit/decorator.py|bool|and>or|db is not None and shadow_window and (db_path is not None)",
+          "line": 89,
+          "col": 7,
+          "kind": "bool",
+          "old": "and",
+          "new": "or",
+          "expr_before": "db is not None and shadow_window and (db_path is not None)",
+          "expr_after": "db is not None or shadow_window or db_path is not None",
+          "source_line": "if db is not None and shadow_window and db_path is not None:"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:166:11:cmp:is>is not",
+          "fingerprint": "paw_kit/jit/decorator.py|cmp|is>is not|owner is None",
+          "line": 166,
+          "col": 11,
+          "kind": "cmp",
+          "old": "is",
+          "new": "is not",
+          "expr_before": "owner is None",
+          "expr_after": "owner is not None",
+          "source_line": "if owner is None:"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:222:7:cmp:==>!=",
+          "fingerprint": "paw_kit/jit/decorator.py|cmp|==>!=|len(args) == 1",
+          "line": 222,
+          "col": 7,
+          "kind": "cmp",
+          "old": "==",
+          "new": "!=",
+          "expr_before": "len(args) == 1",
+          "expr_after": "len(args) != 1",
+          "source_line": "if len(args) == 1 and not kwargs and isinstance(args[0], BaseModel):"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:222:20:int:1>2",
+          "fingerprint": "paw_kit/jit/decorator.py|int|1>2|1",
+          "line": 222,
+          "col": 20,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "if len(args) == 1 and not kwargs and isinstance(args[0], BaseModel):"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:223:20:int:0>1",
+          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
+          "line": 223,
+          "col": 20,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "return args[0].model_dump_json()"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:227:15:bool:or>and",
+          "fingerprint": "paw_kit/jit/decorator.py|bool|or>and|getattr(func, '__qualname__', None) or '<unknown>'",
+          "line": 227,
+          "col": 15,
+          "kind": "bool",
+          "old": "or",
+          "new": "and",
+          "expr_before": "getattr(func, '__qualname__', None) or '<unknown>'",
+          "expr_after": "getattr(func, '__qualname__', None) and '<unknown>'",
+          "source_line": "name = getattr(func, \"__qualname__\", None) or \"<unknown>\""
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:283:7:cmp:<=><",
+          "fingerprint": "paw_kit/jit/decorator.py|cmp|<=><|rate <= 0",
+          "line": 283,
+          "col": 7,
+          "kind": "cmp",
+          "old": "<=",
+          "new": "<",
+          "expr_before": "rate <= 0",
+          "expr_after": "rate < 0",
+          "source_line": "if rate <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:283:15:int:0>1",
+          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
+          "line": 283,
+          "col": 15,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "if rate <= 0:"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:285:11:cmp:<><=",
+          "fingerprint": "paw_kit/jit/decorator.py|cmp|<><=|rng.random() < rate",
+          "line": 285,
+          "col": 11,
+          "kind": "cmp",
+          "old": "<",
+          "new": "<=",
+          "expr_before": "rng.random() < rate",
+          "expr_after": "rng.random() <= rate",
+          "source_line": "return rng.random() < rate"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:384:31:int:2>3",
+          "fingerprint": "paw_kit/jit/decorator.py|int|2>3|2",
+          "line": 384,
+          "col": 31,
+          "kind": "int",
+          "old": "2",
+          "new": "3",
+          "expr_before": "2",
+          "expr_after": "3",
+          "source_line": "f\"(needs at least {2 * max(shadow_window, audit_window)})\""
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:403:29:int:8>9",
+          "fingerprint": "paw_kit/jit/decorator.py|int|8>9|8",
+          "line": 403,
+          "col": 29,
+          "kind": "int",
+          "old": "8",
+          "new": "9",
+          "expr_before": "8",
+          "expr_after": "9",
+          "source_line": "shadow_queue_size: int = 8,"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:404:28:int:500>501",
+          "fingerprint": "paw_kit/jit/decorator.py|int|500>501|500",
+          "line": 404,
+          "col": 28,
+          "kind": "int",
+          "old": "500",
+          "new": "501",
+          "expr_before": "500",
+          "expr_after": "501",
+          "source_line": "shadow_max_pairs: int = 500,"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:390:21:int:50>51",
+          "fingerprint": "paw_kit/jit/decorator.py|int|50>51|50",
+          "line": 390,
+          "col": 21,
+          "kind": "int",
+          "old": "50",
+          "new": "51",
+          "expr_before": "50",
+          "expr_after": "51",
+          "source_line": "threshold: int = 50,"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:394:25:const:False>True",
+          "fingerprint": "paw_kit/jit/decorator.py|const|False>True|False",
+          "line": 394,
+          "col": 25,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "sync_compile: bool = False,"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:623:67:int:0>1",
+          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
+          "line": 623,
+          "col": 67,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "db.try_promote(task_id, state_epoch, None, 0, reason=\"shadow_disabled\")"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:629:69:int:0>1",
+          "fingerprint": "paw_kit/jit/decorator.py|int|0>1|0",
+          "line": 629,
+          "col": 69,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "status, adapter_path, state_epoch = \"tracing\", None, 0"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:645:79:int:1000>1001",
+          "fingerprint": "paw_kit/jit/decorator.py|int|1000>1001|1000",
+          "line": 645,
+          "col": 79,
+          "kind": "int",
+          "old": "1000",
+          "new": "1001",
+          "expr_before": "1000",
+          "expr_after": "1001",
+          "source_line": "served_latency_ms = (time.perf_counter() - served_start) * 1000"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:688:62:int:1000>1001",
+          "fingerprint": "paw_kit/jit/decorator.py|int|1000>1001|1000",
+          "line": 688,
+          "col": 62,
+          "kind": "int",
+          "old": "1000",
+          "new": "1001",
+          "expr_before": "1000",
+          "expr_after": "1001",
+          "source_line": "latency_ms = (time.perf_counter() - start_time) * 1000"
+        },
+        {
+          "id": "paw_kit/jit/decorator.py:802:36:int:5>6",
+          "fingerprint": "paw_kit/jit/decorator.py|int|5>6|5",
+          "line": 802,
+          "col": 36,
+          "kind": "int",
+          "old": "5",
+          "new": "6",
+          "expr_before": "5",
+          "expr_after": "6",
+          "source_line": "def _get_agreement(n: int = 5) -> Dict[str, Any]:"
+        }
+      ]
+    },
+    "paw_kit/jit/db.py": {
+      "mutations": 163,
+      "survivors": 48,
+      "survivors_detail": [
+        {
+          "id": "paw_kit/jit/db.py:17:26:int:24>25",
+          "fingerprint": "paw_kit/jit/db.py|int|24>25|24",
+          "line": 17,
+          "col": 26,
+          "kind": "int",
+          "old": "24",
+          "new": "25",
+          "expr_before": "24",
+          "expr_after": "25",
+          "source_line": "_MIN_SQLITE_VERSION = (3, 24, 0)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:17:30:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 17,
+          "col": 30,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "_MIN_SQLITE_VERSION = (3, 24, 0)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:42:21:int:5>6",
+          "fingerprint": "paw_kit/jit/db.py|int|5>6|5",
+          "line": 42,
+          "col": 21,
+          "kind": "int",
+          "old": "5",
+          "new": "6",
+          "expr_before": "5",
+          "expr_after": "6",
+          "source_line": "_DB_RETRY_ATTEMPTS = 5"
+        },
+        {
+          "id": "paw_kit/jit/db.py:62:30:int:200>201",
+          "fingerprint": "paw_kit/jit/db.py|int|200>201|200",
+          "line": 62,
+          "col": 30,
+          "kind": "int",
+          "old": "200",
+          "new": "201",
+          "expr_before": "200",
+          "expr_after": "201",
+          "source_line": "_STATE_TRANSITIONS_MAX_ROWS = 200"
+        },
+        {
+          "id": "paw_kit/jit/db.py:71:15:int:50>51",
+          "fingerprint": "paw_kit/jit/db.py|int|50>51|50",
+          "line": 71,
+          "col": 15,
+          "kind": "int",
+          "old": "50",
+          "new": "51",
+          "expr_before": "50",
+          "expr_after": "51",
+          "source_line": "_PRUNE_EVERY = 50"
+        },
+        {
+          "id": "paw_kit/jit/db.py:85:16:cmp:<=><",
+          "fingerprint": "paw_kit/jit/db.py|cmp|<=><|cap <= _PRUNE_EVERY",
+          "line": 85,
+          "col": 16,
+          "kind": "cmp",
+          "old": "<=",
+          "new": "<",
+          "expr_before": "cap <= _PRUNE_EVERY",
+          "expr_after": "cap < _PRUNE_EVERY",
+          "source_line": "return 1 if cap <= _PRUNE_EVERY else _PRUNE_EVERY"
+        },
+        {
+          "id": "paw_kit/jit/db.py:85:11:int:1>2",
+          "fingerprint": "paw_kit/jit/db.py|int|1>2|1",
+          "line": 85,
+          "col": 11,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "return 1 if cap <= _PRUNE_EVERY else _PRUNE_EVERY"
+        },
+        {
+          "id": "paw_kit/jit/db.py:92:11:cmp:<><=",
+          "fingerprint": "paw_kit/jit/db.py|cmp|<><=|sqlite3.sqlite_version_info < _MIN_SQLITE_VERSION",
+          "line": 92,
+          "col": 11,
+          "kind": "cmp",
+          "old": "<",
+          "new": "<=",
+          "expr_before": "sqlite3.sqlite_version_info < _MIN_SQLITE_VERSION",
+          "expr_after": "sqlite3.sqlite_version_info <= _MIN_SQLITE_VERSION",
+          "source_line": "if sqlite3.sqlite_version_info < _MIN_SQLITE_VERSION:"
+        },
+        {
+          "id": "paw_kit/jit/db.py:103:42:const:True>False",
+          "fingerprint": "paw_kit/jit/db.py|const|True>False|True",
+          "line": 103,
+          "col": 42,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "self.db_path.parent.mkdir(parents=True, exist_ok=True)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:155:84:int:384>385",
+          "fingerprint": "paw_kit/jit/db.py|int|384>385|384",
+          "line": 155,
+          "col": 84,
+          "kind": "int",
+          "old": "384",
+          "new": "385",
+          "expr_before": "384",
+          "expr_after": "385",
+          "source_line": "self._chmod_best_effort(self.db_path.with_name(self.db_path.name + \"-wal\"), 0o600)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:156:84:int:384>385",
+          "fingerprint": "paw_kit/jit/db.py|int|384>385|384",
+          "line": 156,
+          "col": 84,
+          "kind": "int",
+          "old": "384",
+          "new": "385",
+          "expr_before": "384",
+          "expr_after": "385",
+          "source_line": "self._chmod_best_effort(self.db_path.with_name(self.db_path.name + \"-shm\"), 0o600)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:162:30:const:False>True",
+          "fingerprint": "paw_kit/jit/db.py|const|False>True|False",
+          "line": 162,
+          "col": 30,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "check_same_thread=False,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:354:59:int:2>3",
+          "fingerprint": "paw_kit/jit/db.py|int|2>3|2",
+          "line": 354,
+          "col": 59,
+          "kind": "int",
+          "old": "2",
+          "new": "3",
+          "expr_before": "2",
+          "expr_after": "3",
+          "source_line": "time.sleep(_DB_RETRY_BASE_DELAY_SECONDS * (2**attempt))"
+        },
+        {
+          "id": "paw_kit/jit/db.py:503:19:cmp:<><=",
+          "fingerprint": "paw_kit/jit/db.py|cmp|<><=|current_version < _SCHEMA_VERSION",
+          "line": 503,
+          "col": 19,
+          "kind": "cmp",
+          "old": "<",
+          "new": "<=",
+          "expr_before": "current_version < _SCHEMA_VERSION",
+          "expr_after": "current_version <= _SCHEMA_VERSION",
+          "source_line": "if current_version < _SCHEMA_VERSION:"
+        },
+        {
+          "id": "paw_kit/jit/db.py:640:33:bool:or>and",
+          "fingerprint": "paw_kit/jit/db.py|bool|or>and|previous or 'tracing'",
+          "line": 640,
+          "col": 33,
+          "kind": "bool",
+          "old": "or",
+          "new": "and",
+          "expr_before": "previous or 'tracing'",
+          "expr_after": "previous and 'tracing'",
+          "source_line": "task_id, previous or \"tracing\", status, None, None, new_epoch, now"
+        },
+        {
+          "id": "paw_kit/jit/db.py:889:23:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 889,
+          "col": 23,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "return 0 if attempts is None else attempts"
+        },
+        {
+          "id": "paw_kit/jit/db.py:949:37:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 949,
+          "col": 37,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "return (\"tracing\", None, 0)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:984:27:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 984,
+          "col": 27,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "state_epoch: int = 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1145:37:int:1>2",
+          "fingerprint": "paw_kit/jit/db.py|int|1>2|1",
+          "line": 1145,
+          "col": 37,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "expected_epoch + 1, now, reason,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1175:47:const:True>False",
+          "fingerprint": "paw_kit/jit/db.py|const|True>False|True",
+          "line": 1175,
+          "col": 47,
+          "kind": "const",
+          "old": "True",
+          "new": "False",
+          "expr_before": "True",
+          "expr_after": "False",
+          "source_line": "encoded = json.dumps(config, sort_keys=True)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1196:27:const:False>True",
+          "fingerprint": "paw_kit/jit/db.py|const|False>True|False",
+          "line": 1196,
+          "col": 27,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "return False"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1198:27:const:False>True",
+          "fingerprint": "paw_kit/jit/db.py|const|False>True|False",
+          "line": 1198,
+          "col": 27,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "return False"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1200:20:bool:and>or",
+          "fingerprint": "paw_kit/jit/db.py|bool|and>or|row['shadow_config'] is not None and row['status'] in ('shadow', 'ready')",
+          "line": 1200,
+          "col": 20,
+          "kind": "bool",
+          "old": "and",
+          "new": "or",
+          "expr_before": "row['shadow_config'] is not None and row['status'] in ('shadow', 'ready')",
+          "expr_after": "row['shadow_config'] is not None or row['status'] in ('shadow', 'ready')",
+          "source_line": "row[\"shadow_config\"] is not None"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1203:47:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1203,
+          "col": 47,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "epoch = (row[\"state_epoch\"] or 0) + (1 if changed_mid_run else 0)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1203:79:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1203,
+          "col": 79,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "epoch = (row[\"state_epoch\"] or 0) + (1 if changed_mid_run else 0)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1270:25:int:500>501",
+          "fingerprint": "paw_kit/jit/db.py|int|500>501|500",
+          "line": 1270,
+          "col": 25,
+          "kind": "int",
+          "old": "500",
+          "new": "501",
+          "expr_before": "500",
+          "expr_after": "501",
+          "source_line": "max_pairs: int = 500,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1396:11:cmp:is>is not",
+          "fingerprint": "paw_kit/jit/db.py|cmp|is>is not|boundary_id is None",
+          "line": 1396,
+          "col": 11,
+          "kind": "cmp",
+          "old": "is",
+          "new": "is not",
+          "expr_before": "boundary_id is None",
+          "expr_after": "boundary_id is not None",
+          "source_line": "if boundary_id is None:"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1437:11:cmp:>>>=",
+          "fingerprint": "paw_kit/jit/db.py|cmp|>>>=|window > 0",
+          "line": 1437,
+          "col": 11,
+          "kind": "cmp",
+          "old": ">",
+          "new": ">=",
+          "expr_before": "window > 0",
+          "expr_after": "window >= 0",
+          "source_line": "if window > 0 and seq >= window and samples < window:"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1437:20:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1437,
+          "col": 20,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "if window > 0 and seq >= window and samples < window:"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1437:26:cmp:>=>>",
+          "fingerprint": "paw_kit/jit/db.py|cmp|>=>>|seq >= window",
+          "line": 1437,
+          "col": 26,
+          "kind": "cmp",
+          "old": ">=",
+          "new": ">",
+          "expr_before": "seq >= window",
+          "expr_after": "seq > window",
+          "source_line": "if window > 0 and seq >= window and samples < window:"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1460:66:int:5>6",
+          "fingerprint": "paw_kit/jit/db.py|int|5>6|5",
+          "line": 1460,
+          "col": 66,
+          "kind": "int",
+          "old": "5",
+          "new": "6",
+          "expr_before": "5",
+          "expr_after": "6",
+          "source_line": "def get_recent_disagreements(self, task_id: str, limit: int = 5) -> List[Dict[str, Any]]:"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1493:30:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1493,
+          "col": 30,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"call_count\": 0, \"compile_attempts\": 0, \"state_epoch\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1493:53:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1493,
+          "col": 53,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"call_count\": 0, \"compile_attempts\": 0, \"state_epoch\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1493:71:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1493,
+          "col": 71,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"call_count\": 0, \"compile_attempts\": 0, \"state_epoch\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1496:82:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1496,
+          "col": 82,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"demoted_at\": None, \"demoted_agreement\": None, \"fail_open_count\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1504:58:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1504,
+          "col": 58,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"call_count\": record.get(\"call_count\") or 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1505:36:bool:or>and",
+          "fingerprint": "paw_kit/jit/db.py|bool|or>and|record.get('compile_attempts') or 0",
+          "line": 1505,
+          "col": 36,
+          "kind": "bool",
+          "old": "or",
+          "new": "and",
+          "expr_before": "record.get('compile_attempts') or 0",
+          "expr_after": "record.get('compile_attempts') and 0",
+          "source_line": "\"compile_attempts\": record.get(\"compile_attempts\") or 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1521:56:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1521,
+          "col": 56,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "window = int(config.get(\"shadow_window\") or 0)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1524:55:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1524,
+          "col": 55,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "window = int(config.get(\"audit_window\") or 0)"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1527:21:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1527,
+          "col": 21,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "window = 0"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1531:55:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1531,
+          "col": 55,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"phase\": None, \"rate\": None, \"window\": 0, \"samples\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1531:69:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1531,
+          "col": 69,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"phase\": None, \"rate\": None, \"window\": 0, \"samples\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1532:25:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1532,
+          "col": 25,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1532:40:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1532,
+          "col": 40,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1532:52:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1532,
+          "col": 52,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1532:72:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1532,
+          "col": 72,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "\"agree\": 0, \"disagree\": 0, \"error\": 0, \"teacher_error\": 0,"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1544:38:cmp:>>>=",
+          "fingerprint": "paw_kit/jit/db.py|cmp|>>>=|window > 0",
+          "line": 1544,
+          "col": 38,
+          "kind": "cmp",
+          "old": ">",
+          "new": ">=",
+          "expr_before": "window > 0",
+          "expr_after": "window >= 0",
+          "source_line": "phase == \"shadow\" and window > 0"
+        },
+        {
+          "id": "paw_kit/jit/db.py:1544:47:int:0>1",
+          "fingerprint": "paw_kit/jit/db.py|int|0>1|0",
+          "line": 1544,
+          "col": 47,
+          "kind": "int",
+          "old": "0",
+          "new": "1",
+          "expr_before": "0",
+          "expr_after": "1",
+          "source_line": "phase == \"shadow\" and window > 0"
+        }
+      ]
+    },
     "paw_kit/atomicio.py": {
       "mutations": 5,
       "survivors": 0,
       "survivors_detail": []
     },
     "paw_kit/jit/compiler.py": {
-      "mutations": 11,
+      "mutations": 9,
       "survivors": 5,
       "survivors_detail": [
         {
@@ -2910,9 +2778,9 @@
           "source_line": "sync: bool = False,"
         },
         {
-          "id": "paw_kit/jit/compiler.py:121:19:const:True>False",
+          "id": "paw_kit/jit/compiler.py:135:19:const:True>False",
           "fingerprint": "paw_kit/jit/compiler.py|const|True>False|True",
-          "line": 121,
+          "line": 135,
           "col": 19,
           "kind": "const",
           "old": "True",
@@ -2924,13 +2792,13 @@
       ]
     },
     "paw_kit/backend/programasweights.py": {
-      "mutations": 95,
+      "mutations": 99,
       "survivors": 42,
       "survivors_detail": [
         {
-          "id": "paw_kit/backend/programasweights.py:87:22:int:64>65",
+          "id": "paw_kit/backend/programasweights.py:106:22:int:64>65",
           "fingerprint": "paw_kit/backend/programasweights.py|int|64>65|64",
-          "line": 87,
+          "line": 106,
           "col": 22,
           "kind": "int",
           "old": "64",
@@ -2940,9 +2808,9 @@
           "source_line": "_MAX_MANIFEST_BYTES = 64 * 1024"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:87:27:int:1024>1025",
+          "id": "paw_kit/backend/programasweights.py:106:27:int:1024>1025",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1024>1025|1024",
-          "line": 87,
+          "line": 106,
           "col": 27,
           "kind": "int",
           "old": "1024",
@@ -2952,9 +2820,9 @@
           "source_line": "_MAX_MANIFEST_BYTES = 64 * 1024"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:88:24:int:8>9",
+          "id": "paw_kit/backend/programasweights.py:107:24:int:8>9",
           "fingerprint": "paw_kit/backend/programasweights.py|int|8>9|8",
-          "line": 88,
+          "line": 107,
           "col": 24,
           "kind": "int",
           "old": "8",
@@ -2964,9 +2832,9 @@
           "source_line": "_MAX_CACHED_FUNCTIONS = 8 # each holds a loaded llama.cpp model; keep this small"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:98:11:cmp:is not>is",
+          "id": "paw_kit/backend/programasweights.py:117:11:cmp:is not>is",
           "fingerprint": "paw_kit/backend/programasweights.py|cmp|is not>is|importlib.util.find_spec('programasweights') is not None",
-          "line": 98,
+          "line": 117,
           "col": 11,
           "kind": "cmp",
           "old": "is not",
@@ -2976,9 +2844,9 @@
           "source_line": "return importlib.util.find_spec(\"programasweights\") is not None"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:155:21:int:2048>2049",
+          "id": "paw_kit/backend/programasweights.py:195:21:int:2048>2049",
           "fingerprint": "paw_kit/backend/programasweights.py|int|2048>2049|2048",
-          "line": 155,
+          "line": 195,
           "col": 21,
           "kind": "int",
           "old": "2048",
@@ -2988,9 +2856,9 @@
           "source_line": "n_ctx: int = 2048,"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:158:33:int:16>17",
+          "id": "paw_kit/backend/programasweights.py:198:33:int:16>17",
           "fingerprint": "paw_kit/backend/programasweights.py|int|16>17|16",
-          "line": 158,
+          "line": 198,
           "col": 33,
           "kind": "int",
           "old": "16",
@@ -3000,9 +2868,9 @@
           "source_line": "max_spec_examples: int = 16,"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:163:31:int:1>2",
+          "id": "paw_kit/backend/programasweights.py:204:31:int:1>2",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1>2|1",
-          "line": 163,
+          "line": 204,
           "col": 31,
           "kind": "int",
           "old": "1",
@@ -3012,9 +2880,9 @@
           "source_line": "compile_retries: int = 1,"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:199:15:bool:or>and",
+          "id": "paw_kit/backend/programasweights.py:246:15:bool:or>and",
           "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|self._sdk is not None or _sdk_installed()",
-          "line": 199,
+          "line": 246,
           "col": 15,
           "kind": "bool",
           "old": "or",
@@ -3024,9 +2892,9 @@
           "source_line": "return self._sdk is not None or _sdk_installed()"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:232:27:int:2>3",
+          "id": "paw_kit/backend/programasweights.py:308:27:int:2>3",
           "fingerprint": "paw_kit/backend/programasweights.py|int|2>3|2",
-          "line": 232,
+          "line": 308,
           "col": 27,
           "kind": "int",
           "old": "2",
@@ -3036,9 +2904,9 @@
           "source_line": "stacklevel=2,"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:244:48:const:False>True",
+          "id": "paw_kit/backend/programasweights.py:321:48:const:False>True",
           "fingerprint": "paw_kit/backend/programasweights.py|const|False>True|False",
-          "line": 244,
+          "line": 321,
           "col": 48,
           "kind": "const",
           "old": "False",
@@ -3048,9 +2916,9 @@
           "source_line": "getattr(precheck, \"cached\", False)"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:257:31:int:2>3",
+          "id": "paw_kit/backend/programasweights.py:350:31:int:2>3",
           "fingerprint": "paw_kit/backend/programasweights.py|int|2>3|2",
-          "line": 257,
+          "line": 350,
           "col": 31,
           "kind": "int",
           "old": "2",
@@ -3060,9 +2928,21 @@
           "source_line": "stacklevel=2,"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:273:19:bool:or>and",
+          "id": "paw_kit/backend/programasweights.py:364:31:int:2>3",
+          "fingerprint": "paw_kit/backend/programasweights.py|int|2>3|2",
+          "line": 364,
+          "col": 31,
+          "kind": "int",
+          "old": "2",
+          "new": "3",
+          "expr_before": "2",
+          "expr_after": "3",
+          "source_line": "stacklevel=2,"
+        },
+        {
+          "id": "paw_kit/backend/programasweights.py:382:19:bool:or>and",
           "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|getattr(program, 'slug', None) or (program.get('slug') if isinstance(program, dict) else None)",
-          "line": 273,
+          "line": 382,
           "col": 19,
           "kind": "bool",
           "old": "or",
@@ -3072,9 +2952,9 @@
           "source_line": "slug = getattr(program, \"slug\", None) or (program.get(\"slug\") if isinstance(program, dict) else Non\u2026"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:274:21:bool:or>and",
+          "id": "paw_kit/backend/programasweights.py:383:21:bool:or>and",
           "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|getattr(program, 'status', None) or (program.get('status') if isinstance(program, dict) else None)",
-          "line": 274,
+          "line": 383,
           "col": 21,
           "kind": "bool",
           "old": "or",
@@ -3084,9 +2964,9 @@
           "source_line": "status = getattr(program, \"status\", None) or (program.get(\"status\") if isinstance(program, dict) el\u2026"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:275:15:bool:or>and",
+          "id": "paw_kit/backend/programasweights.py:384:15:bool:or>and",
           "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|not program_id or (status and str(status).lower() in _FAILED_STATES)",
-          "line": 275,
+          "line": 384,
           "col": 15,
           "kind": "bool",
           "old": "or",
@@ -3096,9 +2976,9 @@
           "source_line": "if not program_id or (status and str(status).lower() in _FAILED_STATES):"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:276:22:bool:or>and",
+          "id": "paw_kit/backend/programasweights.py:385:22:bool:or>and",
           "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|getattr(program, 'error', None) or (program.get('error') if isinstance(program, dict) else None)",
-          "line": 276,
+          "line": 385,
           "col": 22,
           "kind": "bool",
           "old": "or",
@@ -3108,9 +2988,9 @@
           "source_line": "err = getattr(program, \"error\", None) or (program.get(\"error\") if isinstance(program, dict) else No\u2026"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:303:67:int:2>3",
+          "id": "paw_kit/backend/programasweights.py:427:67:int:2>3",
           "fingerprint": "paw_kit/backend/programasweights.py|int|2>3|2",
-          "line": 303,
+          "line": 427,
           "col": 67,
           "kind": "int",
           "old": "2",
@@ -3120,9 +3000,9 @@
           "source_line": "atomic_write_text(output_path, json.dumps(manifest, indent=2))"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:342:31:int:1>2",
+          "id": "paw_kit/backend/programasweights.py:552:31:int:1>2",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1>2|1",
-          "line": 342,
+          "line": 552,
           "col": 31,
           "kind": "int",
           "old": "1",
@@ -3132,9 +3012,9 @@
           "source_line": "attempt += 1"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:347:33:int:1>2",
+          "id": "paw_kit/backend/programasweights.py:557:33:int:1>2",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1>2|1",
-          "line": 347,
+          "line": 557,
           "col": 33,
           "kind": "int",
           "old": "1",
@@ -3144,9 +3024,9 @@
           "source_line": "f\"{attempt + 1} attempt(s) (connection never established). Run \""
         },
         {
-          "id": "paw_kit/backend/programasweights.py:362:42:int:300>301",
+          "id": "paw_kit/backend/programasweights.py:572:42:int:300>301",
           "fingerprint": "paw_kit/backend/programasweights.py|int|300>301|300",
-          "line": 362,
+          "line": 572,
           "col": 42,
           "kind": "int",
           "old": "300",
@@ -3156,21 +3036,21 @@
           "source_line": "body = exc.response.text[:300] if exc.response is not None else \"\""
         },
         {
-          "id": "paw_kit/backend/programasweights.py:364:69:int:600>601",
+          "id": "paw_kit/backend/programasweights.py:576:45:int:600>601",
           "fingerprint": "paw_kit/backend/programasweights.py|int|600>601|600",
-          "line": 364,
-          "col": 69,
+          "line": 576,
+          "col": 45,
           "kind": "int",
           "old": "600",
           "new": "601",
           "expr_before": "600",
           "expr_after": "601",
-          "source_line": "status_code is not None and 500 <= status_code < 600 and status_code != 504"
+          "source_line": "and 500 <= status_code < 600"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:367:31:int:1>2",
+          "id": "paw_kit/backend/programasweights.py:580:31:int:1>2",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1>2|1",
-          "line": 367,
+          "line": 580,
           "col": 31,
           "kind": "int",
           "old": "1",
@@ -3180,9 +3060,9 @@
           "source_line": "attempt += 1"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:371:47:int:400>401",
+          "id": "paw_kit/backend/programasweights.py:584:47:int:400>401",
           "fingerprint": "paw_kit/backend/programasweights.py|int|400>401|400",
-          "line": 371,
+          "line": 584,
           "col": 47,
           "kind": "int",
           "old": "400",
@@ -3192,9 +3072,9 @@
           "source_line": "if status_code is not None and 400 <= status_code < 500:"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:371:68:int:500>501",
+          "id": "paw_kit/backend/programasweights.py:584:68:int:500>501",
           "fingerprint": "paw_kit/backend/programasweights.py|int|500>501|500",
-          "line": 371,
+          "line": 584,
           "col": 68,
           "kind": "int",
           "old": "500",
@@ -3204,9 +3084,9 @@
           "source_line": "if status_code is not None and 400 <= status_code < 500:"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:378:43:int:1>2",
+          "id": "paw_kit/backend/programasweights.py:591:43:int:1>2",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1>2|1",
-          "line": 378,
+          "line": 591,
           "col": 43,
           "kind": "int",
           "old": "1",
@@ -3216,9 +3096,9 @@
           "source_line": "f\"after {attempt + 1} attempt(s).{detail}\""
         },
         {
-          "id": "paw_kit/backend/programasweights.py:382:39:int:1>2",
+          "id": "paw_kit/backend/programasweights.py:595:39:int:1>2",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1>2|1",
-          "line": 382,
+          "line": 595,
           "col": 39,
           "kind": "int",
           "old": "1",
@@ -3228,9 +3108,9 @@
           "source_line": "f\"after {attempt + 1} attempt(s). Run `paw-kit doctor` to check \""
         },
         {
-          "id": "paw_kit/backend/programasweights.py:426:19:bool:and>or",
+          "id": "paw_kit/backend/programasweights.py:655:19:bool:and>or",
           "fingerprint": "paw_kit/backend/programasweights.py|bool|and>or|status_code is not None and 500 <= status_code < 600",
-          "line": 426,
+          "line": 655,
           "col": 19,
           "kind": "bool",
           "old": "and",
@@ -3240,9 +3120,9 @@
           "source_line": "if status_code is not None and 500 <= status_code < 600:"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:426:47:int:500>501",
+          "id": "paw_kit/backend/programasweights.py:655:47:int:500>501",
           "fingerprint": "paw_kit/backend/programasweights.py|int|500>501|500",
-          "line": 426,
+          "line": 655,
           "col": 47,
           "kind": "int",
           "old": "500",
@@ -3252,9 +3132,9 @@
           "source_line": "if status_code is not None and 500 <= status_code < 600:"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:426:68:int:600>601",
+          "id": "paw_kit/backend/programasweights.py:655:68:int:600>601",
           "fingerprint": "paw_kit/backend/programasweights.py|int|600>601|600",
-          "line": 426,
+          "line": 655,
           "col": 68,
           "kind": "int",
           "old": "600",
@@ -3264,9 +3144,9 @@
           "source_line": "if status_code is not None and 500 <= status_code < 600:"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:441:19:cmp:>=>>",
+          "id": "paw_kit/backend/programasweights.py:670:19:cmp:>=>>",
           "fingerprint": "paw_kit/backend/programasweights.py|cmp|>=>>|time.monotonic() >= deadline",
-          "line": 441,
+          "line": 670,
           "col": 19,
           "kind": "cmp",
           "old": ">=",
@@ -3276,9 +3156,9 @@
           "source_line": "if time.monotonic() >= deadline:"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:446:93:int:1>2",
+          "id": "paw_kit/backend/programasweights.py:676:93:int:1>2",
           "fingerprint": "paw_kit/backend/programasweights.py|int|1>2|1",
-          "line": 446,
+          "line": 676,
           "col": 93,
           "kind": "int",
           "old": "1",
@@ -3288,9 +3168,9 @@
           "source_line": "backoff_idx = min(consecutive_failures, len(self._POLL_FAILURE_BACKOFF_S)) - 1"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:450:35:int:0>1",
+          "id": "paw_kit/backend/programasweights.py:680:35:int:0>1",
           "fingerprint": "paw_kit/backend/programasweights.py|int|0>1|0",
-          "line": 450,
+          "line": 680,
           "col": 35,
           "kind": "int",
           "old": "0",
@@ -3300,33 +3180,9 @@
           "source_line": "consecutive_failures = 0"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:452:25:bool:or>and",
-          "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|get('status') or ''",
-          "line": 452,
-          "col": 25,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "get('status') or ''",
-          "expr_after": "get('status') and ''",
-          "source_line": "status = str(get(\"status\") or \"\").lower()"
-        },
-        {
-          "id": "paw_kit/backend/programasweights.py:456:15:bool:and>or",
-          "fingerprint": "paw_kit/backend/programasweights.py|bool|and>or|program_id and (status in _SUCCESS_STATES or get('completed_at'))",
-          "line": 456,
-          "col": 15,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "program_id and (status in _SUCCESS_STATES or get('completed_at'))",
-          "expr_after": "program_id or (status in _SUCCESS_STATES or get('completed_at'))",
-          "source_line": "if program_id and (status in _SUCCESS_STATES or get(\"completed_at\")):"
-        },
-        {
-          "id": "paw_kit/backend/programasweights.py:456:31:bool:or>and",
+          "id": "paw_kit/backend/programasweights.py:687:31:bool:or>and",
           "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|status in _SUCCESS_STATES or get('completed_at')",
-          "line": 456,
+          "line": 687,
           "col": 31,
           "kind": "bool",
           "old": "or",
@@ -3336,9 +3192,9 @@
           "source_line": "if program_id and (status in _SUCCESS_STATES or get(\"completed_at\")):"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:456:31:cmp:in>not in",
+          "id": "paw_kit/backend/programasweights.py:687:31:cmp:in>not in",
           "fingerprint": "paw_kit/backend/programasweights.py|cmp|in>not in|status in _SUCCESS_STATES",
-          "line": 456,
+          "line": 687,
           "col": 31,
           "kind": "cmp",
           "old": "in",
@@ -3348,9 +3204,9 @@
           "source_line": "if program_id and (status in _SUCCESS_STATES or get(\"completed_at\")):"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:458:15:cmp:>=>>",
+          "id": "paw_kit/backend/programasweights.py:698:15:cmp:>=>>",
           "fingerprint": "paw_kit/backend/programasweights.py|cmp|>=>>|time.monotonic() >= deadline",
-          "line": 458,
+          "line": 698,
           "col": 15,
           "kind": "cmp",
           "old": ">=",
@@ -3360,57 +3216,9 @@
           "source_line": "if time.monotonic() >= deadline:"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:472:11:cmp:>>>=",
-          "fingerprint": "paw_kit/backend/programasweights.py|cmp|>>>=|path.stat().st_size > _MAX_MANIFEST_BYTES",
-          "line": 472,
-          "col": 11,
-          "kind": "cmp",
-          "old": ">",
-          "new": ">=",
-          "expr_before": "path.stat().st_size > _MAX_MANIFEST_BYTES",
-          "expr_after": "path.stat().st_size >= _MAX_MANIFEST_BYTES",
-          "source_line": "if path.stat().st_size > _MAX_MANIFEST_BYTES:"
-        },
-        {
-          "id": "paw_kit/backend/programasweights.py:482:11:bool:or>and",
-          "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|not isinstance(program_id, str) or not program_id",
-          "line": 482,
-          "col": 11,
-          "kind": "bool",
-          "old": "or",
-          "new": "and",
-          "expr_before": "not isinstance(program_id, str) or not program_id",
-          "expr_after": "not isinstance(program_id, str) and (not program_id)",
-          "source_line": "if not isinstance(program_id, str) or not program_id:"
-        },
-        {
-          "id": "paw_kit/backend/programasweights.py:503:18:cmp:>>>=",
-          "fingerprint": "paw_kit/backend/programasweights.py|cmp|>>>=|len(self._functions) > _MAX_CACHED_FUNCTIONS",
-          "line": 503,
-          "col": 18,
-          "kind": "cmp",
-          "old": ">",
-          "new": ">=",
-          "expr_before": "len(self._functions) > _MAX_CACHED_FUNCTIONS",
-          "expr_after": "len(self._functions) >= _MAX_CACHED_FUNCTIONS",
-          "source_line": "while len(self._functions) > _MAX_CACHED_FUNCTIONS:"
-        },
-        {
-          "id": "paw_kit/backend/programasweights.py:504:45:const:False>True",
-          "fingerprint": "paw_kit/backend/programasweights.py|const|False>True|False",
-          "line": 504,
-          "col": 45,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "self._functions.popitem(last=False)"
-        },
-        {
-          "id": "paw_kit/backend/programasweights.py:515:27:int:2>3",
+          "id": "paw_kit/backend/programasweights.py:725:27:int:2>3",
           "fingerprint": "paw_kit/backend/programasweights.py|int|2>3|2",
-          "line": 515,
+          "line": 725,
           "col": 27,
           "kind": "int",
           "old": "2",
@@ -3420,9 +3228,69 @@
           "source_line": "stacklevel=2,"
         },
         {
-          "id": "paw_kit/backend/programasweights.py:519:11:cmp:is not>is",
+          "id": "paw_kit/backend/programasweights.py:736:11:cmp:>>>=",
+          "fingerprint": "paw_kit/backend/programasweights.py|cmp|>>>=|path.stat().st_size > _MAX_MANIFEST_BYTES",
+          "line": 736,
+          "col": 11,
+          "kind": "cmp",
+          "old": ">",
+          "new": ">=",
+          "expr_before": "path.stat().st_size > _MAX_MANIFEST_BYTES",
+          "expr_after": "path.stat().st_size >= _MAX_MANIFEST_BYTES",
+          "source_line": "if path.stat().st_size > _MAX_MANIFEST_BYTES:"
+        },
+        {
+          "id": "paw_kit/backend/programasweights.py:746:11:bool:or>and",
+          "fingerprint": "paw_kit/backend/programasweights.py|bool|or>and|not isinstance(program_id, str) or not program_id",
+          "line": 746,
+          "col": 11,
+          "kind": "bool",
+          "old": "or",
+          "new": "and",
+          "expr_before": "not isinstance(program_id, str) or not program_id",
+          "expr_after": "not isinstance(program_id, str) and (not program_id)",
+          "source_line": "if not isinstance(program_id, str) or not program_id:"
+        },
+        {
+          "id": "paw_kit/backend/programasweights.py:767:18:cmp:>>>=",
+          "fingerprint": "paw_kit/backend/programasweights.py|cmp|>>>=|len(self._functions) > _MAX_CACHED_FUNCTIONS",
+          "line": 767,
+          "col": 18,
+          "kind": "cmp",
+          "old": ">",
+          "new": ">=",
+          "expr_before": "len(self._functions) > _MAX_CACHED_FUNCTIONS",
+          "expr_after": "len(self._functions) >= _MAX_CACHED_FUNCTIONS",
+          "source_line": "while len(self._functions) > _MAX_CACHED_FUNCTIONS:"
+        },
+        {
+          "id": "paw_kit/backend/programasweights.py:768:45:const:False>True",
+          "fingerprint": "paw_kit/backend/programasweights.py|const|False>True|False",
+          "line": 768,
+          "col": 45,
+          "kind": "const",
+          "old": "False",
+          "new": "True",
+          "expr_before": "False",
+          "expr_after": "True",
+          "source_line": "self._functions.popitem(last=False)"
+        },
+        {
+          "id": "paw_kit/backend/programasweights.py:779:27:int:2>3",
+          "fingerprint": "paw_kit/backend/programasweights.py|int|2>3|2",
+          "line": 779,
+          "col": 27,
+          "kind": "int",
+          "old": "2",
+          "new": "3",
+          "expr_before": "2",
+          "expr_after": "3",
+          "source_line": "stacklevel=2,"
+        },
+        {
+          "id": "paw_kit/backend/programasweights.py:783:11:cmp:is not>is",
           "fingerprint": "paw_kit/backend/programasweights.py|cmp|is not>is|self.max_tokens is not None",
-          "line": 519,
+          "line": 783,
           "col": 11,
           "kind": "cmp",
           "old": "is not",
@@ -3434,13 +3302,13 @@
       ]
     },
     "paw_kit/backend/manifest_lineage.py": {
-      "mutations": 14,
-      "survivors": 7,
+      "mutations": 19,
+      "survivors": 6,
       "survivors_detail": [
         {
-          "id": "paw_kit/backend/manifest_lineage.py:52:7:bool:or>and",
+          "id": "paw_kit/backend/manifest_lineage.py:131:7:bool:or>and",
           "fingerprint": "paw_kit/backend/manifest_lineage.py|bool|or>and|not isinstance(inp, str) or not isinstance(out, str)",
-          "line": 52,
+          "line": 131,
           "col": 7,
           "kind": "bool",
           "old": "or",
@@ -3450,21 +3318,9 @@
           "source_line": "if not isinstance(inp, str) or not isinstance(out, str):"
         },
         {
-          "id": "paw_kit/backend/manifest_lineage.py:68:39:bool:and>or",
-          "fingerprint": "paw_kit/backend/manifest_lineage.py|bool|and>or|isinstance(ex, dict) and 'input' in ex and ('output' in ex)",
-          "line": 68,
-          "col": 39,
-          "kind": "bool",
-          "old": "and",
-          "new": "or",
-          "expr_before": "isinstance(ex, dict) and 'input' in ex and ('output' in ex)",
-          "expr_after": "isinstance(ex, dict) or 'input' in ex or 'output' in ex",
-          "source_line": "usable = [ex for ex in examples if isinstance(ex, dict) and \"input\" in ex and \"output\" in ex]"
-        },
-        {
-          "id": "paw_kit/backend/manifest_lineage.py:71:7:cmp:<=><",
+          "id": "paw_kit/backend/manifest_lineage.py:150:7:cmp:<=><",
           "fingerprint": "paw_kit/backend/manifest_lineage.py|cmp|<=><|limit <= 0",
-          "line": 71,
+          "line": 150,
           "col": 7,
           "kind": "cmp",
           "old": "<=",
@@ -3474,9 +3330,9 @@
           "source_line": "if limit <= 0:"
         },
         {
-          "id": "paw_kit/backend/manifest_lineage.py:101:11:bool:or>and",
+          "id": "paw_kit/backend/manifest_lineage.py:180:11:bool:or>and",
           "fingerprint": "paw_kit/backend/manifest_lineage.py|bool|or>and|not path.is_file() or path.stat().st_size > max_bytes",
-          "line": 101,
+          "line": 180,
           "col": 11,
           "kind": "bool",
           "old": "or",
@@ -3486,9 +3342,9 @@
           "source_line": "if not path.is_file() or path.stat().st_size > max_bytes:"
         },
         {
-          "id": "paw_kit/backend/manifest_lineage.py:101:33:cmp:>>>=",
+          "id": "paw_kit/backend/manifest_lineage.py:180:33:cmp:>>>=",
           "fingerprint": "paw_kit/backend/manifest_lineage.py|cmp|>>>=|path.stat().st_size > max_bytes",
-          "line": 101,
+          "line": 180,
           "col": 33,
           "kind": "cmp",
           "old": ">",
@@ -3498,9 +3354,9 @@
           "source_line": "if not path.is_file() or path.stat().st_size > max_bytes:"
         },
         {
-          "id": "paw_kit/backend/manifest_lineage.py:157:7:cmp:is>is not",
+          "id": "paw_kit/backend/manifest_lineage.py:306:7:cmp:is>is not",
           "fingerprint": "paw_kit/backend/manifest_lineage.py|cmp|is>is not|obj is None",
-          "line": 157,
+          "line": 306,
           "col": 7,
           "kind": "cmp",
           "old": "is",
@@ -3510,9 +3366,9 @@
           "source_line": "if obj is None:"
         },
         {
-          "id": "paw_kit/backend/manifest_lineage.py:164:11:cmp:is not>is",
+          "id": "paw_kit/backend/manifest_lineage.py:313:11:cmp:is not>is",
           "fingerprint": "paw_kit/backend/manifest_lineage.py|cmp|is not>is|value is not None",
-          "line": 164,
+          "line": 313,
           "col": 11,
           "kind": "cmp",
           "old": "is not",
@@ -3524,13 +3380,37 @@
       ]
     },
     "paw_kit/serve/server.py": {
-      "mutations": 88,
-      "survivors": 33,
+      "mutations": 135,
+      "survivors": 31,
       "survivors_detail": [
         {
-          "id": "paw_kit/serve/server.py:133:48:int:2>3",
+          "id": "paw_kit/serve/server.py:121:35:int:1>2",
+          "fingerprint": "paw_kit/serve/server.py|int|1>2|1",
+          "line": 121,
+          "col": 35,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "self.total_requests += 1"
+        },
+        {
+          "id": "paw_kit/serve/server.py:122:32:int:1>2",
+          "fingerprint": "paw_kit/serve/server.py|int|1>2|1",
+          "line": 122,
+          "col": 32,
+          "kind": "int",
+          "old": "1",
+          "new": "2",
+          "expr_before": "1",
+          "expr_after": "2",
+          "source_line": "self.error_count += 1"
+        },
+        {
+          "id": "paw_kit/serve/server.py:160:48:int:2>3",
           "fingerprint": "paw_kit/serve/server.py|int|2>3|2",
-          "line": 133,
+          "line": 160,
           "col": 48,
           "kind": "int",
           "old": "2",
@@ -3540,9 +3420,9 @@
           "source_line": "\"uptime_seconds\": round(uptime, 2),"
         },
         {
-          "id": "paw_kit/serve/server.py:142:48:int:1>2",
+          "id": "paw_kit/serve/server.py:169:48:int:1>2",
           "fingerprint": "paw_kit/serve/server.py|int|1>2|1",
-          "line": 142,
+          "line": 169,
           "col": 48,
           "kind": "int",
           "old": "1",
@@ -3552,9 +3432,9 @@
           "source_line": "p99 = sorted_lat[min(int(n * 0.99), n - 1)]"
         },
         {
-          "id": "paw_kit/serve/server.py:146:44:int:2>3",
+          "id": "paw_kit/serve/server.py:173:44:int:2>3",
           "fingerprint": "paw_kit/serve/server.py|int|2>3|2",
-          "line": 146,
+          "line": 173,
           "col": 44,
           "kind": "int",
           "old": "2",
@@ -3564,9 +3444,9 @@
           "source_line": "\"uptime_seconds\": round(uptime, 2),"
         },
         {
-          "id": "paw_kit/serve/server.py:147:41:int:3>4",
+          "id": "paw_kit/serve/server.py:174:41:int:3>4",
           "fingerprint": "paw_kit/serve/server.py|int|3>4|3",
-          "line": 147,
+          "line": 174,
           "col": 41,
           "kind": "int",
           "old": "3",
@@ -3576,9 +3456,9 @@
           "source_line": "\"p50_latency_ms\": round(p50, 3),"
         },
         {
-          "id": "paw_kit/serve/server.py:148:41:int:3>4",
+          "id": "paw_kit/serve/server.py:175:41:int:3>4",
           "fingerprint": "paw_kit/serve/server.py|int|3>4|3",
-          "line": 148,
+          "line": 175,
           "col": 41,
           "kind": "int",
           "old": "3",
@@ -3588,9 +3468,9 @@
           "source_line": "\"p95_latency_ms\": round(p95, 3),"
         },
         {
-          "id": "paw_kit/serve/server.py:149:41:int:3>4",
+          "id": "paw_kit/serve/server.py:176:41:int:3>4",
           "fingerprint": "paw_kit/serve/server.py|int|3>4|3",
-          "line": 149,
+          "line": 176,
           "col": 41,
           "kind": "int",
           "old": "3",
@@ -3600,9 +3480,9 @@
           "source_line": "\"p99_latency_ms\": round(p99, 3),"
         },
         {
-          "id": "paw_kit/serve/server.py:167:15:bool:and>or",
+          "id": "paw_kit/serve/server.py:194:15:bool:and>or",
           "fingerprint": "paw_kit/serve/server.py|bool|and>or|isinstance(item, dict) and item.get('type') == 'text'",
-          "line": 167,
+          "line": 194,
           "col": 15,
           "kind": "bool",
           "old": "and",
@@ -3612,9 +3492,9 @@
           "source_line": "if isinstance(item, dict) and item.get(\"type\") == \"text\":"
         },
         {
-          "id": "paw_kit/serve/server.py:224:19:cmp:>>>=",
+          "id": "paw_kit/serve/server.py:299:19:cmp:>>>=",
           "fingerprint": "paw_kit/serve/server.py|cmp|>>>=|int(content_length) > self.max_body_bytes",
-          "line": 224,
+          "line": 299,
           "col": 19,
           "kind": "cmp",
           "old": ">",
@@ -3624,9 +3504,9 @@
           "source_line": "if int(content_length) > self.max_body_bytes:"
         },
         {
-          "id": "paw_kit/serve/server.py:236:22:int:0>1",
+          "id": "paw_kit/serve/server.py:311:22:int:0>1",
           "fingerprint": "paw_kit/serve/server.py|int|0>1|0",
-          "line": 236,
+          "line": 311,
           "col": 22,
           "kind": "int",
           "old": "0",
@@ -3636,9 +3516,9 @@
           "source_line": "total_bytes = 0"
         },
         {
-          "id": "paw_kit/serve/server.py:244:15:cmp:>>>=",
+          "id": "paw_kit/serve/server.py:335:15:cmp:>>>=",
           "fingerprint": "paw_kit/serve/server.py|cmp|>>>=|total_bytes > self.max_body_bytes",
-          "line": 244,
+          "line": 335,
           "col": 15,
           "kind": "cmp",
           "old": ">",
@@ -3648,21 +3528,9 @@
           "source_line": "if total_bytes > self.max_body_bytes:"
         },
         {
-          "id": "paw_kit/serve/server.py:248:44:const:False>True",
-          "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 248,
-          "col": 44,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "if not message.get(\"more_body\", False):"
-        },
-        {
-          "id": "paw_kit/serve/server.py:262:33:int:120>121",
+          "id": "paw_kit/serve/server.py:353:33:int:120>121",
           "fingerprint": "paw_kit/serve/server.py|int|120>121|120",
-          "line": 262,
+          "line": 353,
           "col": 33,
           "kind": "int",
           "old": "120",
@@ -3672,33 +3540,9 @@
           "source_line": "_DEFAULT_RATE_LIMIT_PER_MINUTE = 120"
         },
         {
-          "id": "paw_kit/serve/server.py:306:43:const:False>True",
-          "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 306,
-          "col": 43,
-          "kind": "const",
-          "old": "False",
-          "new": "True",
-          "expr_before": "False",
-          "expr_after": "True",
-          "source_line": "self._buckets.popitem(last=False)"
-        },
-        {
-          "id": "paw_kit/serve/server.py:315:28:int:0>1",
-          "fingerprint": "paw_kit/serve/server.py|int|0>1|0",
-          "line": 315,
-          "col": 28,
-          "kind": "int",
-          "old": "0",
-          "new": "1",
-          "expr_before": "0",
-          "expr_after": "1",
-          "source_line": "client_key = client[0] if client else \"unknown\""
-        },
-        {
-          "id": "paw_kit/serve/server.py:351:75:const:True>False",
+          "id": "paw_kit/serve/server.py:756:75:const:True>False",
           "fingerprint": "paw_kit/serve/server.py|const|True>False|True",
-          "line": 351,
+          "line": 756,
           "col": 75,
           "kind": "const",
           "old": "True",
@@ -3708,9 +3552,9 @@
           "source_line": "state.record_request((time.perf_counter() - t0) * 1000.0, is_error=True)"
         },
         {
-          "id": "paw_kit/serve/server.py:366:43:const:False>True",
+          "id": "paw_kit/serve/server.py:786:43:const:False>True",
           "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 366,
+          "line": 786,
           "col": 43,
           "kind": "const",
           "old": "False",
@@ -3720,9 +3564,21 @@
           "source_line": "state.record_request(latency, is_error=False)"
         },
         {
-          "id": "paw_kit/serve/server.py:438:51:int:32>33",
+          "id": "paw_kit/serve/server.py:872:23:int:2>3",
+          "fingerprint": "paw_kit/serve/server.py|int|2>3|2",
+          "line": 872,
+          "col": 23,
+          "kind": "int",
+          "old": "2",
+          "new": "3",
+          "expr_before": "2",
+          "expr_after": "3",
+          "source_line": "stacklevel=2,"
+        },
+        {
+          "id": "paw_kit/serve/server.py:897:51:int:32>33",
           "fingerprint": "paw_kit/serve/server.py|int|32>33|32",
-          "line": 438,
+          "line": 897,
           "col": 51,
           "kind": "int",
           "old": "32",
@@ -3732,10 +3588,10 @@
           "source_line": "configured_api_key = secrets.token_urlsafe(32)"
         },
         {
-          "id": "paw_kit/serve/server.py:497:30:const:False>True",
+          "id": "paw_kit/serve/server.py:963:34:const:False>True",
           "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 497,
-          "col": 30,
+          "line": 963,
+          "col": 34,
           "kind": "const",
           "old": "False",
           "new": "True",
@@ -3744,33 +3600,9 @@
           "source_line": "allow_credentials=False,"
         },
         {
-          "id": "paw_kit/serve/server.py:516:71:int:1024>1025",
-          "fingerprint": "paw_kit/serve/server.py|int|1024>1025|1024",
-          "line": 516,
-          "col": 71,
-          "kind": "int",
-          "old": "1024",
-          "new": "1025",
-          "expr_before": "1024",
-          "expr_after": "1025",
-          "source_line": "app.add_middleware(PayloadSizeLimitMiddleware, max_body_bytes=10 * 1024 * 1024)"
-        },
-        {
-          "id": "paw_kit/serve/server.py:516:78:int:1024>1025",
-          "fingerprint": "paw_kit/serve/server.py|int|1024>1025|1024",
-          "line": 516,
-          "col": 78,
-          "kind": "int",
-          "old": "1024",
-          "new": "1025",
-          "expr_before": "1024",
-          "expr_after": "1025",
-          "source_line": "app.add_middleware(PayloadSizeLimitMiddleware, max_body_bytes=10 * 1024 * 1024)"
-        },
-        {
-          "id": "paw_kit/serve/server.py:575:48:const:False>True",
+          "id": "paw_kit/serve/server.py:1069:48:const:False>True",
           "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 575,
+          "line": 1069,
           "col": 48,
           "kind": "const",
           "old": "False",
@@ -3780,9 +3612,9 @@
           "source_line": "@app.get(\"/openapi.json\", include_in_schema=False)"
         },
         {
-          "id": "paw_kit/serve/server.py:582:40:const:False>True",
+          "id": "paw_kit/serve/server.py:1076:40:const:False>True",
           "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 582,
+          "line": 1076,
           "col": 40,
           "kind": "const",
           "old": "False",
@@ -3792,9 +3624,9 @@
           "source_line": "@app.get(\"/docs\", include_in_schema=False)"
         },
         {
-          "id": "paw_kit/serve/server.py:587:41:const:False>True",
+          "id": "paw_kit/serve/server.py:1080:41:const:False>True",
           "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 587,
+          "line": 1080,
           "col": 41,
           "kind": "const",
           "old": "False",
@@ -3804,9 +3636,9 @@
           "source_line": "@app.get(\"/redoc\", include_in_schema=False)"
         },
         {
-          "id": "paw_kit/serve/server.py:611:38:int:2>3",
+          "id": "paw_kit/serve/server.py:1102:38:int:2>3",
           "fingerprint": "paw_kit/serve/server.py|int|2>3|2",
-          "line": 611,
+          "line": 1102,
           "col": 38,
           "kind": "int",
           "old": "2",
@@ -3816,9 +3648,9 @@
           "source_line": "latency_ms=round(latency, 2),"
         },
         {
-          "id": "paw_kit/serve/server.py:632:19:cmp:==>!=",
+          "id": "paw_kit/serve/server.py:1122:19:cmp:==>!=",
           "fingerprint": "paw_kit/serve/server.py|cmp|==>!=|msg.role == 'system'",
-          "line": 632,
+          "line": 1122,
           "col": 19,
           "kind": "cmp",
           "old": "==",
@@ -3828,9 +3660,9 @@
           "source_line": "if msg.role == \"system\":"
         },
         {
-          "id": "paw_kit/serve/server.py:640:19:bool:and>or",
+          "id": "paw_kit/serve/server.py:1130:19:bool:and>or",
           "fingerprint": "paw_kit/serve/server.py|bool|and>or|system_content and last_user",
-          "line": 640,
+          "line": 1130,
           "col": 19,
           "kind": "bool",
           "old": "and",
@@ -3840,9 +3672,9 @@
           "source_line": "if system_content and last_user"
         },
         {
-          "id": "paw_kit/serve/server.py:660:45:int:12>13",
+          "id": "paw_kit/serve/server.py:1150:45:int:12>13",
           "fingerprint": "paw_kit/serve/server.py|int|12>13|12",
-          "line": 660,
+          "line": 1150,
           "col": 45,
           "kind": "int",
           "old": "12",
@@ -3852,9 +3684,9 @@
           "source_line": "id=f\"chatcmpl-{uuid.uuid4().hex[:12]}\","
         },
         {
-          "id": "paw_kit/serve/server.py:666:26:int:0>1",
+          "id": "paw_kit/serve/server.py:1156:26:int:0>1",
           "fingerprint": "paw_kit/serve/server.py|int|0>1|0",
-          "line": 666,
+          "line": 1156,
           "col": 26,
           "kind": "int",
           "old": "0",
@@ -3864,9 +3696,9 @@
           "source_line": "index=0,"
         },
         {
-          "id": "paw_kit/serve/server.py:695:19:bool:and>or",
+          "id": "paw_kit/serve/server.py:1184:19:bool:and>or",
           "fingerprint": "paw_kit/serve/server.py|bool|and>or|system_text and last_user",
-          "line": 695,
+          "line": 1184,
           "col": 19,
           "kind": "bool",
           "old": "and",
@@ -3876,9 +3708,9 @@
           "source_line": "if system_text and last_user"
         },
         {
-          "id": "paw_kit/serve/server.py:715:40:int:16>17",
+          "id": "paw_kit/serve/server.py:1204:40:int:16>17",
           "fingerprint": "paw_kit/serve/server.py|int|16>17|16",
-          "line": 715,
+          "line": 1204,
           "col": 40,
           "kind": "int",
           "old": "16",
@@ -3888,9 +3720,9 @@
           "source_line": "id=f\"msg_{uuid.uuid4().hex[:16]}\","
         },
         {
-          "id": "paw_kit/serve/server.py:733:16:int:8000>8001",
+          "id": "paw_kit/serve/server.py:1222:16:int:8000>8001",
           "fingerprint": "paw_kit/serve/server.py|int|8000>8001|8000",
-          "line": 733,
+          "line": 1222,
           "col": 16,
           "kind": "int",
           "old": "8000",
@@ -3900,9 +3732,9 @@
           "source_line": "port: int = 8000,"
         },
         {
-          "id": "paw_kit/serve/server.py:737:28:const:False>True",
+          "id": "paw_kit/serve/server.py:1226:28:const:False>True",
           "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 737,
+          "line": 1226,
           "col": 28,
           "kind": "const",
           "old": "False",
@@ -3912,9 +3744,9 @@
           "source_line": "allow_anonymous: bool = False,"
         },
         {
-          "id": "paw_kit/serve/server.py:739:17:const:False>True",
+          "id": "paw_kit/serve/server.py:1228:17:const:False>True",
           "fingerprint": "paw_kit/serve/server.py|const|False>True|False",
-          "line": 739,
+          "line": 1228,
           "col": 17,
           "kind": "const",
           "old": "False",
@@ -3926,13 +3758,13 @@
       ]
     },
     "paw_kit/serve/docker.py": {
-      "mutations": 11,
+      "mutations": 15,
       "survivors": 2,
       "survivors_detail": [
         {
-          "id": "paw_kit/serve/docker.py:226:7:cmp:==>!=",
+          "id": "paw_kit/serve/docker.py:320:7:cmp:==>!=",
           "fingerprint": "paw_kit/serve/docker.py|cmp|==>!=|backend == 'real'",
-          "line": 226,
+          "line": 320,
           "col": 7,
           "kind": "cmp",
           "old": "==",
@@ -3942,9 +3774,9 @@
           "source_line": "if backend == \"real\":"
         },
         {
-          "id": "paw_kit/serve/docker.py:329:22:const:True>False",
+          "id": "paw_kit/serve/docker.py:423:22:const:True>False",
           "fingerprint": "paw_kit/serve/docker.py|const|True>False|True",
-          "line": 329,
+          "line": 423,
           "col": 22,
           "kind": "const",
           "old": "True",
