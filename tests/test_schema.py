@@ -464,12 +464,28 @@ def test_recursive_model_raises_paw_schema_error() -> None:
         pydantic_to_regex(RecursiveNode)
 
 
+def _grammar_applying_mock_backend() -> MockPAWBackend:
+    """A `MockPAWBackend` with the capability flag forced back to `True`.
+
+    These tests are about `load()`/`pydantic_to_regex`'s error-wrapping behaviour
+    at grammar-compile time, not about `MockPAWBackend`'s own inference path --
+    that behaviour is unreachable through the *default* `MockPAWBackend`, whose
+    class-level `applies_grammar_constraint = False` (X-1) makes `load()` skip
+    grammar compilation entirely. Overriding the instance attribute exercises
+    exactly the code path each test is actually testing.
+    """
+    backend = MockPAWBackend()
+    backend.applies_grammar_constraint = True
+    return backend
+
+
 def test_load_wraps_recursion_error_in_paw_schema_error() -> None:
     """Verify load() wraps recursive model errors in PAWSchemaError."""
     with pytest.raises(PAWSchemaError):
         load(
             adapter_path="models/test.paw",
             response_model=RecursiveNode,
+            backend=_grammar_applying_mock_backend(),
         )
 
 
@@ -484,7 +500,11 @@ def test_load_wraps_unexpected_compilation_error() -> None:
     loader_module.pydantic_to_regex = _boom
     try:
         with pytest.raises(PAWSchemaError, match="Failed to compile grammar regex"):
-            load(adapter_path="models/test.paw", response_model=TicketTriage)
+            load(
+                adapter_path="models/test.paw",
+                response_model=TicketTriage,
+                backend=_grammar_applying_mock_backend(),
+            )
     finally:
         loader_module.pydantic_to_regex = original
 
@@ -522,7 +542,11 @@ def test_s13_hard_raise_preserved_without_fallback() -> None:
     (test_load_wraps_recursion_error_in_paw_schema_error above pins this too;
     this test pins it explicitly alongside S-13's new, opt-in recovery path)."""
     with pytest.raises(PAWSchemaError, match="Recursive model detected"):
-        load(adapter_path="models/test.paw", response_model=RecursiveNode)
+        load(
+            adapter_path="models/test.paw",
+            response_model=RecursiveNode,
+            backend=_grammar_applying_mock_backend(),
+        )
 
 
 def test_s14_warns_once_and_exposes_a_local_fallback_counter(tmp_path) -> None:
@@ -3003,3 +3027,351 @@ def test_a_collection_bound_exactly_at_the_item_budget_is_expressed_S_9() -> Non
     assert _re.fullmatch(pat, '{"x":%s}' % outside) is None, (
         "the bound was not applied at the budget value itself"
     )
+
+
+# --- Phase T (patch-schema-realbackend-interaction / X-1): capability-gated grammar compilation ---
+
+
+def test_x1_arm1_refused_schema_serves_normally_end_to_end_on_mock_backend(tmp_path) -> None:
+    """Test 1 (Phase T / X-1): a response_model refused by Track E's soundness rules
+    (here RecursiveNode, which raises 'Recursive model detected' under pydantic_to_regex)
+    loads and serves normally end-to-end through @compile_on_hit against the default
+    MockPAWBackend (applies_grammar_constraint = False).
+
+    At main: every call in ready state failed open to teacher, climbing the fail-open counter.
+    On branch: the adapter serves directly, call succeeds, and fail-open count stays 0.
+    """
+    from paw_kit import compile_on_hit
+
+    cache_dir = str(tmp_path / "cache_x1_arm1")
+    backend = MockPAWBackend()
+    assert backend.applies_grammar_constraint is False
+
+    teacher_invocations = 0
+
+    @compile_on_hit(
+        spec="X-1 finding end-to-end",
+        threshold=2,
+        response_model=RecursiveNode,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(inp: str) -> RecursiveNode:
+        nonlocal teacher_invocations
+        teacher_invocations += 1
+        return RecursiveNode(value=f"teacher:{inp}")
+
+    # Call 1: teacher serves, records trace
+    res1 = svc("input_a")
+    assert teacher_invocations == 1
+    assert res1.value == "teacher:input_a"
+
+    # Call 2: hits threshold=2 -> triggers sync compile -> promotes to ready
+    res2 = svc("input_a")
+    assert teacher_invocations == 2
+    assert svc.is_compiled()  # type: ignore[attr-defined]
+    assert svc.get_fail_open_count() == 0  # type: ignore[attr-defined]
+
+    # Calls 3 & 4: in ready state, adapter serves without raising PAWSchemaError!
+    # Mock backend matches the example from training and returns the JSON string.
+    res3 = svc("input_a")
+    assert teacher_invocations == 2  # Teacher was NOT invoked!
+    assert isinstance(res3, RecursiveNode)
+    assert res3.value == "teacher:input_a"
+    assert svc.get_fail_open_count() == 0  # type: ignore[attr-defined]
+
+    res4 = svc("input_a")
+    assert teacher_invocations == 2  # Still not invoked!
+    assert isinstance(res4, RecursiveNode)
+    assert res4.value == "teacher:input_a"
+    assert svc.get_fail_open_count() == 0  # type: ignore[attr-defined]
+
+
+def test_x1_arm2_pydantic_to_regex_never_called_when_capability_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test 2 (Phase T / X-1): pydantic_to_regex is never called when the backend's
+    applies_grammar_constraint capability is False.
+
+    Asserted by spying on paw_kit.schema.loader.pydantic_to_regex, not merely inferring
+    from the absence of an exception (which an LRU cache hit could mask).
+    """
+    import paw_kit.schema.loader as loader_module
+
+    call_count = {"n": 0}
+    real_pydantic_to_regex = loader_module.pydantic_to_regex
+
+    def spy_pydantic_to_regex(*args: Any, **kwargs: Any) -> str:
+        call_count["n"] += 1
+        return real_pydantic_to_regex(*args, **kwargs)
+
+    monkeypatch.setattr(loader_module, "pydantic_to_regex", spy_pydantic_to_regex)
+
+    backend = MockPAWBackend()
+    assert getattr(backend, "applies_grammar_constraint", True) is False
+
+    # Test with both a normal compilable schema and a refused schema
+    fn1 = load(adapter_path="models/test.paw", response_model=TicketTriage, backend=backend)
+    assert call_count["n"] == 0
+
+    fn2 = load(adapter_path="models/test.paw", response_model=RecursiveNode, backend=backend)
+    assert call_count["n"] == 0
+
+
+def test_x1_arm4_duck_typed_backend_without_attribute_preserves_grammar_compilation_and_raises() -> None:
+    """Test 4 (Phase T / X-1): an object duck-typing the AbstractPAWBackend protocol
+    (has compile/infer/is_available) without subclassing AbstractPAWBackend and without
+    defining applies_grammar_constraint defaults to applies_grammar_constraint=True via
+    getattr(backend, "applies_grammar_constraint", True).
+
+    Confirms load() against it behaves exactly as it did before this track:
+    1. Grammar is compiled (pydantic_to_regex runs and passes constraint to infer).
+    2. Track E raises still fire when response_model is refused (e.g. RecursiveNode).
+    3. S-13 fallback degradation still works when fallback_provider is provided.
+    """
+    class DuckTypedBackend:
+        """Duck-typed backend: does NOT subclass AbstractPAWBackend and defines NO applies_grammar_constraint."""
+
+        def __init__(self) -> None:
+            self.last_grammar: Optional[str] = None
+
+        def compile(self, spec: str, examples: List[Dict[str, str]], output_path: str) -> str:
+            return output_path
+
+        def infer(
+            self,
+            adapter_path: str,
+            input_text: str,
+            grammar_constraint: Optional[str] = None,
+        ) -> str:
+            self.last_grammar = grammar_constraint
+            return '{"ticket_id": 10, "priority": "low", "status": "open"}'
+
+        def is_available(self) -> bool:
+            return True
+
+    backend = DuckTypedBackend()
+    assert not hasattr(backend, "applies_grammar_constraint")
+    assert getattr(backend, "applies_grammar_constraint", True) is True
+
+    # 1. Unrefused schema: grammar is compiled and passed to infer
+    fn = load(adapter_path="models/test.paw", response_model=TicketTriage, backend=backend)
+    res = fn("prompt")
+    assert isinstance(res, TicketTriage)
+    assert backend.last_grammar is not None
+    assert '"ticket_id"' in backend.last_grammar
+
+    # 2. Refused schema without fallback: raises PAWSchemaError
+    with pytest.raises(PAWSchemaError, match="Recursive model detected"):
+        load(adapter_path="models/test.paw", response_model=RecursiveNode, backend=backend)
+
+    # 3. Refused schema with fallback: degrades to unconstrained with warning
+    def fallback(inp: str) -> RecursiveNode:
+        return RecursiveNode(value=f"fallback:{inp}")
+
+    with pytest.warns(UserWarning, match="[Gg]rammar"):
+        fn_fallback = load(
+            adapter_path="models/test.paw",
+            response_model=RecursiveNode,
+            backend=backend,
+            fallback_provider=fallback,
+        )
+    assert fn_fallback("x").value == "fallback:x"
+
+
+def test_x1_arm5_replacement_warning_scope_and_content(tmp_path) -> None:
+    """Test 5 (Phase T / X-1): load() emits a UserWarning when skipping grammar
+    compilation for a capability-False backend.
+
+    Asserts:
+    1. Warning mentions post-hoc validation.
+    2. Exactly one warning per load() call.
+    3. Two load() calls under simplefilter('always') emit two warnings, confirming
+       warning emission is per load() / bound function, not suppressed across calls.
+    4. Repeated invocations of the returned bound function do NOT emit further warnings.
+    """
+    import warnings
+
+    backend = MockPAWBackend()
+    assert backend.applies_grammar_constraint is False
+
+    adapter_file = str(tmp_path / "model.paw")
+    backend.compile("spec", examples=[], output_path=adapter_file)
+    backend.set_default_response(adapter_file, '{"ticket_id": 1, "priority": "low", "status": "open"}')
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+
+        # First load(): emits exactly one UserWarning mentioning post-hoc validation
+        fn1 = load(adapter_path=adapter_file, response_model=TicketTriage, backend=backend)
+        relevant_warnings_1 = [
+            w for w in recorded
+            if issubclass(w.category, UserWarning) and "post-hoc Pydantic validation" in str(w.message)
+        ]
+        assert len(relevant_warnings_1) == 1
+        assert "MockPAWBackend cannot apply grammar_constraint at decoding time" in str(relevant_warnings_1[0].message)
+
+        # Second load(): under simplefilter("always"), emits a second warning (not suppressed)
+        fn2 = load(adapter_path=adapter_file, response_model=TicketTriage, backend=backend)
+        relevant_warnings_2 = [
+            w for w in recorded
+            if issubclass(w.category, UserWarning) and "post-hoc Pydantic validation" in str(w.message)
+        ]
+        assert len(relevant_warnings_2) == 2
+
+        # Executing the returned bound function does NOT emit additional warnings
+        res1 = fn1("test_input_1")
+        assert isinstance(res1, TicketTriage)
+        res2 = fn1("test_input_2")
+        assert isinstance(res2, TicketTriage)
+        relevant_warnings_3 = [
+            w for w in recorded
+            if issubclass(w.category, UserWarning) and "post-hoc Pydantic validation" in str(w.message)
+        ]
+        assert len(relevant_warnings_3) == 2
+
+
+def test_x1_arm5b_warning_fires_again_after_recompile(tmp_path) -> None:
+    """Test 5b (Phase T / X-1 / F4.1): warning fires again after a recompile.
+
+    Drives a bound function via @compile_on_hit against MockPAWBackend through
+    a recompile that changes the adapter artifact's stat identity (st_mtime_ns,
+    st_size, st_ino), forcing a fresh load() via _ADAPTER_CALLABLE_CACHE miss.
+    With warnings.simplefilter("always") active, asserts a second warning is
+    emitted rather than suppressed by a module-level or process-level deduplication.
+    """
+    import time
+    import warnings
+    from paw_kit import compile_on_hit
+    import paw_kit.jit.decorator as decorator_module
+
+    cache_dir = str(tmp_path / "cache_x1_arm5b")
+    backend = MockPAWBackend()
+
+    @compile_on_hit(
+        spec="X-1 arm 5b recompile warning test",
+        threshold=1,
+        response_model=TicketTriage,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(inp: str) -> TicketTriage:
+        return TicketTriage(ticket_id=1, priority=PriorityEnum.LOW, status="open")
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+
+        # Call 1: compiles adapter (status -> ready)
+        svc("req1")
+        assert svc.is_compiled()  # type: ignore[attr-defined]
+
+        # Call 2: in ready state -> cache miss -> load() is called -> emits 1st warning
+        svc("req1")
+        warns_after_load1 = [
+            w for w in recorded
+            if issubclass(w.category, UserWarning) and "cannot apply grammar_constraint" in str(w.message)
+        ]
+        assert len(warns_after_load1) == 1
+
+        # Call 3: in ready state -> adapter-callable cache hit -> no fresh load() -> no new warning
+        svc("req1")
+        warns_after_call3 = [
+            w for w in recorded
+            if issubclass(w.category, UserWarning) and "cannot apply grammar_constraint" in str(w.message)
+        ]
+        assert len(warns_after_call3) == 1
+
+        # Recompile the task: returning it to tracing and triggering compilation
+        # creates a fresh artifact at out_path via atomic_write_text, changing stat identity.
+        out_path = svc.db.get_adapter_path(svc.task_id)  # type: ignore[attr-defined]
+        svc.db.set_status(svc.task_id, "tracing")  # type: ignore[attr-defined]
+        time.sleep(0.01)
+        decorator_module._GLOBAL_COMPILER.trigger_compilation(
+            task_id=svc.task_id,  # type: ignore[attr-defined]
+            spec="X-1 arm 5b recompile warning test",
+            db=svc.db,  # type: ignore[attr-defined]
+            backend=backend,
+            output_path=out_path,
+            sync=True,
+        )
+
+        # Call 4: after recompile -> stat identity changed -> cache miss -> fresh load()!
+        # Under simplefilter("always"), exactly one more warning must be emitted.
+        svc("req1")
+        warns_after_recompile = [
+            w for w in recorded
+            if issubclass(w.category, UserWarning) and "cannot apply grammar_constraint" in str(w.message)
+        ]
+        assert len(warns_after_recompile) == 2
+
+
+def test_x1_arm7_fallback_chain_negative_direction_capability_true_backend(tmp_path) -> None:
+    """Test 7 (Phase T / X-1 / F4.4): Fallback chain, negative direction.
+
+    With a capability-True backend (_grammar_applying_mock_backend()) and NO fallback_provider,
+    the same refused response_model (RecursiveNode) must still raise PAWSchemaError out of load().
+    When driven through the full @compile_on_hit wrapper in ready state:
+    - load() raises PAWSchemaError
+    - the caller is still served by the teacher (fail-open safety)
+    - wrapper.get_fail_open_count() climbs across repeated calls.
+
+    This proves the fix only removed the raise for backends that cannot use the grammar,
+    not for backends that can.
+    """
+    from paw_kit import compile_on_hit
+
+    cache_dir = str(tmp_path / "cache_x1_arm7")
+    backend = _grammar_applying_mock_backend()
+    assert backend.applies_grammar_constraint is True
+
+    teacher_invocations = 0
+
+    @compile_on_hit(
+        spec="X-1 arm 7 negative direction test",
+        threshold=2,
+        response_model=RecursiveNode,
+        cache_dir=cache_dir,
+        backend=backend,
+        sync_compile=True,
+        shadow_window=0,
+    )
+    def svc(inp: str) -> RecursiveNode:
+        nonlocal teacher_invocations
+        teacher_invocations += 1
+        return RecursiveNode(value=f"teacher:{inp}")
+
+    # Call 1: teacher serves, records trace
+    res1 = svc("input_x")
+    assert teacher_invocations == 1
+    assert res1.value == "teacher:input_x"
+
+    # Call 2: hits threshold -> compiles -> status ready
+    res2 = svc("input_x")
+    assert teacher_invocations == 2
+    assert svc.is_compiled()  # type: ignore[attr-defined]
+    assert svc.get_fail_open_count() == 0  # type: ignore[attr-defined]
+
+    # Call 3: in ready state, decorator invokes load() with RecursiveNode and no fallback_provider.
+    # Because backend.applies_grammar_constraint is True, load() attempts grammar compilation,
+    # raising PAWSchemaError("Recursive model detected...").
+    # The wrapper catches it, increments fail-open count, and serves teacher!
+    res3 = svc("input_x")
+    assert teacher_invocations == 3  # Teacher served the request!
+    assert isinstance(res3, RecursiveNode)
+    assert res3.value == "teacher:input_x"
+    assert svc.get_fail_open_count() == 1  # type: ignore[attr-defined]
+
+    # Call 4: second failure in ready state -> fail-open count continues to climb
+    res4 = svc("input_x")
+    assert teacher_invocations == 4  # Teacher served again!
+    assert isinstance(res4, RecursiveNode)
+    assert res4.value == "teacher:input_x"
+    assert svc.get_fail_open_count() == 2  # type: ignore[attr-defined]
+
+
+
+
+
+

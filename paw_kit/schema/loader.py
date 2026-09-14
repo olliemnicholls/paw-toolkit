@@ -56,11 +56,12 @@ def load(
 ) -> Callable[[str], T]:
     """Load a compiled PAW adapter and bind it to a strict Pydantic response schema.
 
-    Compiles the schema to a regex and passes it to the backend as `grammar_constraint`,
-    but no shipped backend applies it at decoding time (see the README's "what is real"
-    table). What this function actually enforces is post-generation Pydantic validation:
-    output that fails to parse as `response_model` is routed to `fallback_provider`, or
-    raised as `PAWSchemaError` if none is configured.
+    For backends that enforce grammar constraints (`applies_grammar_constraint = True`),
+    compiles the schema to a regex and passes it as `grammar_constraint`. For backends
+    that do not (including shipped backends; see the README's "what is real" table),
+    regex compilation is skipped entirely. What this function always enforces is
+    post-generation Pydantic validation: output that fails to parse as `response_model`
+    is routed to `fallback_provider`, or raised as `PAWSchemaError` if none is configured.
 
     Args:
         adapter_path: Path to the .paw adapter artifact.
@@ -84,27 +85,39 @@ def load(
             UserWarning, stacklevel=3,
         )
 
-    try:
-        grammar_regex = pydantic_to_regex(response_model, anchors=False)
-    except PAWSchemaError as exc:
-        # S-13: eager grammar compilation used to raise here unconditionally,
-        # before `_execute` (and therefore `fallback_provider`) could ever be
-        # reached -- taking down the whole call path over an optimisation that,
-        # per this function's own docstring, no shipped backend even applies at
-        # decoding time. The hard raise is kept when there is nowhere to fall
-        # back to; otherwise this degrades to "no grammar constraint," not "no
-        # adapter at all."
-        if fallback_provider is None:
-            raise
+    applies_grammar = getattr(active_backend, "applies_grammar_constraint", True)
+    if not applies_grammar:
         grammar_regex = None
-        _warn_grammar_unavailable(exc)
-    except Exception as exc:
-        if fallback_provider is None:
-            raise PAWSchemaError(
-                f"Failed to compile grammar regex for {response_model.__name__}: {exc}"
-            ) from exc
-        grammar_regex = None
-        _warn_grammar_unavailable(exc)
+        warnings.warn(
+            f"{type(active_backend).__name__} cannot apply grammar_constraint at decoding time: "
+            "the backend does not apply constrained decoding. Output is validated after "
+            "generation by paw_kit.schema.load via post-hoc Pydantic validation instead "
+            "(fail-open on mismatch).",
+            UserWarning,
+            stacklevel=2,
+        )
+    else:
+        try:
+            grammar_regex = pydantic_to_regex(response_model, anchors=False)
+        except PAWSchemaError as exc:
+            # S-13: eager grammar compilation used to raise here unconditionally,
+            # before `_execute` (and therefore `fallback_provider`) could ever be
+            # reached -- taking down the whole call path over an optimisation that,
+            # per this function's own docstring, no shipped backend even applies at
+            # decoding time. The hard raise is kept when there is nowhere to fall
+            # back to; otherwise this degrades to "no grammar constraint," not "no
+            # adapter at all."
+            if fallback_provider is None:
+                raise
+            grammar_regex = None
+            _warn_grammar_unavailable(exc)
+        except Exception as exc:
+            if fallback_provider is None:
+                raise PAWSchemaError(
+                    f"Failed to compile grammar regex for {response_model.__name__}: {exc}"
+                ) from exc
+            grammar_regex = None
+            _warn_grammar_unavailable(exc)
 
     # S-14: a bound function whose local path has started falling back warns
     # ONCE (not on every call, which would flood the log for a permanently

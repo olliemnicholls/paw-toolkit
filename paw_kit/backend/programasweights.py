@@ -190,6 +190,9 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             the real `programasweights` module, imported lazily on first use.
     """
 
+    # See module docstring limitation #2: accepts grammar_constraint but cannot enforce it upstream.
+    applies_grammar_constraint = False
+
     #: Base delay between compile retries, multiplied by the attempt number (1, 2, ...).
     _COMPILE_RETRY_BACKOFF_S = 0.5
 

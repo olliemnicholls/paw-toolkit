@@ -81,6 +81,9 @@ class MockPAWBackend(AbstractPAWBackend):
     Enables 100% unit and integration test coverage without GPU hardware or real weights.
     """
 
+    # Accepts grammar_constraint for interface compatibility but ignores it (see decisions.md §2).
+    applies_grammar_constraint = False
+
     def __init__(self, strict_misses: bool = False) -> None:
         self._adapters: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         # PAW-BACKEND-03: guards every access to _adapters below. The existing test

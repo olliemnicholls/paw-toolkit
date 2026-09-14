@@ -7,6 +7,13 @@ from typing import Any, Dict, List, Optional
 class AbstractPAWBackend(ABC):
     """Protocol interface for PAW compilation and inference backends."""
 
+    applies_grammar_constraint: bool = True
+    """Whether this backend masks or constrains decoding with the grammar_constraint string
+    it is handed. True promises the backend actually enforces the grammar constraint during
+    generation; False means it accepts and ignores the parameter, in which case paw.load
+    skips computing a grammar regex entirely. Default is True so third-party implementations
+    preserve existing behavior without modification."""
+
     @abstractmethod
     def compile(
         self,
@@ -39,6 +46,7 @@ class AbstractPAWBackend(ABC):
             adapter_path: Path to the compiled .paw adapter artifact.
             input_text: Input prompt or payload for the neural function.
             grammar_constraint: Optional regex or CFG grammar string constraining decoding.
+                See `applies_grammar_constraint` for whether a backend actually enforces this.
 
         Returns:
             Generated output text adhering to the specification/grammar constraint.
