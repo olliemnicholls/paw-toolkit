@@ -222,6 +222,40 @@ def test_ordinary_pattern_constructs_without_eos_only_false_positive() -> None:
     build_constraint(r"x", vocab)  # must not raise
 
 
+def test_the_llguidance_tokenizer_is_built_once_per_vocabulary_not_once_per_call(
+    monkeypatch,
+) -> None:
+    """RED-FIRST (Phase 4 measurement). `LLTokenizer` construction walks the whole token
+    table and is a pure function of the vocabulary, so it belongs with the vocabulary
+    object -- which the backend already builds once per model and evicts with the model.
+
+    Measured on the real 151,936-token GGUF vocabulary before this was cached:
+    `build_constraint` cost **251.65 ms**, of which **249.13 ms** was this one call;
+    the matcher plus its initial mask was 1.35 ms and `grammar_from_regex` 0.01 ms.
+    Paid per `infer()` call, that was **13.118 ms** of end-to-end overhead per generated
+    token against `roadmap.md`'s `<2 ms` budget. The per-call object that must stay
+    per-call is the **matcher**, because an `LLMatcher` dies on error; the tokenizer has
+    no such state, and the two are asserted apart below.
+    """
+    vocab = make_vocabulary()
+    built: List[int] = []
+    real_tokenizer = llguidance.LLTokenizer
+
+    def _counting(*args, **kwargs):
+        built.append(1)
+        return real_tokenizer(*args, **kwargs)
+
+    monkeypatch.setattr(llguidance, "LLTokenizer", _counting)
+
+    first = build_constraint(r"x", vocab)
+    second = build_constraint(r"x", vocab)
+
+    assert len(built) == 1, "LLTokenizer was rebuilt for the second constraint"
+    # ... and the matcher is still strictly per call.
+    assert first is not second
+    assert first._matcher is not second._matcher
+
+
 # ---------------------------------------------------------------------------------
 # Masking effect (H-3)
 # ---------------------------------------------------------------------------------

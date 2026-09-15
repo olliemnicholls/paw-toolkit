@@ -973,3 +973,200 @@ def test_summary_mirrors_folded_example_ids_beside_the_count_A_6(script: str) ->
         f"{script} publishes `examples_folded_into_spec` but not `folded_example_ids`, so "
         "a reader of its artifact cannot check which examples the count refers to"
     )
+
+
+# ==============================================================  constrained decoding
+#
+# `measure_constrained_decoding.py` is the one committed script for the shipped
+# grammar-constrained decoding path. Its hardware body needs two gitignored `.paw`
+# adapters and a GPU, so what is pinned here is the same thing as everywhere else in
+# this file: the arithmetic that turns a recorded run into a published number. Three of
+# these functions exist specifically because the near-miss version of the number was
+# published in this project's own planning documents before Phase 0 caught it -- the
+# full-exact/urgency-within-1 confusion (round 4, K-7), a masking statistic that reads
+# as zero when the processor was never called at all (K-10), and a UTF-8 check that
+# cannot fail (K-1).
+
+
+@pytest.fixture(scope="module")
+def cd_script() -> ModuleType:
+    return _load("measure_constrained_decoding")
+
+
+def test_constrained_artifact_name_follows_the_measurements_convention(cd_script) -> None:
+    import datetime as _dt
+
+    name = cd_script.artifact_name("3080", _dt.datetime(2026, 9, 15, 18, 50, 48))
+    assert name == "constrained-decoding-3080-20260915-185048.json"
+
+
+def test_pair_report_lists_every_discordant_pair_not_just_a_count(cd_script) -> None:
+    """A null result here is the result, so the discordant list must be exhaustive:
+    a count alone cannot be checked against anything."""
+    report = cd_script.pair_report(
+        ["a", "b", "c"], ["x", "y", "z"], ["x", "Y", "z"]
+    )
+    assert report["pairs"] == 3
+    assert report["byte_identical_pairs"] == 2
+    assert report["discordant_pairs"] == 1
+    assert report["discordant"] == [
+        {"input": "b", "constrained": "y", "unconstrained": "Y"}
+    ]
+
+
+def test_pair_report_refuses_unequal_arms(cd_script) -> None:
+    with pytest.raises(ValueError, match="equal-length"):
+        cd_script.pair_report(["a"], ["x", "y"], ["x", "y"])
+
+
+def test_full_exact_agreement_is_full_exact_and_not_urgency_within_one(cd_script) -> None:
+    """K-7: the neighbouring statistic ("priority and department exact, urgency within
+    1") is a *larger* number, and the two were confused once already. A case that is off
+    by one on `urgency_score` must not count here."""
+    fields = ["priority", "department", "urgency_score"]
+    labels = [
+        {"priority": "high", "department": "billing", "urgency_score": 4},
+        {"priority": "high", "department": "billing", "urgency_score": 4},
+        {"priority": "low", "department": "sales", "urgency_score": 2},
+    ]
+    outputs = [
+        '{"priority": "high", "department": "billing", "urgency_score": 4}',   # exact
+        '{"priority": "high", "department": "billing", "urgency_score": 3}',   # within 1
+        '{"priority": "high", "department": "sales", "urgency_score": 2}',     # priority wrong
+    ]
+    agreement = cd_script.full_exact_agreement(outputs, labels, fields)
+    assert agreement["statistic"] == "full_exact"
+    assert agreement["matched"] == 1
+    assert agreement["n"] == 3
+    assert agreement["unparsed"] == 0
+
+
+def test_full_exact_agreement_counts_unparsed_separately_from_wrong(cd_script) -> None:
+    agreement = cd_script.full_exact_agreement(
+        ["not json at all"], [{"priority": "low"}], ["priority"]
+    )
+    assert agreement["matched"] == 0
+    assert agreement["unparsed"] == 1
+
+
+def test_full_exact_agreement_refuses_a_label_count_mismatch(cd_script) -> None:
+    with pytest.raises(ValueError, match="one label per output"):
+        cd_script.full_exact_agreement(["{}", "{}"], [{"priority": "low"}], ["priority"])
+
+
+def test_masked_summary_reports_no_invocations_as_vacuous_not_as_zero(cd_script) -> None:
+    """K-10: the failure this signal exists to catch -- `Llama.sample()` reusing an
+    installed sampler and never invoking the processor -- leaves the per-step list
+    *empty*. A "mean masked" field computed over that would be a statistic about
+    nothing, so an empty list gets no statistics at all."""
+    vacuous = cd_script.masked_summary([], 151936)
+    assert vacuous["vacuous"] is True
+    assert vacuous["steps"] == 0
+    assert "min" not in vacuous and "mean" not in vacuous
+
+    real = cd_script.masked_summary([151570, 151936, 151800], 151936)
+    assert real["vacuous"] is False
+    assert real["min"] == 151570
+    assert real["steps_masking_zero"] == 0
+
+    with_a_zero = cd_script.masked_summary([0, 151936], 151936)
+    assert with_a_zero["steps_masking_zero"] == 1
+
+
+def test_appliedness_relates_invocations_to_emitted_tokens_without_claiming_equality(
+    cd_script,
+) -> None:
+    """The SDK samples EOS under the mask and then breaks without emitting it, so an
+    EOS-terminated call has exactly one more invocation than emitted token. Asserting
+    plain equality would fail on every normal call; asserting nothing would miss the
+    case the signal exists for."""
+    eos = cd_script.appliedness_check(21, 20)
+    assert eos["ok"] is True and eos["terminated_by"] == "eos"
+
+    budget = cd_script.appliedness_check(128, 128)
+    assert budget["ok"] is True and budget["terminated_by"] == "token_budget_or_context"
+
+    never_ran = cd_script.appliedness_check(0, 20)
+    assert never_ran["ok"] is False
+    assert never_ran["relation"] == "unexpected"
+
+
+def test_values_inside_sets_separates_not_json_from_out_of_set(cd_script) -> None:
+    """Three outcomes, not two: `None` is "not JSON at all", `False` is "JSON whose
+    value is outside the closed set". Collapsing them would hide which failure
+    happened."""
+    sets = cd_script.literal_sets(cd_script.Triage)
+    assert sets["urgency_score"] == [1, 2, 3, 4, 5]
+
+    good = '{"priority": "low", "department": "billing", "urgency_score": 1}'
+    assert cd_script.values_inside_sets(good, sets) is True
+    bad = '{"priority": "URGENT", "department": "billing", "urgency_score": 1}'
+    assert cd_script.values_inside_sets(bad, sets) is False
+    missing = '{"priority": "low", "department": "billing"}'
+    assert cd_script.values_inside_sets(missing, sets) is False
+    assert cd_script.values_inside_sets("banana", sets) is None
+
+
+def test_replacement_char_scan_names_the_arm_and_case_of_every_offender(cd_script) -> None:
+    scan = cd_script.replacement_char_scan(
+        [("15 TICKETS/constrained/0", "fine"), ("15 TICKETS/constrained/1", "b��d")]
+    )
+    assert scan["strings_scanned"] == 2
+    assert scan["strings_containing_fffd"] == 1
+    assert scan["offenders"][0]["name"] == "15 TICKETS/constrained/1"
+    assert scan["offenders"][0]["count"] == 2
+
+
+def test_the_artifact_says_the_fffd_scan_cannot_prove_utf8_wellformedness(cd_script) -> None:
+    """K-1: the SDK decodes with `errors="replace"`, so an end-to-end UTF-8 round-trip
+    on the returned `str` cannot fail. The artifact must say so rather than publish a
+    number that cannot be wrong."""
+    caveat = cd_script._BYTE_SCAN_CAVEAT
+    assert "CANNOT FAIL" in caveat
+    assert "errors='replace'" in caveat
+    assert "byte-exact end-to-end check" in caveat
+
+
+def test_the_artifact_says_the_agreement_figure_is_a_property_of_the_adapter(cd_script) -> None:
+    caveat = cd_script._AGREEMENT_CAVEAT
+    assert "property of the adapter" in caveat
+    assert "byte-identical" in caveat
+    assert "recorded ONCE" in caveat
+
+
+def test_cost_summary_separates_processor_time_from_what_a_caller_pays(cd_script) -> None:
+    """Two different numbers: time spent inside the processor, and the end-to-end
+    overhead per generated token, which also carries the per-call matcher build and is
+    what `roadmap.md`'s budget is about."""
+    cost = cd_script.cost_summary(
+        processor_ms=[0.6, 0.7, 0.8],
+        constrained_call_ms=[132.0, 134.0],
+        unconstrained_call_ms=[115.0, 117.0],
+        generated_tokens_per_call=[20, 20],
+    )
+    assert cost["end_to_end"]["overhead_ms_per_generated_token"] == 0.85
+    assert cost["budget"]["budget_ms_per_token"] == 2.0
+    assert cost["budget"]["within_budget"] is True
+
+    blown = cd_script.cost_summary([0.6], [377.1], [114.8], [20])
+    assert blown["budget"]["within_budget"] is False
+    assert blown["budget"]["measured_ms_per_token"] == 13.115
+
+
+def test_cost_summary_refuses_an_empty_arm(cd_script) -> None:
+    with pytest.raises(ValueError, match="non-empty sample"):
+        cd_script.cost_summary([], [1.0], [1.0], [1])
+
+
+def test_the_script_drives_the_shipped_load_path_not_a_private_hook(cd_script) -> None:
+    """The two scripts this one replaces drove a deleted class, one of them through the
+    SDK's private `_llm` attribute. This one must call the public backend entry point
+    with the same regex `paw_kit.schema.load` builds."""
+    src = (_SCRIPTS / "measure_constrained_decoding.py").read_text()
+    assert "backend.infer(adapter, text, grammar_constraint=pattern)" in src
+    assert "pydantic_to_regex(Triage, anchors=False)" in src
+    # The deleted class may be *named* in the module docstring, which explains what this
+    # script replaces; it must not be imported or constructed.
+    assert "logits_processor import" not in src
+    assert "RegexLogitsProcessor(" not in src
+    assert "import torch" not in src

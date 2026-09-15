@@ -124,7 +124,7 @@ class Vocabulary:
     skipped by a caller.
     """
 
-    __slots__ = ("tokens", "eos_token_id", "special_token_ids", "encode")
+    __slots__ = ("tokens", "eos_token_id", "special_token_ids", "encode", "_llg_tokenizer")
 
     def __init__(
         self,
@@ -143,7 +143,42 @@ class Vocabulary:
         self.eos_token_id = eos_token_id
         self.special_token_ids = tuple(special_token_ids)
         self.encode = encode
+        # Built lazily on first use by `llguidance_tokenizer()` -- NOT here, because
+        # `Vocabulary` must stay constructible (and its encoder verifiable) with
+        # `llguidance` absent, which is the engine-absent test configuration.
+        self._llg_tokenizer: Any = None
         self._verify_encoder()
+
+    def llguidance_tokenizer(self) -> Any:
+        """The `llguidance.LLTokenizer` for this vocabulary, built once and reused.
+
+        This is the ONE piece of llguidance state that is cached rather than rebuilt per
+        call, and the distinction is load-bearing. An `LLMatcher` carries the parse in
+        progress and **dies on error**, which is why `build_constraint` returns a fresh,
+        single-use one every call. An `LLTokenizer` carries no parse state at all: it is
+        a pure function of `tokens` + `eos_token_id` + `special_token_ids` + `encode`,
+        all of which are immutable for this object's lifetime.
+
+        Building it walks the whole token table, and on the real 151,936-token GGUF
+        vocabulary that measured **249.13 ms** -- against **1.35 ms** for the matcher and
+        its initial mask. Paid once per `infer()` call, as this was until Phase 4's
+        measurement caught it, that alone put end-to-end masking overhead at **13.118 ms
+        per generated token** against `roadmap.md`'s `<2 ms` budget. Paid once per
+        vocabulary it is a per-model cost, which is where the track's own cost model
+        always put it ("0.553 s per model: 0.293 s detokenize + 0.260 s tokenizer").
+
+        Lifetime: `ProgramAsWeightsBackend` caches the `Vocabulary` beside the function
+        it was built from and evicts the two together (A-11), so this cache is dropped
+        with the model whose tokenizer it wraps and can never outlive it. Two threads
+        racing here build two tokenizers and one wins; both are valid, so the race costs
+        work and never correctness, which is why there is no lock on a path `infer()`
+        deliberately runs without holding one.
+        """
+        if self._llg_tokenizer is None:
+            import llguidance as lg
+
+            self._llg_tokenizer = lg.LLTokenizer(lg.TokenizerWrapper(_GTokenizerAdapter(self)))
+        return self._llg_tokenizer
 
     def _verify_encoder(self) -> None:
         for probe in PROBES:
@@ -216,7 +251,8 @@ def _count_masked(raw_mask: Any, n_vocab: int) -> int:
 class _Constraint:
     """A fresh, single-use llama-cpp logits-processor callable: `(input_ids, scores)
     -> scores`. Never cache or reuse an instance across calls -- an `LLMatcher` dies on
-    error, and `build_constraint` is cheap enough (~0.77 ms measured) that a fresh one
+    error, and `build_constraint` is cheap enough (1.35 ms measured on the real
+    151,936-token vocabulary, once its tokenizer is cached per `Vocabulary`) that a fresh one
     per call is the only shape that keeps a stale, already-dead matcher from silently
     doing nothing on a later call.
 
@@ -305,7 +341,10 @@ def build_constraint(pattern: str, vocabulary: Vocabulary) -> _Constraint:
             f"grammar-constrained decoding: {exc}"
         ) from exc
 
-    tokenizer = lg.LLTokenizer(lg.TokenizerWrapper(_GTokenizerAdapter(vocabulary)))
+    # Per VOCABULARY (built once, reused), not per call -- see
+    # `Vocabulary.llguidance_tokenizer` for why this one object is cached and the
+    # matcher below is not.
+    tokenizer = vocabulary.llguidance_tokenizer()
     grammar = lg.LLMatcher.grammar_from_regex(pattern)
     limits = lg.LLParserLimits(initial_lexer_fuel=INITIAL_LEXER_FUEL)
     matcher = lg.LLMatcher(tokenizer, grammar, limits=limits)
