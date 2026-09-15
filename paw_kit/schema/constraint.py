@@ -10,36 +10,86 @@ apply here and are not replaced like-for-like.
 `llguidance` is lazy: it builds no DFA up front, so the bound that matters is not "how
 big can the compiled automaton get" but "how much work can a single grammar
 construction do before it is forced to answer". That is `LLParserLimits.initial_lexer_fuel`,
-set explicitly below to **10,000**; the other six `LLParserLimits` fields are left at
+set explicitly below to **100,000**; the other six `LLParserLimits` fields are left at
 their library defaults, so this project's one deliberate bound lives in this project's
-own source rather than an upstream default nobody chose. It was chosen against a
-measured curve, not guessed:
+own source rather than an upstream default nobody chose.
 
+**Raised from 10,000 to 100,000 on 2026-09-15**, after Phase 4 found the 10,000 value
+refusing an ordinary schema. The budget bounds *grammar construction size*, not
+per-token work -- `_Constraint.__call__`'s per-step masking cost does not depend on
+`initial_lexer_fuel` at all, only construction does, and construction happens once per
+`infer()` call (`build_constraint` is never cached across calls). Integer ranges are the
+expensive case: `pydantic_to_regex` enumerates a bounded int range member by member
+(`grammar.py`'s `_MAX_ENUMERATED_INT_RANGE = 256`), and each enumerated member costs
+about 10 fuel, so a *single* `Field(ge=0, le=255)` int field already costs 2,612 --
+measured on the real 151,936-token GGUF vocabulary. Four such fields -- an ordinary
+schema -- cost 10,334 and were refused by the old 10,000 bound; that boundary case is
+exactly what forced this change. Re-derived against the same real vocabulary (the
+bounded-int, `Literal` and bare-alternation figures below reproduced identically on
+this module's synthetic test vocabulary -- fuel for those pattern shapes is a property
+of the pattern's own structure, not the tokenizer; that does not hold for every pattern
+shape, e.g. the pathological `(a{1,100}){1,100}` case below needs 9 fuel on the
+synthetic vocabulary and 21 on the real one, so it is stated per-vocabulary where it was
+actually measured):
+
+- Bounded-int fields (`Field(ge=0, le=255)`), minimum fuel to construct: 1 field 2,612;
+  2 fields 5,186; 3 fields 7,760; 4 fields 10,334 (refused at the *old* 10,000 bound,
+  admitted at 100,000 with 9.68x headroom); 5 fields 12,908. The marginal cost per extra
+  field is a flat 2,574, so the count of such fields the new budget admits is exactly
+  computable: 38 fields cost 97,850 and construct; 39 cost 100,424 and are refused.
+  **100,000 admits ~38 such fields**, not the 3 the old bound admitted.
 - A `Literal` compiled through `pydantic_to_regex` costs roughly 8.3-8.5 fuel per member
-  asymptotically (400 members: 3,387-3,446; 2,000 members: 16,667), plus a fixed
-  overhead that inflates the per-member figure at small `n`.
-- A bare alternation (not routed through a `Literal`) costs roughly 9.0-9.3 per member
-  (400 members: 3,607-3,702; 2,000 members: 18,023-18,494).
-- The `Contact` schema used throughout this track's evidence needs 763.
-- All 38 cases in `tests/test_schema_spine.py`'s `SPINE_CASES` construct at fuel 10,000;
-  the worst (`WithCollections`) needs 1,266 -- 7.90x headroom under the chosen bound.
-- At 10,000, a `Literal` of roughly 1,175 members still constructs; a 2,000-way
-  alternation is refused at construction with a named `LLMatcher.is_error()` message.
+  asymptotically; re-derived at the new budget's scale, a 12,000-member `Literal` costs
+  99,667 (admitted) and a 12,500-member one costs 103,817 (refused) -- **100,000 admits
+  a `Literal` of roughly 12,000 members**, up from ~1,175 at the old bound.
+- A bare alternation (not routed through a `Literal`) costs roughly 9.0-9.3 per member,
+  slightly more than a `Literal` of the same arity. Re-derived at the new budget's
+  scale: an 11,000-way alternation costs 99,113 (admitted), an 11,500-way one costs
+  103,618 (refused) -- **the smallest bare alternation refused at 100,000 is between
+  11,000 and 11,500 members**, comfortably above what any realistic schema's own
+  alternations reach.
+- The `Contact` schema used throughout this track's evidence needs 763 to construct --
+  unchanged by this module's chosen ceiling, since a schema's own minimum fuel
+  requirement depends only on its pattern, never on the ceiling set above it. Measured
+  matcher-construction time (build + initial mask, real vocabulary, 5-run minimum) for
+  `Contact` is **1.39 ms at `initial_lexer_fuel=10,000`** and **1.40 ms at
+  `initial_lexer_fuel=100,000`** -- statistically indistinguishable, because raising the
+  ceiling costs nothing for a schema that never approaches the old one. This is the
+  direct evidence that the ceiling bounds worst-case construction size, not per-call
+  cost: per-call cost tracks the *pattern's own* fuel requirement, which for an ordinary
+  schema is far below either ceiling. For a pattern that actually needs the extra
+  headroom, construction time scales with the fuel it consumes, not with the ceiling:
+  measured on bare alternations sized to need roughly the fuel shown, construction time
+  is ~3.0 ms at ~1,000-way, ~11.3 ms at ~5,000-way, ~22.0-23.1 ms at ~10,000-way, ~127-135
+  ms at ~50,000-way, and ~262-271 ms at ~100,000-way -- growth that tracks the fuel spent,
+  this is the per-call cost of the matcher, since the matcher is built fresh per call
+  (`build_constraint`'s docstring).
+- All 38 cases in `tests/test_schema_spine.py`'s `SPINE_CASES` still construct at fuel
+  100,000; the worst (`WithCollections`) still needs 1,266 -- now 78.99x headroom under
+  the chosen bound (was 7.90x at 10,000).
+
+100,000 is still a tenfold tightening of upstream's own `LLParserLimits` default of
+1,000,000 -- this project's bound remains materially tighter than "whatever the library
+ships with", which was the point of setting it explicitly at all.
 
 **This does not cover the same pattern class PAW-SCHEMA-03 did**, and that is not an
 oversight: `llguidance` is lazy and builds no DFA, so the patterns that made
 `RegexLogitsProcessor`'s NFA-to-DFA powerset construction blow up --
-`[0-9]{0,100000}` (fuel 16 here), `(a{1,100}){1,100}` (fuel 9) -- are *cheaper* than an
-ordinary schema under this engine, not more expensive. Measured directly: all four of
-the patterns PAW-SCHEMA-03's own evidence used as pathological cases build in <=0.61 ms
-and step (`compute_bitmask()` + `consume_token()`) in <=0.65 ms at these defaults, so
-there is nothing here for `initial_lexer_fuel` to usefully refuse in that class. The
-security-relevant statement is therefore: the old exponential-blowup class is closed by
-this engine being lazy, not by this module's fuel bound; `initial_lexer_fuel=10_000`
-exists to keep an oversized *schema* (an enormous `Literal`/alternation) from doing
-unbounded construction work, which is a different failure mode than the one
-PAW-SCHEMA-03 was written against. See `conductor/reviews/security-audit-report.md`'s
-dated PAW-SCHEMA-03 replacement note for the full disposition.
+`[0-9]{0,100000}` (fuel 16 here), `(a{1,100}){1,100}` (fuel 21 here) -- are *cheaper*
+than an ordinary schema under this engine, not more expensive, and neither figure moved
+with this change (raising `initial_lexer_fuel` cannot make a cheap pattern more
+expensive). Measured directly, re-derived at the new budget: all four of the patterns
+PAW-SCHEMA-03's own evidence used as pathological cases still need at most 18,023 fuel
+to construct (the hand-written 2,000-way alternation) and none of the four costs more
+than that, so there remains nothing here for `initial_lexer_fuel` to usefully refuse in
+that class at either 10,000 or 100,000. The security-relevant statement is therefore
+unchanged by this raise: the old exponential-blowup class is closed by this engine being
+lazy, not by this module's fuel bound; `initial_lexer_fuel=100_000` exists to keep an
+oversized *schema* (an enormous `Literal`/alternation, now needing on the order of
+12,000+ members rather than ~1,175) from doing unbounded construction work, which is a
+different failure mode than the one PAW-SCHEMA-03 was written against. See
+`conductor/reviews/security-audit-report.md`'s dated PAW-SCHEMA-03 replacement note for
+the full disposition.
 
 Two safety properties this module exists to prove, both from the track's "No silent
 masking failure" invariant:
@@ -83,7 +133,13 @@ from paw_kit.schema.exceptions import PAWSchemaError
 # the only `LLParserLimits` field set: the other six are left at their library
 # defaults, so this project's one chosen bound is visible in this project's own source
 # rather than mixed in with upstream defaults nobody here chose.
-INITIAL_LEXER_FUEL = 10_000
+#
+# Raised from 10,000 to 100,000 on 2026-09-15 (see module docstring's re-derivation):
+# 10,000 admitted at most three `Field(ge=0, le=255)` int fields and refused an
+# ordinary four-field schema at construction, on every call, which is the money-leak
+# class this track's Change 2 also addresses. 100,000 is still a tenfold tightening of
+# upstream's own default of 1,000,000.
+INITIAL_LEXER_FUEL = 100_000
 
 # The three fixed round-trip probes (see module docstring, point 1). Kept as module
 # constants rather than inlined so a caller inspecting a `PAWSchemaError` message, or a

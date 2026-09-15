@@ -481,21 +481,48 @@ def test_pathological_patterns_build_and_step_bounded_at_library_defaults(label,
     assert worst_step < 2.0, f"{label}: worst step took {worst_step:.3f}s"
 
 
-def test_initial_lexer_fuel_refuses_a_2000_member_pydantic_literal() -> None:
-    """This project's own bound (`INITIAL_LEXER_FUEL=10_000`) DOES refuse a grammar
-    built the expensive way: a 2,000-member `Literal` compiled through
-    `pydantic_to_regex`, which costs materially more fuel per member than the bare
-    hand-written alternation in `PATHOLOGICAL_PATTERNS` above (module docstring:
-    ~8.3-8.5/member for a `Literal` vs ~9.0-9.3/member for a bare alternation --
-    close per-member, but a `Literal` of 2,000 members still lands north of 10,000)."""
-    vals = tuple(f"opt{i}" for i in range(2000))
-    model = create_model("L2000", x=(Literal[vals], ...))
+def test_initial_lexer_fuel_refuses_a_13000_member_pydantic_literal() -> None:
+    """This project's own bound (`INITIAL_LEXER_FUEL=100_000`, raised from 10_000 on
+    2026-09-15 -- see `constraint.py`'s module docstring) DOES refuse a grammar built
+    the expensive way: a 13,000-member `Literal` compiled through `pydantic_to_regex`.
+    Re-derived against the new budget on the real 151,936-token vocabulary (identical on
+    this module's synthetic one): a 12,000-member `Literal` costs 99,667 fuel and still
+    admits; a 12,500-member one costs 103,817 and is refused. 13,000 members (107,967
+    fuel) is comfortably past that boundary, so this stays a clean refusal rather than
+    a knife-edge one as the exact boundary drifts with any future re-measurement. A
+    2,000-member `Literal` (the old bound's refusal case) now easily admits -- it needs
+    on the order of 8.3-8.5 fuel/member, ~17,000 total, well under 100,000."""
+    vals = tuple(f"opt{i}" for i in range(13000))
+    model = create_model("L13000", x=(Literal[vals], ...))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         pat = pydantic_to_regex(model)
     vocab = make_vocabulary()
     with pytest.raises(PAWSchemaError, match="llguidance grammar construction failed"):
         build_constraint(pat, vocab)
+
+
+def test_bounded_int_models_at_4_and_5_fields_construct_at_the_new_budget() -> None:
+    """The concrete money-leak instance Phase 4 found and this track's Change 1 fixes:
+    a model with four (or five) `Field(ge=0, le=255)` int fields -- an ordinary schema,
+    not a pathological one -- used to be REFUSED by `INITIAL_LEXER_FUEL=10_000` (4
+    fields cost 10,334 fuel, just past the old bound) on every `infer()` call. At the
+    new `INITIAL_LEXER_FUEL=100_000`, both construct: 4 fields need 10,334 fuel (9.68x
+    headroom) and 5 fields need 12,908 (7.75x headroom), both measured on the real
+    151,936-token vocabulary and reproduced identically here on the synthetic one."""
+    from pydantic import Field
+
+    vocab = make_vocabulary()
+    for n_fields in (4, 5):
+        model = create_model(
+            f"Bounded{n_fields}",
+            **{f"f{i}": (int, Field(ge=0, le=255)) for i in range(n_fields)},
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pat = pydantic_to_regex(model)
+        constraint = build_constraint(pat, vocab)  # must not raise
+        assert constraint is not None
 
 
 def test_initial_lexer_fuel_admits_every_spine_case_pattern() -> None:

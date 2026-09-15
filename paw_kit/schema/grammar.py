@@ -284,9 +284,8 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
 #
 # Re-derived 2026-09-15 against the engine that actually walks this grammar
 # (`paw_kit.schema.constraint`), which is lazy, builds no DFA, and bounds construction
-# by `INITIAL_LEXER_FUEL` (10,000). Measured on the real 151,936-token vocabulary, as
-# the minimum `initial_lexer_fuel` at which `LLMatcher` construction plus its initial
-# mask succeeds:
+# by `INITIAL_LEXER_FUEL`. Measured on the real 151,936-token vocabulary, as the minimum
+# `initial_lexer_fuel` at which `LLMatcher` construction plus its initial mask succeeds:
 #
 #   one int field, ge=0 le=n-1, through this compiler        raw alternation alone
 #     n=2      76        n=128   1,322                        n=256     2,550  (9.96/member)
@@ -304,20 +303,37 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
 # **The budget is for the WHOLE grammar, and this constant is not safe against that.**
 # Measured, same day, on a model whose only fields are int ranges at the cap:
 #
-#   1 field   2,612      3 fields   7,760  <- last one that fits
-#   2 fields  5,186      4 fields  10,334  <- REFUSED at INITIAL_LEXER_FUEL=10,000
+#   1 field   2,612      3 fields   7,760  <- last one that fit at the OLD 10,000 bound
+#   2 fields  5,186      4 fields  10,334  <- REFUSED at the OLD INITIAL_LEXER_FUEL=10,000
 #                        5 fields  12,908
 #
-# Four `Field(ge=0, le=255)` int fields in one model is an ordinary schema, and
-# `build_constraint` refuses it with `PAWSchemaError` at construction. That is a
-# fail-open, not invalid output -- `infer()` propagates it unwrapped, `paw.load` routes
-# to the fallback, `get_local_fallback_count()` counts it and S-14 warns once -- but it
-# is a fail-open on *every* call for that model, which is the money-leak class
-# (`decisions.md` §1). **This value is left at 256 deliberately and not tuned here**:
-# lowering it silently narrows what this compiler will enforce, and the number that is
-# actually mis-set may be `INITIAL_LEXER_FUEL` rather than this one. Neither is a change
-# a comment re-derivation gets to make; it needs its own track, with the two constants
-# argued together.
+# Four `Field(ge=0, le=255)` int fields in one model is an ordinary schema, and at the
+# OLD `INITIAL_LEXER_FUEL=10,000` `build_constraint` refused it with `PAWSchemaError` at
+# construction -- a fail-open, not invalid output (`infer()` propagates it unwrapped,
+# `paw.load` routes to the fallback, `get_local_fallback_count()` counts it and S-14
+# warns once), but a fail-open on *every* call for that model: the money-leak class
+# (`decisions.md` §1) that made `INITIAL_LEXER_FUEL` the constant to revisit rather than
+# this one.
+#
+# **`INITIAL_LEXER_FUEL` was raised from 10,000 to 100,000 on 2026-09-15
+# (`constraint.py`'s module docstring) for exactly this reason.** Re-measured the same
+# day, same table extended: the marginal cost per extra field is a flat 2,574 fuel
+# (2,612 + (n-1)*2,574), so 38 such fields cost 97,850 and construct at the new budget,
+# and 39 cost 100,424 and are refused:
+#
+#   4 fields  10,334  <- now ADMITTED (9.68x headroom under 100,000)
+#   5 fields  12,908
+#   38 fields 97,850  <- last one that fits at the NEW 100,000 bound
+#   39 fields 100,424 <- REFUSED at INITIAL_LEXER_FUEL=100,000
+#
+# Four bounded-int fields is comfortably admitted now; the money-leak instance this
+# comment used to document is closed. The table above (1-5 fields) is kept as the
+# historical record of the OLD bound's boundary case, per this file's own re-derivation
+# discipline -- it is not this file's current behaviour. **This value is left at 256
+# deliberately and not tuned here**: lowering it silently narrows what this compiler
+# will enforce, and `INITIAL_LEXER_FUEL` (not this constant) is the lever this track
+# used to close the money-leak instance above. Changing this constant is a semantics
+# change to what `pydantic_to_regex` enforces and needs its own track.
 _MAX_ENUMERATED_INT_RANGE = 256
 
 # ... and the same question for a LENGTH bound, where the answer used to be much
@@ -346,8 +362,9 @@ _MAX_ENUMERATED_INT_RANGE = 256
 # the decoder's construction budget, and the state-count table they were derived from
 # describes an engine that no longer exists. For the cost shape that *does* bind under
 # this engine, see `_MAX_ENUMERATED_INT_RANGE` above: an enumeration costs about 10 fuel
-# per member and four 256-value int fields already exceed `INITIAL_LEXER_FUEL`. A length
-# bound is free; an enumerated alternation is not.
+# per member, and enough 256-value int fields (39 or more, at the current
+# `INITIAL_LEXER_FUEL=100,000`) still exceed the budget -- four no longer do, since the
+# 2026-09-15 raise. A length bound is free; an enumerated alternation is not.
 #
 # **What these constants are now.** A rendering policy, not a decoder budget: past them
 # this compiler declines to render the bound and warns, naming the budget, exactly like
