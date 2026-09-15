@@ -309,11 +309,13 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
 #
 # Four `Field(ge=0, le=255)` int fields in one model is an ordinary schema, and at the
 # OLD `INITIAL_LEXER_FUEL=10,000` `build_constraint` refused it with `PAWSchemaError` at
-# construction -- a fail-open, not invalid output (`infer()` propagates it unwrapped,
-# `paw.load` routes to the fallback, `get_local_fallback_count()` counts it and S-14
-# warns once), but a fail-open on *every* call for that model: the money-leak class
-# (`decisions.md` §1) that made `INITIAL_LEXER_FUEL` the constant to revisit rather than
-# this one.
+# construction -- a fail-open, not invalid output (`infer()` propagated it unwrapped, as
+# it then did; `paw.load` routed to the fallback, `get_local_fallback_count()` counted it
+# and S-14 warned once), but a fail-open on *every* call for that model: the money-leak
+# class (`decisions.md` §1) that made `INITIAL_LEXER_FUEL` the constant to revisit rather
+# than this one. `infer()` no longer propagates this case unwrapped at all: a
+# construction-time refusal is now `ConstraintUnavailable`, which `infer()` catches to
+# degrade that one schema instead (`constraint.py`'s module docstring, point 2).
 #
 # **`INITIAL_LEXER_FUEL` was raised from 10,000 to 100,000 on 2026-09-15
 # (`constraint.py`'s module docstring) for exactly this reason.** Re-measured the same
