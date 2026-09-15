@@ -968,6 +968,22 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         if self.applies_grammar_constraint:
             try:
                 vocabulary = self._build_vocabulary(fn)
+                # P-2: force the engine import and `LLTokenizer` construction HERE,
+                # inside this same try, rather than leaving it for `build_constraint`
+                # to do lazily on the first `infer()` call. `applies_grammar_constraint`
+                # is decided at construction by `find_spec("llguidance")` alone, which
+                # only proves the package's on-disk metadata is present -- a present
+                # but unimportable engine (an ABI-mismatched or partially-installed
+                # native extension, ../docs/install.md's glibc floor) previously
+                # surfaced as a plain `PAWSchemaError` from `build_constraint`'s own
+                # `import llguidance`, on every single call, with the flag still True
+                # and no `UserWarning` -- an unclosed fourth money route. Calling this
+                # here lands that failure in the SAME route as a failing vocabulary
+                # (iii), with the one warning below. Free: `llguidance_tokenizer()` is
+                # cached on `Vocabulary` and would be built on the first `infer()` call
+                # for this model regardless -- this only moves that cost earlier, to
+                # model load, which is once per model, not once per call.
+                vocabulary.llguidance_tokenizer()
             except Exception as exc:
                 self.applies_grammar_constraint = False
                 warnings.warn(

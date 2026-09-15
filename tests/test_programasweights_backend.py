@@ -1905,6 +1905,69 @@ def test_cd_money_route_i_engine_absent_flag_false_warns_once_no_teacher_call(
     assert sdk.fn.last_processor is None  # no logits_processor was ever built/passed
 
 
+class _BrokenLLGuidanceModule:
+    """A stand-in for `sys.modules["llguidance"]` that is present (so `import
+    llguidance` trivially succeeds -- Python finds it already in `sys.modules` and
+    never re-imports it) but raises the moment anything on it is touched, simulating
+    an ABI-mismatched or partially-installed native extension (P-2): a real
+    `llguidance` package whose `.so` cannot actually be used. `find_spec("llguidance")`
+    is called only once, at `ProgramAsWeightsBackend.__init__`, before this object is
+    installed in the tests below -- so it sees the real (working) package and returns
+    a real spec, exactly as it would on a machine where the engine LOOKS installed."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise ImportError(f"llguidance.{name} is unavailable (simulated broken install)")
+
+
+def test_cd_p2_present_but_unimportable_engine_never_pays_the_teacher(
+    monkeypatch: pytest.MonkeyPatch, key: None, tmp_path: Path
+) -> None:
+    """P-2: a present-but-unimportable engine must not leave `applies_grammar_constraint`
+    True while every call quietly pays the teacher. The engine is genuinely importable
+    at construction (so `find_spec` succeeds and no route-(i) warning fires and the flag
+    starts True), then broken -- via `monkeypatch.setitem(sys.modules, "llguidance",
+    _BrokenLLGuidanceModule())` -- before the first model load, so
+    `_get_function_and_vocabulary`'s forced `vocabulary.llguidance_tokenizer()` call
+    (the P-2 fix) is what discovers it, not `build_constraint`. Three `paw.load`-bound
+    calls: zero fallback/teacher calls, all three return the LOCAL output, exactly one
+    UserWarning total, and the flag ends False -- the same shape as money route (iii),
+    because that is the route this fix lands the failure in."""
+    pytest.importorskip("llguidance")
+    sdk = ConstrainedFakeSDK(scripted_output='{"s": "hi"}')
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    assert backend.applies_grammar_constraint is True  # real engine at construction
+
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+
+    # Break the engine only NOW -- after construction/compile, so find_spec already
+    # saw the real package. This reproduces "present but unimportable", not "absent".
+    monkeypatch.setitem(sys.modules, "llguidance", _BrokenLLGuidanceModule())
+
+    teacher_calls: List[str] = []
+
+    def fallback(text: str) -> _CDSimpleModel:
+        teacher_calls.append(text)
+        return _CDSimpleModel(s="teacher")
+
+    fn = load(out_path, _CDSimpleModel, backend=backend, fallback_provider=fallback)
+
+    with pytest.warns(UserWarning, match="grammar-constraint vocabulary"):
+        result0 = fn("hello 0")
+    assert result0 == _CDSimpleModel(s="hi")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # a second/third warning would now raise
+        result1 = fn("hello 1")
+        result2 = fn("hello 2")
+    assert result1 == _CDSimpleModel(s="hi")
+    assert result2 == _CDSimpleModel(s="hi")
+
+    assert teacher_calls == []  # zero fallback calls across all three
+    assert backend.applies_grammar_constraint is False
+    assert sdk.fn.last_processor is None  # no logits_processor was ever built/passed
+
+
 def test_cd_money_route_iii_b_constraint_raising_every_call_counted_and_warned_once(
     key: None, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
