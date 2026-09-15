@@ -686,7 +686,10 @@ PATTERNS_PYDANTIC_ACCEPTS = [
     # cite those as patterns pydantic accepts; executed against pydantic 2.13.5 it
     # REJECTS all three at class-build time with SchemaError, so they cannot reach the
     # compiler through `Field(pattern=...)` at all. They are covered where they are
-    # genuinely reachable instead -- `RegexLogitsProcessor`, which takes any string.
+    # genuinely reachable instead -- a caller that builds a grammar constraint
+    # directly from a raw pattern string (e.g.
+    # `paw_kit.schema.constraint.build_constraint`), which takes any regex, not only
+    # ones reachable through `Field(pattern=...)`.
     r"[[:alpha:]]+",    # POSIX: pydantic and Python `re` read this differently
     r"a(?i)b",          # rust-regex only
 ]
@@ -741,10 +744,10 @@ def test_incoherent_length_bounds_raise_paw_schema_error_not_a_broken_regex(
 ) -> None:
     """H-1: `min_length > max_length` (or `max_length == 0 < min_length`) describes a
     field with no legal value. Before this fix, `pydantic_to_regex` returned a string
-    Python `re` refuses (`{5,2}`), which then reached `RegexLogitsProcessor` as an
-    unwrapped, non-PAWSchemaError exception -- S-1's and S-15's exact failure shapes,
-    reopened through the length-bound door. A coherent bound must still compile and
-    round-trip normally; only the incoherent ones may raise.
+    Python `re` refuses (`{5,2}`), which then reached a caller of the compiled regex
+    as an unwrapped, non-PAWSchemaError exception -- S-1's and S-15's exact failure
+    shapes, reopened through the length-bound door. A coherent bound must still
+    compile and round-trip normally; only the incoherent ones may raise.
     """
     from pydantic import create_model
 

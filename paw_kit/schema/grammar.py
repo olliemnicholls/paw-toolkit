@@ -82,9 +82,11 @@ JSON_WHITESPACE = r"[ \t\n\r]*"
 # spelling of this was `\\.`, which permits ANY character after a backslash, so the
 # grammar for the simplest possible schema accepted `{"text":"a\qb"}` and
 # `{"text":"\u12"}` -- strings that satisfy the grammar and fail `json.loads`. Driven
-# end to end through `RegexLogitsProcessor` every one of those characters was in the
-# allowed mask at its step and EOS was allowed at the end, so the headline claim that
-# structural validity is a property of the FSM did not hold as written.
+# end to end through the project's masking engine of the time (a character-level FSM,
+# since deleted and replaced by `paw_kit.schema.constraint`'s byte-level engine) every
+# one of those characters was in the allowed mask at its step and EOS was allowed at
+# the end, so the headline claim that structural validity is a property of the mask did
+# not hold as written.
 #
 # The `\uXXXX` form deliberately EXCLUDES the surrogate range D800-DFFF rather than
 # accepting all four hex digits. `json.loads` tolerates a lone surrogate
@@ -276,17 +278,37 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
 # report's Pattern 1: a constraint the caller believes is being enforced, and is not.
 #
 # An integer range is rendered by enumerating it. That is only reasonable for a small
-# range; beyond this many values the alternation is longer than it is useful (and
-# `logits_processor._MAX_PATTERN_LENGTH` caps the whole grammar anyway), so a wider
-# range is warned about instead. 256 covers the realistic cases -- a percentage, a
-# rating, a small enum-like code, a byte.
+# range; beyond this many values the alternation is longer than it is useful, so a wider
+# range is warned about instead. The engine that walks the rendered grammar
+# (`paw_kit.schema.constraint`, `constrained-decoding-real-backend`) is lazy and bounds
+# construction by `INITIAL_LEXER_FUEL` (10,000) rather than by a character-length or
+# DFA-state cap, so an oversized enumeration's actual failure mode today is spending
+# more of that fuel budget than the project allows, not blowing up a compiled DFA.
+# PROVISIONAL (Phase 2): re-derived in Phase 4 -- this paragraph only corrects the
+# engine model the justification names; it does not re-measure 256 against
+# `constraint.INITIAL_LEXER_FUEL`'s headroom. 256 covers the realistic cases in the
+# meantime -- a percentage, a rating, a small enum-like code, a byte.
 _MAX_ENUMERATED_INT_RANGE = 256
 
 # ... and the same question for a LENGTH bound, where the answer is much sharper. A DFA
-# has no loop for `X{m,n}`: it unrolls, costing roughly n * |DFA(X)| states. That is
-# invisible in the rendered regex -- `{0,19}` and `*` are the same three characters --
-# and it lands on `logits_processor`'s budget, which caps a whole compiled grammar at
-# _MAX_FSM_STATES = 10,000 states and 3 s. Measured on this compiler's own output:
+# has no loop for `X{m,n}`: it unrolls, costing roughly n * |DFA(X)| states under a
+# character-level DFA engine. That is invisible in the rendered regex -- `{0,19}` and
+# `*` are the same three characters. `constrained-decoding-real-backend` replaced that
+# engine (`logits_processor.RegexLogitsProcessor`, which capped a whole compiled
+# grammar at `_MAX_FSM_STATES` = 10,000 states and 3 s) with `paw_kit.schema.constraint`,
+# which is lazy and bounds construction by `INITIAL_LEXER_FUEL` (10,000) instead --
+# measured there: a `Literal` costs roughly 8.3-8.5 fuel per member asymptotically, the
+# `Contact` schema used throughout that track's evidence needs 763, and the worst of
+# `tests/test_schema_spine.py`'s 38 `SPINE_CASES` needs 1,266 (7.90x headroom under
+# 10,000) -- a materially different cost shape than the state-count table below.
+# PROVISIONAL (Phase 2): re-derived in Phase 4 -- the table below, and the "five `str`
+# fields" figure after it, were measured against the deleted character-level engine's
+# state count and 3 s timeout, neither of which bounds construction under the
+# fuel-based engine. The unrolling constants this whole comment justifies
+# (`_MAX_UNROLLED_STRING_LENGTH`, `_MAX_UNROLLED_COLLECTION_ITEMS`,
+# `_MAX_UNROLLED_COLLECTION_CHARS`) are kept at their existing values pending
+# re-measurement against `INITIAL_LEXER_FUEL`; only the engine model above is corrected
+# here. Historical measurement, against the deleted engine:
 #
 #   str, max_length=64               653 states   0.12 s
 #   str, max_length=256            2,573 states   1.45 s
@@ -296,8 +318,9 @@ _MAX_ENUMERATED_INT_RANGE = 256
 #   List[nested model], max_items=8  2,116 states 1.51 s
 #   List[nested model], max_items=20 7,496 states 19.07 s  <- past both budgets
 #
-# (A string costs about ten states per character rather than one, because each position
-# carries the S-2 escape alternation.)
+# (A string costs about ten states per character rather than one under that engine,
+# because each position carried the S-2 escape alternation -- not applicable to the
+# fuel-based engine's cost model.)
 #
 # So a bound that is trivial to WRITE can make a schema that used to compile fail to
 # compile -- turning a working call into a raise, which the parent track's fail-open
@@ -305,9 +328,11 @@ _MAX_ENUMERATED_INT_RANGE = 256
 # budget named, exactly like a constraint that is inexpressible for semantic reasons.
 # The limits are deliberately well inside the decoder's budget, because the budget is
 # for the WHOLE grammar and a model has more than one field. Measured on five `str`
-# fields in one model: at max_length=64 they cost 3,262 states and 3.12 s, which is
-# already past the compile timeout; at max_length=32, 1,662 states and 0.85 s. Hence 32.
-# What makes a bounded string expensive is the S-2 escape alternation -- every permitted
+# fields in one model against the deleted engine: at max_length=64 they cost 3,262
+# states and 3.12 s, which was already past that engine's compile timeout; at
+# max_length=32, 1,662 states and 0.85 s. Hence 32 (not yet re-measured against the fuel
+# engine -- see the PROVISIONAL note above). What makes a bounded string expensive under
+# that measurement is the S-2 escape alternation -- every permitted
 # character position carries `\\(["\\/bfnrt]|uXXXX)` -- so dropping escapes from inside a
 # length-bounded string would buy an order of magnitude. That narrows the grammar
 # further (no quote, backslash or newline inside a bounded string at all) and no finding
@@ -474,8 +499,9 @@ def _resolve_length_bounds(
     -- it is unrelated to whether unrolling the bound would be affordable. Left
     unchecked, `_render_quantifier(low, high)` with `low > high` emits `{5,2}`, a string
     `re.compile` refuses outright (`re.error: min repeat greater than max repeat`) and
-    that then reaches `RegexLogitsProcessor` as a bare, unwrapped exception -- S-1's and
-    S-15's exact failure shapes, reopened through this door. Found by Phase F review.
+    that then reaches a caller of `pydantic_to_regex` (e.g.
+    `paw_kit.schema.constraint.build_constraint`) as a bare, unwrapped exception -- S-1's
+    and S-15's exact failure shapes, reopened through this door. Found by Phase F review.
     """
     kind = _length_constraint_kind(annotation)
     if kind is None:
@@ -944,9 +970,9 @@ def _render_char_set(is_positive: bool, chars: FrozenSet[str]) -> str:
     """Render a character set as a regex atom, collapsing contiguous runs into ranges.
 
     Ranges and not enumerations (`[0-9]`, never `[0123456789]`): the JSON-safe negated
-    classes this produces span thousands of code points, the compiled regex is capped by
-    length (`logits_processor._MAX_PATTERN_LENGTH`), and `examples/` tells users to read
-    the compiled regex.
+    classes this produces span thousands of code points, so writing them as ranges
+    rather than enumerating every member keeps the compiled regex a size a reader can
+    take in -- `examples/` tells users to read the compiled regex directly.
     """
     if is_positive and len(chars) == 1:
         return _escape_literal(next(iter(chars)))

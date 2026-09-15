@@ -42,8 +42,12 @@ def test_pyproject_dependencies_are_all_upper_bounded_PAW_DEPS_01() -> None:
 
 def test_pyproject_interegular_is_upper_bounded_PAW_DEPS_03() -> None:
     """Verify interegular specifically carries an upper bound -- its
-    algorithmic-complexity half is closed by PAW-SCHEMA-03 (Track 09), so this is the
-    supply-chain half only."""
+    algorithmic-complexity half (worst-case exponential DFA state blowup) is closed by
+    the masking engine being lazy and building no DFA at all
+    (`paw_kit.schema.constraint`, `constrained-decoding-real-backend`, which replaced
+    PAW-SCHEMA-03's `_compile_fsm_safe` mitigation), not by a DFA-state or timeout
+    bound of this project's own -- `constraint.INITIAL_LEXER_FUEL` refuses an oversized
+    grammar at construction instead. This ceiling is the supply-chain half only."""
     specs = _all_dependency_specifiers(_load_pyproject())
     interegular_specs = [s for s in specs if re.match(r"^interegular\b", s)]
     assert interegular_specs, "expected an interegular dependency entry"

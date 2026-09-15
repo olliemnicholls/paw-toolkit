@@ -10,7 +10,6 @@ from paw_kit.jit.decorator import compile_on_hit
 from paw_kit.schema.exceptions import PAWSchemaError, PAWSyntaxError
 from paw_kit.schema.grammar import pydantic_to_regex
 from paw_kit.schema.loader import load
-from paw_kit.schema.logits_processor import RegexLogitsProcessor
 from paw_kit.serve.docker import export_docker_scaffold
 from paw_kit.serve.server import create_app, serve_adapter
 from paw_kit.speclint import Finding, lint_spec
@@ -42,7 +41,6 @@ __all__ = [
     "PAWSchemaError",
     "PAWSyntaxError",
     "ProgramAsWeightsBackend",
-    "RegexLogitsProcessor",
     "StandardTestCase",
     "TestRunReport",
     "TestRunner",

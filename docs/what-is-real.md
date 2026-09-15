@@ -11,7 +11,7 @@ commands are in [`measurements/`](../measurements/README.md).
 | Shadow mode | Yes | Yes, against a real adapter and a replay of recorded teacher answers: promotion, stalling, audit cost and caller latency. Not yet against live traffic |
 | `suite.yaml` runner, fuzzer, active-learning loop | Yes | Yes. The loop was run on real fuzzer failures with a live Claude teacher; it is bounded and best-effort, not a guarantee |
 | `paw-test compare`, `paw-test judge` | Yes | Yes. Both were used to produce the compiler comparison and judge-noise figures |
-| Pydantic-to-regex compiler and FSM logits processor | Yes | Yes, in measurement scripts only. **No shipped backend applies it**; `paw.load` validates after generation instead |
+| Pydantic-to-regex compiler and grammar-constrained decoding (byte-level, `llguidance`-backed) | Yes | Applied by `ProgramAsWeightsBackend` by default whenever `llguidance` is installed; not yet run against a live model end-to-end. `MockPAWBackend` still ignores it, and `paw.load`'s post-hoc validation still runs either way |
 | `ProgramAsWeightsBackend` (official upstream SDK) | Yes, against a fake SDK | Yes. Real compile and inference on an RTX 3080 (CPU and CUDA) and an A100, with both upstream compilers |
 | `paw-kit doctor` | Yes, against a fake SDK | Not measured; it is a diagnostic, not a model path |
 | HTTP server, Docker export, dataset export, CLI | Yes | No. Exercised with `MockPAWBackend` only |

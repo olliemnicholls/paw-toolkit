@@ -60,13 +60,18 @@ dependencies = [
     "pydantic>=2.6,<3.0.0",
     "typer>=0.12,<0.28.0",
     "pyyaml>=6.0,<7.0.0",
-    # PAW-DEPS-03: interegular's algorithmic half (worst-case exponential DFA state
-    # blowup) is already closed by Track 09's PAW-SCHEMA-03 fix in
-    # logits_processor.py (_compile_fsm_safe's pattern-length cap, timeout backstop,
-    # and _MAX_FSM_STATES check) -- verified against that fix's own test coverage,
-    # not assumed here. This ceiling is the supply-chain half only: an unbounded
-    # floor-only spec would still let a future interegular release (compromised or
-    # merely incompatible) install silently.
+    # PAW-DEPS-03: interegular still parses `Field(pattern=...)` through its AST
+    # (`grammar.py:38`), so it stays a dependency, but the algorithmic half of the
+    # concern this ceiling was first argued against -- worst-case exponential DFA
+    # state blowup -- is now closed differently than it was under Track 09's
+    # PAW-SCHEMA-03 fix (`logits_processor.py`'s `_compile_fsm_safe`, deleted by
+    # `constrained-decoding-real-backend`): the engine that walks the compiled
+    # grammar (`paw_kit.schema.constraint`) is lazy and builds no DFA at all, so
+    # there is no powerset construction here for a pathological pattern to blow up
+    # -- and its `INITIAL_LEXER_FUEL` bound refuses an oversized grammar at
+    # construction instead. This ceiling therefore remains the supply-chain half
+    # only: an unbounded floor-only spec would still let a future interegular
+    # release (compromised or merely incompatible) install silently.
     "interegular>=0.3.3,<0.4.0",
     "fastapi>=0.110.0,<0.142.0",
     "uvicorn>=0.28.0,<0.53.0",
@@ -111,23 +116,6 @@ paw = [
 # `real` means "a backend that really runs a model", and that is the upstream SDK.
 real = [
     "paw-kit[paw]",
-]
-# Torch/transformers are NOT a backend option. Track 13 deleted `RealPAWBackend`, the
-# in-process PyTorch/PEFT placeholder these once served -- reimplementing upstream's
-# runtime is out of scope by design (see conductor `decisions.md` §3). This extra survives
-# for one reason: the sdist ships `scripts/`, and `scripts/measure_schema_real_model.py`
-# imports torch and transformers at module level to reproduce the constrained-decoding
-# measurement in `measurements/`. It buys reproducibility of this project's own evidence,
-# not inference. Renamed from `torch` so nothing reads it as a runtime choice.
-measure = [
-    "torch>=2.2.0,<3.0.0",
-    # PAW-DEPS-01: transformers and accelerate have each already crossed a major version
-    # boundary (5.x and 1.x respectively) since their floors below were set; the ceiling
-    # here is one major above *that* current reality, not above the old floor.
-    "transformers>=4.40.0,<6.0.0",
-    "peft>=0.10.0,<0.21.0",
-    "safetensors>=0.4.0,<0.9.0",
-    "accelerate>=0.28.0,<2.0.0",
 ]
 # `paw-test judge`'s reference judge adapter (`paw_kit.test.judge.anthropic_judge`)
 # imports `anthropic` lazily, so paw-kit and its own test suite run without it until

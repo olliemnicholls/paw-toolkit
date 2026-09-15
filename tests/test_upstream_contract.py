@@ -157,26 +157,3 @@ def test_compiled_function_accepts_logits_processor():
         "ProgramAsWeightsBackend.infer() can no longer apply grammar-constrained decoding."
     )
 
-
-def test_private_sampling_hook_still_present_for_measurements():
-    """Soft check on the *unshipped* constrained-decoding path.
-
-    `scripts/measure_constrained_decoding_upstream.py` reaches `PawFunction._llm` and
-    monkeypatches its `sample()` to inject `RegexLogitsProcessor`
-    (`measurements/README.md`). That is a private attribute with no stability contract,
-    is deliberately not used by anything in `paw_kit/`, and is documented as expected to
-    break on upstream churn.
-
-    So this is `xfail(strict=False)`, not a gate: when it starts failing, the measurement
-    script's claims need re-running, but no user is affected and CI should not go red.
-    """
-    from programasweights.runtime_llamacpp import PawFunction
-
-    assert "_llm" in inspect.getsource(PawFunction.__init__) or hasattr(PawFunction, "_llm")
-
-
-test_private_sampling_hook_still_present_for_measurements = pytest.mark.xfail(
-    strict=False,
-    reason="private attribute, no stability contract; informational only -- see "
-    "conductor/deferred/index.md 'Upstream logits_processor passthrough'",
-)(test_private_sampling_hook_still_present_for_measurements)

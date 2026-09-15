@@ -928,10 +928,10 @@ def test_regex_search_safe_timeout_does_not_block_on_runaway_thread_PAW_TEST_03(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A slow regex match must time out promptly, not block until the thread finishes --
-    mirrors _compile_fsm_safe's own timeout test (PAW-SCHEMA-03): the exact bug in the
-    audit's own illustrative fix is running the match inside `with
-    ThreadPoolExecutor(...)`, whose `__exit__` calls `shutdown(wait=True)`
-    unconditionally, defeating the timeout."""
+    mirrors the deleted `logits_processor._compile_fsm_safe`'s own timeout test
+    (PAW-SCHEMA-03): the exact bug in the audit's own illustrative fix is running the
+    match inside `with ThreadPoolExecutor(...)`, whose `__exit__` calls
+    `shutdown(wait=True)` unconditionally, defeating the timeout."""
     import paw_kit.test.runner as runner_module
 
     def slow_search(pattern: str, output: str) -> None:

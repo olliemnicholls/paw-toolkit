@@ -12,7 +12,6 @@ import pytest
 from paw_kit import (
     MockPAWBackend,
     PAWSchemaError,
-    RegexLogitsProcessor,
     load,
     pydantic_to_regex,
 )
@@ -48,107 +47,6 @@ def test_pydantic_to_regex_primitives() -> None:
     assert '"status"' in pattern
     assert '(?:"low"|"med"|"high")' in pattern
     assert '(?:"open"|"closed")' in pattern
-
-
-def test_regex_logits_processor_masking() -> None:
-    """Verify RegexLogitsProcessor correctly masks invalid tokens at each generation step."""
-    # Pattern: {"valid": true}
-    pattern = r'\{"valid":\s*true\}'
-    vocab = {
-        0: '{"valid":',
-        1: " true}",
-        2: " false}",
-        3: "garbage",
-        4: "<eos>",
-    }
-
-    processor = RegexLogitsProcessor(
-        regex_pattern=pattern,
-        vocabulary=vocab,
-        eos_token_id=4,
-    )
-
-    state0 = processor.initial_state
-    assert not processor.is_final_state(state0)
-
-    # Step 0: Only token 0 is valid
-    allowed0 = processor.get_allowed_tokens(state0)
-    assert allowed0 == {0}
-
-    # Verify dense and sparse logit filtering
-    logits_dict = {0: 1.0, 1: 5.0, 2: 3.0, 3: 10.0, 4: 2.0}
-    filtered_dict = processor.filter_logits(state0, logits_dict)
-    assert filtered_dict[0] == 1.0
-    assert filtered_dict[1] == -float("inf")
-    assert filtered_dict[3] == -float("inf")
-
-    # Step 1: Transition via token 0
-    state1 = processor.get_next_state(state0, 0)
-    assert state1 is not None
-    allowed1 = processor.get_allowed_tokens(state1)
-    assert allowed1 == {1}  # Only ' true}' allowed
-
-    # Step 2: Transition via token 1
-    state2 = processor.get_next_state(state1, 1)
-    assert state2 is not None
-    assert processor.is_final_state(state2)
-    allowed2 = processor.get_allowed_tokens(state2)
-    assert 4 in allowed2  # EOS token is now allowed
-
-
-def test_logits_processor_latency_guarantee() -> None:
-    """Verify logit filtering overhead is <2ms for typical vocabulary sizes."""
-    pattern = r'\{"status":\s*"ok"\}'
-    # 500 candidate tokens
-    vocab = {i: f"tok_{i}" for i in range(500)}
-    vocab[0] = '{"status":'
-    vocab[1] = ' "ok"}'
-
-    processor = RegexLogitsProcessor(regex_pattern=pattern, vocabulary=vocab)
-    logits = [1.0] * 500
-
-    # Best of 5 runs to eliminate profiler cold-start and coverage instrumentation jitter
-    times = []
-    for _ in range(5):
-        start = time.perf_counter()
-        processor.filter_logits(processor.initial_state, logits)
-        times.append((time.perf_counter() - start) * 1000)
-
-    assert min(times) < 2.0  # Must be under 2ms per generation step
-
-    # M-3: the dense path of filter_logits had NO behavioural assertion anywhere in the
-    # suite -- inverting `token_id not in allowed` passed all 546 tests, which is how
-    # the finding was discovered (by mutation survival, not by reading). The timing
-    # assertion above measures that the call is fast; it cannot notice that the call is
-    # wrong. These assertions are ADDED to it, never substituted for it -- three
-    # existing tests in this repo assert defects as correct, so "assertions were quietly
-    # removed while fixing something" is the named hazard of the whole campaign and a
-    # replacement here would look exactly like one.
-    allowed = processor.get_allowed_tokens(processor.initial_state)
-    assert allowed, "the corpus is wrong: no token is legal at the initial state"
-    assert allowed != set(range(len(logits))), (
-        "the corpus is wrong: every token is legal, so masking cannot be observed"
-    )
-
-    masked = processor.filter_logits(processor.initial_state, logits)
-    assert len(masked) == len(logits)
-    for token_id, value in enumerate(masked):
-        if token_id in allowed:
-            assert value == logits[token_id], (
-                f"token {token_id} is allowed but its logit was masked to {value!r}"
-            )
-        else:
-            assert value == -float("inf"), (
-                f"token {token_id} is forbidden but kept the logit {value!r}"
-            )
-
-    # ... and the dense and sparse paths must be the same function of the same inputs.
-    masked_dict = processor.filter_logits(
-        processor.initial_state, {i: v for i, v in enumerate(logits)}
-    )
-    assert masked_dict == {i: v for i, v in enumerate(masked)}, (
-        "the dict path and the dense path disagree about which tokens are allowed"
-    )
 
 
 def test_paw_load_success_validation(tmp_path) -> None:
@@ -809,212 +707,6 @@ def test_collection_depth_resets_at_each_nested_model_boundary_PAW_SCHEMA_02() -
     assert pat  # compiles without raising despite 6 levels of model + collection nesting
 
 
-# --- PAW-SCHEMA-03: bounded FSM compilation (pattern length, timeout, state count) --
-
-
-def test_compile_fsm_safe_rejects_overlong_pattern_PAW_SCHEMA_03() -> None:
-    """A pattern over the length cap is rejected before any compilation is attempted."""
-    import paw_kit.schema.logits_processor as lp
-
-    overlong = "a" * (lp._MAX_PATTERN_LENGTH + 1)
-    with pytest.raises(PAWSchemaError, match="Pattern length"):
-        lp._compile_fsm_safe(overlong)
-
-
-def test_compile_fsm_safe_rejects_excessive_fsm_states_PAW_SCHEMA_03(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pattern whose compiled FSM exceeds the state cap is rejected."""
-    import paw_kit.schema.logits_processor as lp
-
-    monkeypatch.setattr(lp, "_MAX_FSM_STATES", 1)
-    with pytest.raises(PAWSchemaError, match="state"):
-        lp._compile_fsm_safe("(a|b){3}")  # trivially compiles to more than one state
-
-
-def test_compile_fsm_safe_timeout_does_not_block_on_runaway_thread_PAW_SCHEMA_03(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A slow FSM compile must time out promptly, not block until the thread finishes.
-
-    This is the exact bug in the audit's own illustrative fix: running the compile
-    inside `with ThreadPoolExecutor(...)` calls `Executor.__exit__` ->
-    `shutdown(wait=True)` unconditionally, so even after `future.result()` raises
-    `TimeoutError` the `with` block still blocks the caller until the runaway compile
-    finishes anyway -- defeating the timeout's entire purpose.
-    """
-    import paw_kit.schema.logits_processor as lp
-
-    class _SlowParsed:
-        def to_fsm(self) -> Any:
-            time.sleep(0.3)
-            raise AssertionError("should never be reached within the test's timeout")
-
-    monkeypatch.setattr(lp, "_FSM_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(lp.interegular, "parse_pattern", lambda pattern: _SlowParsed())
-
-    start = time.monotonic()
-    with pytest.raises(PAWSchemaError, match="timed out"):
-        lp._compile_fsm_safe("dummy")
-    elapsed = time.monotonic() - start
-    assert elapsed < 1.0, "compile_fsm_safe blocked on the runaway thread instead of returning promptly"
-
-
-class InvoiceLine(BaseModel):
-    """One line of the realistic five-field invoice schema S-16 was filed about."""
-
-    sku: str = Field(pattern=r"[A-Z]{3}-[0-9]{4}")
-    description: str
-    quantity: int
-    unit_price: float
-
-
-class InvoiceModel(BaseModel):
-    invoice_id: str = Field(pattern=r"INV-[0-9]{6}")
-    issued: dt.date
-    customer: DetailModel
-    lines: List[InvoiceLine]
-    total: float
-
-
-def test_ordinary_invoice_schema_is_not_refused_by_the_length_cap_S_16() -> None:
-    """An ordinary nested invoice schema must compile, not be refused as pathological.
-
-    S-16: `_MAX_PATTERN_LENGTH` was 1,000 *characters*, which a realistic five-field
-    nested schema exceeds -- and the refusal blamed the schema for pathology. The cap
-    itself is kept (it is the only check that runs before any compilation at all; see
-    the module comment), but at 50,000, the same order as where `_MAX_FSM_STATES`
-    actually binds.
-    """
-    import paw_kit.schema.logits_processor as lp
-
-    regex = pydantic_to_regex(InvoiceModel, anchors=False)
-    assert len(regex) > 1000, (
-        "the S-16 corpus model no longer exceeds the old 1,000-character cap, so this "
-        f"test no longer pins the finding (got {len(regex)} characters)"
-    )
-    fsm = lp._compile_fsm_safe(regex)
-    assert fsm.states, "the invoice schema compiled to an empty FSM"
-
-
-def test_compile_fsm_safe_timeout_does_not_hang_interpreter_exit_S_17() -> None:
-    """After a compile timeout the process must still be able to exit (S-17).
-
-    `shutdown(wait=False)` returns to the caller promptly, which is all the existing
-    PAW-SCHEMA-03 timeout test checks -- but `concurrent.futures` registers its worker
-    threads with `threading._register_atexit`, so interpreter shutdown then *joins* the
-    abandoned compile. Executed against that version: the timeout raised at 3.02 s and
-    the process never exited (killed externally at 40 s). This is reachable from the
-    served path: a `paw-serve` worker that compiles one pathological grammar keeps
-    serving and then cannot shut down.
-
-    In-process assertions cannot see this -- the hang is at interpreter exit -- so the
-    check has to be a subprocess that is required to terminate.
-    """
-    import subprocess
-    import sys
-    import textwrap
-
-    script = textwrap.dedent(
-        """
-        import time
-        import paw_kit.schema.logits_processor as lp
-
-        class _Runaway:
-            def to_fsm(self):
-                time.sleep(60)
-
-        lp.interegular.parse_pattern = lambda pattern: _Runaway()
-        lp._FSM_TIMEOUT_SECONDS = 0.05
-        try:
-            lp._compile_fsm_safe("dummy")
-        except Exception as exc:
-            print("RAISED", type(exc).__name__)
-        print("EXITING", flush=True)
-        """
-    )
-    start = time.monotonic()
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-    except subprocess.TimeoutExpired:
-        raise AssertionError(
-            "the interpreter did not exit within 20s after a compile timeout: the "
-            "abandoned FSM-compile thread is being joined at shutdown (S-17)"
-        )
-    elapsed = time.monotonic() - start
-    assert "EXITING" in proc.stdout, proc.stderr
-    assert "RAISED PAWSchemaError" in proc.stdout, proc.stdout
-    assert elapsed < 20, f"process took {elapsed:.1f}s to exit after a 0.05s timeout"
-
-
-# --- PAW-SCHEMA-04: bounded per-processor caches, avoid full-vocab scan per state ---
-
-
-def test_logits_processor_transition_cache_bounded_PAW_SCHEMA_04(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify _transition_cache evicts oldest entries past its size cap rather than
-    growing without limit over a long generation."""
-    import paw_kit.schema.logits_processor as lp
-
-    monkeypatch.setattr(lp, "_MAX_TRANSITION_CACHE_ENTRIES", 3)
-    vocab = {i: chr(97 + i) for i in range(10)}  # 'a'..'j', single-char tokens
-    processor = RegexLogitsProcessor(regex_pattern=r"[a-j]{5}", vocabulary=vocab)
-
-    state = processor.initial_state
-    for token_id in range(10):
-        processor.get_next_state(state, token_id)
-
-    assert len(processor._transition_cache) <= 3
-
-
-def test_logits_processor_allowed_tokens_cache_bounded_PAW_SCHEMA_04(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify _allowed_tokens_cache evicts oldest entries past its size cap."""
-    import paw_kit.schema.logits_processor as lp
-
-    monkeypatch.setattr(lp, "_MAX_ALLOWED_TOKENS_CACHE_ENTRIES", 2)
-    vocab = {i: chr(97 + i) for i in range(5)}
-    processor = RegexLogitsProcessor(regex_pattern=r"[a-e]{5}", vocabulary=vocab)
-
-    state = processor.initial_state
-    visited_states = {state}
-    for token_id in range(5):
-        next_state = processor.get_next_state(state, token_id)
-        if next_state is not None:
-            visited_states.add(next_state)
-            processor.get_allowed_tokens(next_state)
-
-    assert len(processor._allowed_tokens_cache) <= 2
-
-
-def test_logits_processor_skips_full_vocab_scan_for_restrictive_state_PAW_SCHEMA_04() -> None:
-    """Verify get_allowed_tokens does not call get_next_state for every vocabulary
-    token when only a small fraction of first characters are legal from the current
-    state -- the whole point of the first-character bucketing PAW-SCHEMA-04 adds."""
-    pattern = r'\{"k":\s*true\}'  # a fixed literal: only one character is ever legal
-    # A large vocabulary of single distinct-first-character tokens, only one of which
-    # (the one starting with the pattern's first literal character) can ever be legal.
-    vocab = {i: chr(33 + i) + "xyz" for i in range(200)}
-    vocab[0] = "{" + "xyz"  # ensure the one legal first character is present
-    processor = RegexLogitsProcessor(regex_pattern=pattern, vocabulary=vocab)
-
-    call_count = 0
-    real_get_next_state = processor.get_next_state
-
-    def spy(state: int, token_id: int):
-        nonlocal call_count
-        call_count += 1
-        return real_get_next_state(state, token_id)
-
-    processor.get_next_state = spy  # type: ignore[method-assign]
-    processor.get_allowed_tokens(processor.initial_state)
-
-    # Only tokens whose first character is a legal transition are ever walked --
-    # nowhere near the full 200-entry vocabulary.
-    assert call_count < len(vocab)
-
-
 # --- PAW-SCHEMA-05: Tuple[()] compiles strict; bare typing.Tuple stays permissive --
 
 
@@ -1379,46 +1071,6 @@ def test_currency_pattern_keeps_its_dollar_sign_S_7() -> None:
     assert _re.match(pat, '{"x":"a"}') is None, "grammar still accepts the value pydantic rejects"
 
 
-# --- S-15: interegular's own exception types are wrapped in PAWSchemaError -----------
-
-
-@pytest.mark.parametrize("pattern_src", [r"\bfoo\b", r"\p{L}+", r"\Qa.b\E", r"(?<=a)b"])
-def test_compile_fsm_safe_wraps_interegular_exceptions_S_15(pattern_src: str) -> None:
-    """`Unsupported` and `InvalidSyntax` must surface as PAWSchemaError (S-15)."""
-    import paw_kit.schema.logits_processor as lp
-
-    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
-        lp._compile_fsm_safe(pattern_src)
-
-
-def test_regex_logits_processor_wraps_interegular_exceptions_S_15() -> None:
-    """The public constructor is the real beneficiary: it has no other wrapper (S-15).
-
-    `loader.py` already converts anything that is not a PAWSchemaError, but
-    `RegexLogitsProcessor` is a public export constructed directly.
-    """
-    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
-        RegexLogitsProcessor(regex_pattern=r"\bword\b", vocabulary={0: "a"}, eos_token_id=1)
-
-
-def test_regex_logits_processor_wraps_reversed_quantifier_bare_exception_S_22() -> None:
-    """A reversed quantifier bound must surface as PAWSchemaError too, not the bare
-    `Exception: Can't multiply an FSM by -3` interegular raises for it.
-
-    `a{5,2}` (min > max) parses fine -- interegular's own parser does not reject it --
-    and only fails inside `to_fsm()`, with an exception type `Unsupported`/
-    `InvalidSyntax` do not cover (S-15's wrapper). Distinct from S-15's own patterns:
-    those fail to *parse*; this one parses and fails to *compile*.
-    """
-    import paw_kit.schema.logits_processor as lp
-
-    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
-        lp._compile_fsm_safe("a{5,2}")
-
-    with pytest.raises(PAWSchemaError, match="Cannot compile the pattern into a DFA"):
-        RegexLogitsProcessor(regex_pattern="a{5,2}", vocabulary={0: "a", 1: "b"})
-
-
 # --- S-3 / S-3b: Field(pattern=...) is translated through the AST, not spliced --------
 
 
@@ -1528,10 +1180,9 @@ def test_stacked_quantifiers_render_as_a_regex_python_re_accepts_S_3(pattern_src
 
 # The exact rendering, pinned. The compiled regex is a user-facing artefact --
 # `examples/pii_scrubber/README.md` tells readers to inspect it, it is what `loader.py`
-# hands the backend, and it is embedded verbatim in `measurements/*.json` -- and its
-# length is bounded (`logits_processor._MAX_PATTERN_LENGTH`), so "same language,
-# different spelling" is not a free pass. Every entry below is a spelling the renderer
-# is required to choose, not merely one it happens to produce.
+# hands the backend, and it is embedded verbatim in `measurements/*.json` -- so "same
+# language, different spelling" is not a free pass. Every entry below is a spelling the
+# renderer is required to choose, not merely one it happens to produce.
 RENDERING_CASES = [
     (r"[abc]", "[a-c]"),               # contiguous runs collapse into a range
     (r"[a-cx]", "[a-cx]"),             # ... and a stray member stays a member
@@ -2632,158 +2283,6 @@ def test_calendar_date_grammar_agrees_with_datetime_date_exhaustively_S_11() -> 
     assert not mismatches, f"{len(mismatches)} disagreements, e.g. {mismatches[:5]}"
 
 
-# --- S-12: a final state with no EOS id raises instead of masking everything ---------
-
-
-def test_final_state_without_eos_token_raises_S_12() -> None:
-    """An all-`-inf` mask is NaN after softmax, so say so instead of returning it.
-
-    `RegexLogitsProcessor(pattern, vocab)` defaults `eos_token_id=None`. At a final
-    state `get_allowed_tokens` returned `set()` and `filter_logits` returned `-inf`
-    everywhere; softmax of that is NaN in every framework, so the caller's sampler
-    produced garbage with no exception, no warning, and nothing naming the cause. Every
-    existing test passed an explicit EOS id, so nothing covered it.
-
-    The message has to distinguish this from a dead state: they look identical from the
-    outside (no legal token) and have completely different fixes.
-    """
-    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage"}
-    processor = RegexLogitsProcessor(regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab)
-
-    state = processor.get_next_state(processor.initial_state, 0)
-    state = processor.get_next_state(state, 1)
-    assert processor.is_final_state(state), "the corpus is wrong: this is not a final state"
-
-    with pytest.raises(PAWSchemaError) as exc:
-        processor.get_allowed_tokens(state)
-    message = str(exc.value)
-    assert "eos_token_id=None" in message, "the message must name the actual cause"
-    assert "not a dead state" in message, (
-        "the message must distinguish this from a dead state, which looks identical "
-        "from outside and has a different fix"
-    )
-
-    # ... and through the masking path too, which is where the NaN was produced.
-    with pytest.raises(PAWSchemaError):
-        processor.filter_logits(state, [1.0, 1.0, 1.0])
-
-
-def test_eos_token_id_stays_optional_S_12() -> None:
-    """The fix must not make the parameter required -- that is an API break.
-
-    `RegexLogitsProcessor` is a public export and four existing constructions in this
-    file pass no EOS id. They never walk to a final state, so raising in that one state
-    breaks none of them; requiring the parameter would break all four.
-
-    Passes at `main` by design: it guards the fix against over-reaching, rather than
-    pinning a defect that precedes it.
-    """
-    import inspect
-
-    signature = inspect.signature(RegexLogitsProcessor.__init__)
-    assert signature.parameters["eos_token_id"].default is None
-
-    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage"}
-    processor = RegexLogitsProcessor(regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab)
-    # Everything short of a final state keeps working exactly as before.
-    assert processor.get_allowed_tokens(processor.initial_state) == {0}
-    assert processor.filter_logits(processor.initial_state, [1.0, 1.0, 1.0]) == [
-        1.0, -float("inf"), -float("inf")
-    ]
-
-
-def test_final_state_with_an_eos_token_does_not_raise_S_12() -> None:
-    """The raise is scoped to the missing-EOS case and nothing else.
-
-    Passes at `main` by design, for the same reason as its sibling above: it is the
-    boundary of the new raise, not the defect.
-    """
-    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage", 3: "<eos>"}
-    processor = RegexLogitsProcessor(
-        regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab, eos_token_id=3
-    )
-    state = processor.get_next_state(processor.initial_state, 0)
-    state = processor.get_next_state(state, 1)
-    assert processor.is_final_state(state)
-    assert processor.get_allowed_tokens(state) == {3}
-
-
-# --- M-3: the dense path of filter_logits, asserted behaviourally --------------------
-
-
-def test_filter_logits_dense_and_dict_paths_agree_at_every_state_M_3() -> None:
-    """Walk the whole FSM and compare the two masking paths value by value.
-
-    M-3 is a *test gap*, not a source defect: the report's own disposition is "none
-    needed in the source". It was found by mutation survival -- inverting
-    `token_id not in allowed` in the dense branch passed all 546 tests -- so this test
-    passes at `main` by construction and Gate 1 does not apply to it. Gate 3 is its
-    verification: `logits_processor.py cmp not in -> in` must now be dead.
-
-    Assertions on the returned VALUES, not on latency: allowed tokens keep their exact
-    logit and every other position is `-inf`, at every state the walk reaches, with the
-    dict path checked against the dense one as an independent second opinion.
-    """
-    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage", 3: "<eos>", 4: '{"status'}
-    processor = RegexLogitsProcessor(
-        regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab, eos_token_id=3
-    )
-    logits = [0.5, -1.25, 3.0, 0.0, 7.5]
-
-    seen_masked = False
-    states = [processor.initial_state]
-    visited = set()
-    while states:
-        state = states.pop()
-        if state in visited:
-            continue
-        visited.add(state)
-        allowed = processor.get_allowed_tokens(state)
-
-        dense = processor.filter_logits(state, logits)
-        assert isinstance(dense, list) and len(dense) == len(logits)
-        for token_id, value in enumerate(dense):
-            expected = logits[token_id] if token_id in allowed else -float("inf")
-            assert value == expected, (
-                f"state {state}, token {token_id}: expected {expected!r}, got {value!r} "
-                f"(allowed={sorted(allowed)})"
-            )
-            seen_masked = seen_masked or value == -float("inf")
-
-        sparse = processor.filter_logits(state, {i: v for i, v in enumerate(logits)})
-        assert sparse == {i: v for i, v in enumerate(dense)}
-
-        for token_id in range(len(logits)):
-            nxt = processor.get_next_state(state, token_id)
-            if nxt is not None and nxt != state:
-                states.append(nxt)
-
-    assert len(visited) > 1, "the walk never left the initial state"
-    assert seen_masked, "no token was ever masked, so the assertions proved nothing"
-
-
-def test_filter_logits_preserves_the_input_container_M_3() -> None:
-    """Masking returns a new container of the input's type and leaves the input alone."""
-    vocab = {0: '{"status":', 1: ' "ok"}', 2: "garbage", 3: "<eos>"}
-    processor = RegexLogitsProcessor(
-        regex_pattern=r'\{"status": "ok"\}', vocabulary=vocab, eos_token_id=3
-    )
-    dense_in = [1.0, 2.0, 3.0, 4.0]
-    dense_out = processor.filter_logits(processor.initial_state, dense_in)
-    assert dense_in == [1.0, 2.0, 3.0, 4.0], "filter_logits mutated its dense input"
-    assert dense_out is not dense_in
-    assert isinstance(dense_out, list)
-
-    # A tuple is a legal dense input too, and must come back as a list.
-    tuple_out = processor.filter_logits(processor.initial_state, (1.0, 2.0, 3.0, 4.0))
-    assert tuple_out == dense_out
-
-    sparse_in = {0: 1.0, 2: 3.0}
-    sparse_out = processor.filter_logits(processor.initial_state, sparse_in)
-    assert sparse_in == {0: 1.0, 2: 3.0}, "filter_logits mutated its dict input"
-    assert sparse_out == {0: 1.0, 2: -float("inf")}
-
-
 def test_two_fields_claiming_the_same_alias_are_refused_S_5() -> None:
     """A JSON object cannot carry the same key twice, so the compiler refuses.
 
@@ -2882,22 +2381,28 @@ def test_a_length_bound_past_the_unrolling_budget_warns_rather_than_compiling_S_
 def test_the_unrolling_budget_keeps_a_realistic_schema_compilable_S_9() -> None:
     """The budget's whole point: a normal schema must still fit the decoder's limits.
 
-    Without it, this invoice model compiled to 8,402 FSM states in 23.8 s -- past
-    `_FSM_TIMEOUT_SECONDS` and nearly past `_MAX_FSM_STATES`, i.e. a schema that worked
-    before this track would have stopped compiling. This is the regression test for
-    that, asserted against the decoder's own budget rather than against a wall clock,
-    so it cannot flake on a loaded machine.
-
-    It goes through `_compile_fsm_safe` rather than calling `interegular` directly, for
-    two reasons: that is the call the decoder actually makes, so it is the real
-    question; and it is bounded by `_FSM_TIMEOUT_SECONDS`, so a regression fails in
-    three seconds with a `PAWSchemaError` instead of spending half a minute building the
-    very DFA the test exists to forbid -- which matters because the mutation harness
-    runs this suite hundreds of times.
+    This test's subject is `grammar.py`'s unrolling budget, not any one masking
+    engine -- but "fit the decoder's limits" is meaningless without a decoder to check
+    it against, so it is rewritten here against the engine that replaced the deleted
+    one. Previously: without the unrolling budget, this invoice model compiled to
+    8,402 FSM states in 23.8 s under `logits_processor.RegexLogitsProcessor`'s
+    character-level DFA construction -- past that engine's `_FSM_TIMEOUT_SECONDS` and
+    nearly past its `_MAX_FSM_STATES`, i.e. a schema that worked before this track
+    would have stopped compiling. `constrained-decoding-real-backend` replaced that
+    engine with `paw_kit.schema.constraint`, which is lazy and bounds construction by
+    `INITIAL_LEXER_FUEL` (10,000) rather than by DFA state count (module docstring: a
+    `Literal` costs ~8.3-8.5 fuel/member asymptotically, `Contact` needs 763, the
+    worst of `tests/test_schema_spine.py`'s 38 `SPINE_CASES` needs 1,266 -- 7.90x
+    headroom). This regression test is rewritten against that budget: the same
+    realistic invoice schema's regex must still construct a matcher cleanly under
+    `INITIAL_LEXER_FUEL`, rather than merely produce a small-enough DFA under the
+    deleted engine.
     """
     import warnings as _warnings
 
-    from paw_kit.schema.logits_processor import _MAX_FSM_STATES, _compile_fsm_safe
+    pytest.importorskip("llguidance")
+
+    from paw_kit.schema.constraint import INITIAL_LEXER_FUEL, Vocabulary, build_constraint
 
     class BudgetLineItem(BaseModel):
         sku: str = Field(pattern=r"[A-Z]{3}-[0-9]{4}")
@@ -2915,11 +2420,20 @@ def test_the_unrolling_budget_keeps_a_realistic_schema_compilable_S_9() -> None:
         _warnings.simplefilter("ignore")
         pattern = pydantic_to_regex(BudgetInvoice)
 
-    fsm = _compile_fsm_safe(pattern)  # raises PAWSchemaError past the decoder's budget
-    assert len(fsm.states) < _MAX_FSM_STATES // 2, (
-        f"a realistic schema now costs {len(fsm.states)} states, over half the "
-        f"decoder's whole budget of {_MAX_FSM_STATES}"
-    )
+    # A minimal byte-fallback-only vocabulary (every byte 0-255 its own token, plus
+    # EOS): sufficient for `Vocabulary`'s encoder round-trip check, since every UTF-8
+    # byte sequence is spellable one byte at a time, and irrelevant to the property
+    # under test, which is whether *construction* fits the fuel budget.
+    tokens = [bytes([i]) for i in range(256)]
+    eos_id = len(tokens)
+    tokens.append(b"<eos>")
+
+    def _encode(x: "bytes | str") -> "list[int]":
+        b = x if isinstance(x, bytes) else x.encode("utf-8")
+        return list(b)
+
+    vocab = Vocabulary(tokens=tokens, eos_token_id=eos_id, special_token_ids=(eos_id,), encode=_encode)
+    build_constraint(pattern, vocab)  # must not raise PAWSchemaError at INITIAL_LEXER_FUEL
 
 
 # --- S-9: the constraint-reading boundaries Gate 3 exposed ---------------------------

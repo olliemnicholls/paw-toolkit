@@ -29,12 +29,14 @@ def _truncate_for_reason(text: str, length: int = _EXPECTED_MISMATCH_TRUNCATE_LE
     return text if len(text) <= length else text[:length] + "..."
 
 
-# PAW-TEST-03: bounds mirroring logits_processor._compile_fsm_safe's two-tier shape
-# (Track 09) -- a cheap length pre-check as the *primary* defense, since a bare
-# wall-clock timeout cannot actually interrupt a running re.search (Python has no way
-# to cancel a thread). Here that matters more than in the FSM case: this runs once
-# per (test case x assertion), so relying on the timeout alone would let abandoned
-# runaway threads accumulate across an entire suite run instead of just one.
+# PAW-TEST-03: bounds mirroring the two-tier shape of PAW-SCHEMA-03's original
+# ReDoS defense (Track 09; that defense's own home, `logits_processor._compile_fsm_safe`,
+# was deleted by `constrained-decoding-real-backend`, but the shape is reused here) -- a
+# cheap length pre-check as the *primary* defense, since a bare wall-clock timeout
+# cannot actually interrupt a running re.search (Python has no way to cancel a
+# thread). Here that matters more than in the FSM case: this runs once per (test case
+# x assertion), so relying on the timeout alone would let abandoned runaway threads
+# accumulate across an entire suite run instead of just one.
 _MAX_REGEX_MATCH_PATTERN_LENGTH = 1000
 _MAX_REGEX_MATCH_OUTPUT_LENGTH = 10_000
 _REGEX_MATCH_TIMEOUT_SECONDS = 2.0
@@ -57,9 +59,9 @@ def _regex_search_safe(pattern: str, output: str) -> Tuple[bool, Optional[str]]:
     def _search() -> bool:
         return bool(re.search(pattern, output))
 
-    # Secondary backstop, not joined on timeout -- see _compile_fsm_safe's docstring
-    # for why `with ThreadPoolExecutor(...)` (which calls `shutdown(wait=True)`
-    # unconditionally on exit) would defeat the timeout entirely.
+    # Secondary backstop, not joined on timeout -- PAW-SCHEMA-03's original ReDoS
+    # defense established why `with ThreadPoolExecutor(...)` (which calls
+    # `shutdown(wait=True)` unconditionally on exit) would defeat the timeout entirely.
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         future = executor.submit(_search)
