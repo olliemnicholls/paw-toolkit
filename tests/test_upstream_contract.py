@@ -143,6 +143,21 @@ def test_compiled_function_is_callable_with_max_tokens():
     assert "max_tokens" in p, "`max_tokens=` keyword dropped from PawFunction.__call__"
 
 
+def test_compiled_function_accepts_logits_processor():
+    """`fn(input_text, logits_processor=...)` -- the public 0.4.6 hook
+    `ProgramAsWeightsBackend.infer()` depends on to apply grammar-constrained decoding
+    (constrained-decoding-real-backend, Phase 3). A dropped keyword is a TypeError on
+    the first grammar-constrained inference call, not at import.
+    """
+    from programasweights.runtime_llamacpp import PawFunction
+
+    p = _params(PawFunction.__call__)
+    assert "logits_processor" in p, (
+        "`logits_processor=` keyword dropped from PawFunction.__call__; "
+        "ProgramAsWeightsBackend.infer() can no longer apply grammar-constrained decoding."
+    )
+
+
 def test_private_sampling_hook_still_present_for_measurements():
     """Soft check on the *unshipped* constrained-decoding path.
 

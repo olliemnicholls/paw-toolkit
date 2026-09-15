@@ -199,17 +199,33 @@ def test_recompile_invalidates_cached_function(key: None, tmp_path: Path) -> Non
     assert len(sdk.function_calls) == 2
 
 
-def test_grammar_constraint_warns_once_and_is_ignored(key: None, tmp_path: Path) -> None:
+def test_vocabulary_build_failure_warns_once_and_disables_grammar_constraint(
+    key: None, tmp_path: Path
+) -> None:
+    """Money route (iii-a): `FakeSDK.function()` returns a plain closure with no
+    `_llm` attribute, so `_build_vocabulary` raises on the first model load.
+    `applies_grammar_constraint` must flip False, exactly one `UserWarning` must be
+    emitted (naming the vocabulary, not the old "cannot apply grammar_constraint"
+    message this backend used to emit unconditionally), and `infer()` must still
+    return the LOCAL (unconstrained) output rather than raising -- never a raise on
+    every call, per the track's "No money leak" invariant.
+    """
     backend = ProgramAsWeightsBackend(sdk=FakeSDK())
     out = str(tmp_path / "t.paw")
     backend.compile("spec", [], out)
-    with pytest.warns(UserWarning, match="grammar_constraint"):
-        backend.infer(out, "a", grammar_constraint=r"\{.*\}")
+    assert backend.applies_grammar_constraint is True  # llguidance IS importable here
+
+    with pytest.warns(UserWarning, match="grammar-constraint vocabulary"):
+        result = backend.infer(out, "a", grammar_constraint=r"\{.*\}")
+    assert result == "out(prog-fast):a"
+    assert backend.applies_grammar_constraint is False
+
     import warnings
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        backend.infer(out, "b", grammar_constraint=r"\{.*\}")  # no second warning
+        result2 = backend.infer(out, "b", grammar_constraint=r"\{.*\}")  # no second warning
+    assert result2 == "out(prog-fast):b"
 
 
 def test_infer_rejects_foreign_manifest(tmp_path: Path) -> None:

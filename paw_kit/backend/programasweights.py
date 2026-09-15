@@ -20,11 +20,26 @@ Three honest limitations, all reflecting upstream SDK behavior as of September 2
    demonstrations appended to the spec text*, capped by `max_spec_examples`. That is
    what this backend does. Whether it measurably helps is an open question that the
    `paw-test` harness exists to answer; do not assume it does.
-2. **No token-level grammar enforcement.** The upstream callable exposes no grammar,
-   JSON-schema or logits-processor hook, so `grammar_constraint` cannot be applied
-   during decoding here. It is accepted for interface compatibility and ignored (with a
-   one-time warning). Schema safety for this backend comes from `paw_kit.schema.load`'s
-   *post-hoc* Pydantic validation plus fail-open fallback, not from constrained decoding.
+2. **Token-level grammar enforcement is applied, on a shape guarantee only.** Since
+   `programasweights==0.4.6` (PR #6) the upstream callable exposes a public
+   `logits_processor` hook, and `infer()` uses it: when constructed with
+   `constrained_decoding=True` (the default) and a working `llguidance` install, a
+   fresh `paw_kit.schema.constraint` matcher is built per call from
+   `pydantic_to_regex`'s output and masks every generation step, so a token that would
+   leave the compiled regex's language cannot be sampled. This is a **shape** guarantee
+   only -- it proves the output parses as the target schema, not that its field values
+   are correct, and it does not change what `paw.load` does after generation: post-hoc
+   Pydantic validation and fail-open fallback (mechanism 2, `decisions.md` §2) stay
+   load-bearing regardless, because generation truncated at `max_tokens` or the context
+   window is still an invalid object, and a masking engine error is itself a fail-open
+   exception (`PAWSchemaError`, propagated unwrapped -- see `infer()`). Pass
+   `constrained_decoding=False` to opt out (e.g. an adapter compiled for a different
+   schema than the one it is now being asked for, where forcing shape produces
+   syntactically valid but semantically poor output; see `measurements/README.md`).
+   When `llguidance` is not importable, or the vocabulary object built from the loaded
+   model fails its own verification, this backend degrades to unconstrained decoding
+   with one `UserWarning` naming the cause, never a silent no-op and never a raise on
+   every call -- see `applies_grammar_constraint` and `infer()`.
 3. **`is_available()` only proves SDK importability.** `is_available()` verifies that
    the `programasweights` package is importable (or an injected double is present), but
    proves nothing about whether the underlying llama.cpp runtime actually works, whether
@@ -88,6 +103,8 @@ from paw_kit.backend.manifest_lineage import (
     select_folded_examples,
     sha256_text,
 )
+from paw_kit.schema.constraint import Vocabulary, build_constraint
+from paw_kit.schema.exceptions import PAWSchemaError
 
 # Public compiler names as documented in the upstream README. `paw-4b-qwen3-0.6b` is
 # the server default (single-forward-pass "fast" compiler from the original PAW paper);
@@ -156,6 +173,15 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         max_tokens: Per-call output cap passed to the loaded function. `None` = SDK default.
         offline: If True, never touch the network at inference time; the program, runtime
             and base model must already be in the SDK cache (see `prepare_program`).
+        constrained_decoding: Whether to apply grammar-constrained decoding (module
+            docstring, limitation 2) through upstream's public `logits_processor` hook.
+            Default `True`. `applies_grammar_constraint` (an instance attribute, not a
+            class-level constant -- see `AbstractPAWBackend`) is computed from this
+            **and** whether `llguidance` is actually importable; requesting it without
+            the engine installed emits one `UserWarning` naming the `paw` extra at
+            construction, not a raise, and the instance degrades to unconstrained
+            decoding. Pass `False` to opt out even when the engine is available (e.g.
+            an adapter being asked for a schema it was not compiled for).
         max_spec_examples: How many traced/gold examples to fold into the spec text at
             compile time (see module docstring, limitation 1). `0` disables it.
         poll_interval_s / compile_timeout_s: Polling cadence and ceiling for async compiles.
@@ -190,9 +216,6 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             the real `programasweights` module, imported lazily on first use.
     """
 
-    # See module docstring limitation #2: accepts grammar_constraint but cannot enforce it upstream.
-    applies_grammar_constraint = False
-
     #: Base delay between compile retries, multiplied by the attempt number (1, 2, ...).
     _COMPILE_RETRY_BACKOFF_S = 0.5
 
@@ -204,6 +227,7 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         n_ctx: int = 2048,
         max_tokens: Optional[int] = None,
         offline: bool = False,
+        constrained_decoding: bool = True,
         max_spec_examples: int = 16,
         poll_interval_s: float = 5.0,
         compile_timeout_s: float = 3600.0,
@@ -218,6 +242,28 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         self.n_ctx = n_ctx
         self.max_tokens = max_tokens
         self.offline = offline
+        self.constrained_decoding = constrained_decoding
+        # `applies_grammar_constraint` is an INSTANCE attribute (X-1 / this track's
+        # Phase 3), not the class-level `False` this backend used to hard-code (module
+        # docstring, limitation 2). Money route (i) from the track's safety invariants:
+        # requested but the engine is not importable -> flag False, exactly one
+        # UserWarning here at construction, never a raise on every `infer()` call.
+        # `_get_function` may additionally flip this to False post-construction (money
+        # route iii) if the vocabulary object built from a loaded model fails its own
+        # verification; it never flips it back to True.
+        engine_importable = importlib.util.find_spec("llguidance") is not None
+        self.applies_grammar_constraint = constrained_decoding and engine_importable
+        if constrained_decoding and not engine_importable:
+            warnings.warn(
+                "ProgramAsWeightsBackend was constructed with constrained_decoding=True "
+                "(the default) but the 'llguidance' package is not importable, so "
+                "grammar-constrained decoding is unavailable for this instance. Install "
+                "the 'paw' extra (pip install 'paw-kit[paw]') to enable it. Output is "
+                "still validated after generation by paw_kit.schema.load instead "
+                "(fail-open on mismatch).",
+                UserWarning,
+                stacklevel=2,
+            )
         self.max_spec_examples = max_spec_examples
         self.poll_interval_s = poll_interval_s
         self.compile_timeout_s = compile_timeout_s
@@ -231,11 +277,16 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         self.ephemeral = ephemeral
         self.compile_retries = compile_retries
         self._sdk = sdk
+        # Fourth element is the Vocabulary object built for this cached function (None
+        # if grammar-constrained decoding is off, unavailable, or failed verification
+        # for this program) -- cached BESIDE the function so LRU eviction (A-11) drops
+        # both together, since the encoder inside Vocabulary is a live callable bound to
+        # this exact loaded model.
         self._functions: (
-            "OrderedDict[str, Tuple[Tuple[int, int, int], str, Callable[..., str]]]"
+            "OrderedDict[str, Tuple[Tuple[int, int, int], str, Callable[..., str], "
+            "Optional[Vocabulary]]]"
         ) = OrderedDict()
         self._lock = threading.Lock()
-        self._warned_grammar = False
 
     # ------------------------------------------------------------------ plumbing
 
@@ -273,9 +324,9 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         # API-key guard below and then POSTed to the compile service anyway. Raising
         # here -- at the top, beside the existing API-key raise, before any paid work
         # and on nothing the request path depends on -- is the only placement that does
-        # not weaken the campaign's fail-open invariant. The one in-repo construction of
-        # `offline=True` (scripts/measure_constrained_decoding_upstream.py) is
-        # inference-only and never calls compile().
+        # not weaken the campaign's fail-open invariant. Every in-repo construction of
+        # `offline=True` (the measurement scripts under `scripts/`) is inference-only
+        # and never calls compile().
         if self.offline:
             raise RuntimeError(
                 "ProgramAsWeightsBackend was constructed with offline=True, which means "
@@ -764,7 +815,53 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             raise ValueError(f"{adapter_path} has no program_id/slug")
         return data
 
-    def _get_function(self, adapter_path: str) -> Callable[..., str]:
+    def _build_vocabulary(self, fn: Callable[..., str]) -> Vocabulary:
+        """Build and verify a `paw_kit.schema.constraint.Vocabulary` from the
+        llama_cpp model loaded behind `fn`.
+
+        `fn._llm` is the upstream SDK's private `llama_cpp.Llama` handle
+        (`runtime_llamacpp.py`'s `PawFunction._llm`) -- the only place this class
+        reaches into an SDK internal, and only to read the loaded model, never to
+        drive it directly. Tokens are read via `detokenize()` of every id (byte-fallback
+        tokens included, unfiltered -- owner decision 2), EOS via `token_eos()`, and the
+        encode callable is bound live to this model's own tokenizer
+        (`llm.tokenize(..., add_bos=False, special=False)`, which round-trips the
+        `Vocabulary` construction-time probes -- verified live across four measurement
+        rounds). Measured at ~0.553 s per model (0.293 s detokenize + 0.260 s
+        tokenizer), which is why this is called at most once per model load, not per
+        `infer()` call.
+
+        Raises on any failure (`fn` has no `_llm`, the model object is missing an
+        expected method, or `Vocabulary`'s own round-trip verification raises
+        `PAWSchemaError`) -- the caller is responsible for catching this, warning once,
+        and disabling `applies_grammar_constraint` (money route iii); this method never
+        does that itself, so it stays usable standalone (e.g. from tests).
+        """
+        llm = getattr(fn, "_llm", None)
+        if llm is None:
+            raise RuntimeError(
+                "cannot build a grammar-constraint vocabulary: the loaded function "
+                "has no '_llm' attribute exposing the underlying llama_cpp model"
+            )
+        n_vocab = llm.n_vocab()
+        tokens = [llm.detokenize([i]) for i in range(n_vocab)]
+        eos_token_id = llm.token_eos()
+
+        def _encode(x: Any) -> List[int]:
+            if isinstance(x, str):
+                x = x.encode("utf-8")
+            return llm.tokenize(x, add_bos=False, special=False)
+
+        return Vocabulary(
+            tokens=tokens,
+            eos_token_id=eos_token_id,
+            special_token_ids=(eos_token_id,),
+            encode=_encode,
+        )
+
+    def _get_function_and_vocabulary(
+        self, adapter_path: str
+    ) -> "Tuple[Callable[..., str], Optional[Vocabulary]]":
         # PAW-BACKEND-D2: A single os.stat call does double duty -- its FileNotFoundError
         # is the existence check (letting callers fall open via their existing handlers),
         # and its (mtime_ns, size, ino) triple is the staleness component.
@@ -779,10 +876,10 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         with self._lock:
             cached = self._functions.get(adapter_path)
             if cached is not None:
-                cached_stat, cached_program_id, cached_fn = cached
+                cached_stat, cached_program_id, cached_fn, cached_vocab = cached
                 if cached_stat == stat_identity:
                     self._functions.move_to_end(adapter_path)
-                    return cached_fn
+                    return cached_fn, cached_vocab
 
         # Either a cache miss or stat_identity differed. Re-read manifest to resolve program_id.
         manifest = self.read_manifest(adapter_path)
@@ -791,15 +888,17 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         with self._lock:
             cached = self._functions.get(adapter_path)
             if cached is not None:
-                cached_stat, cached_program_id, cached_fn = cached
+                cached_stat, cached_program_id, cached_fn, cached_vocab = cached
                 if cached_stat == stat_identity:
                     self._functions.move_to_end(adapter_path)
-                    return cached_fn
+                    return cached_fn, cached_vocab
                 if cached_program_id == program_id:
                     # program_id unchanged: refresh stat_identity without reloading model.
-                    self._functions[adapter_path] = (stat_identity, program_id, cached_fn)
+                    self._functions[adapter_path] = (
+                        stat_identity, program_id, cached_fn, cached_vocab,
+                    )
                     self._functions.move_to_end(adapter_path)
-                    return cached_fn
+                    return cached_fn, cached_vocab
                 # program_id changed: evict the stale entry.
                 #
                 # SAFETY INVARIANT (A-11 / F3.3): drop the reference and NOTHING ELSE.
@@ -829,36 +928,82 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
                 "GPU offload support, and local model cache)."
             ) from exc
 
+        # Money route (iii): a vocabulary that fails to build or verify degrades this
+        # INSTANCE (not just this call) to unconstrained decoding, with exactly one
+        # UserWarning -- never a raise on every subsequent `infer()` call, and never a
+        # silent no-op. Only attempted when the flag is still True: once it has been
+        # flipped False (here, or at construction), later model loads on this instance
+        # do not re-attempt vocabulary construction.
+        vocabulary: Optional[Vocabulary] = None
+        if self.applies_grammar_constraint:
+            try:
+                vocabulary = self._build_vocabulary(fn)
+            except Exception as exc:
+                self.applies_grammar_constraint = False
+                warnings.warn(
+                    "ProgramAsWeightsBackend could not build/verify the grammar-"
+                    f"constraint vocabulary for program {program_id!r} "
+                    f"({type(exc).__name__}: {exc}); grammar-constrained decoding is "
+                    "disabled for this backend instance from now on. Output is still "
+                    "validated after generation by paw_kit.schema.load instead "
+                    "(fail-open on mismatch).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                vocabulary = None
+
         with self._lock:
-            self._functions[adapter_path] = (stat_identity, program_id, fn)
+            self._functions[adapter_path] = (stat_identity, program_id, fn, vocabulary)
             self._functions.move_to_end(adapter_path)
             while len(self._functions) > _MAX_CACHED_FUNCTIONS:
                 # SAFETY INVARIANT (A-11 / F3.3): LRU eviction drops the reference only --
-                # no teardown or resource release on evicted callable.
+                # no teardown or resource release on evicted callable. Cached BESIDE the
+                # function, so eviction drops the vocabulary's live, model-bound encoder
+                # at the same time as the function it is bound to -- never separately.
                 self._functions.popitem(last=False)
+        return fn, vocabulary
+
+    def _get_function(self, adapter_path: str) -> Callable[..., str]:
+        """Back-compat wrapper: `infer()` uses `_get_function_and_vocabulary()`
+        directly (it needs both), but this stays the fn-only entry point other callers
+        (tests, `scripts/`) already use."""
+        fn, _vocabulary = self._get_function_and_vocabulary(adapter_path)
         return fn
 
     def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
-        if grammar_constraint is not None and not self._warned_grammar:
-            self._warned_grammar = True
-            warnings.warn(
-                "ProgramAsWeightsBackend cannot apply grammar_constraint at decoding time: the "
-                "upstream SDK exposes no grammar/logits hook. Output is validated after "
-                "generation by paw_kit.schema.load instead (fail-open on mismatch).",
-                UserWarning,
-                stacklevel=2,
-            )
-        fn = self._get_function(adapter_path)
+        fn, vocabulary = self._get_function_and_vocabulary(adapter_path)
         call_kwargs: Dict[str, Any] = {}
         if self.max_tokens is not None:
             call_kwargs["max_tokens"] = self.max_tokens
+
+        # Re-read `self.applies_grammar_constraint` AFTER `_get_function_and_vocabulary()`
+        # returns, not before: `paw.load` reads the attribute once at bind time, so a
+        # vocabulary-verification failure that just happened during THIS call's model
+        # load (money route iii) must still produce local, unconstrained output on THIS
+        # call -- not a grammar-constraint build against a `vocabulary` that is already
+        # None, and not a wait until the next call to notice the flag flipped.
+        if grammar_constraint is not None and self.applies_grammar_constraint and vocabulary is not None:
+            import llama_cpp  # bundled by the SDK; only imported when actually needed
+
+            constraint = build_constraint(grammar_constraint, vocabulary)
+            call_kwargs["logits_processor"] = llama_cpp.LogitsProcessorList([constraint])
+
         try:
             out = fn(input_text, **call_kwargs)
+        except PAWSchemaError:
+            # A masking failure (from `constraint`, propagated unwrapped through the
+            # SDK's own `guarded_processor` re-raise) must reach `paw.load`'s fail-open
+            # fallback AS `PAWSchemaError`, not wrapped below as a `RuntimeError` whose
+            # remedy sends the caller to check GPU offload for what is actually a
+            # grammar/masking error.
+            raise
         except Exception as exc:
             raise RuntimeError(
                 f"ProgramAsWeights inference failed for {adapter_path!r}: {exc}. "
-                "Run `paw-kit doctor` to diagnose environment issues (checks llama_cpp importability, "
-                "GPU offload support, and local model cache)."
+                "This is a runtime/environment failure, not a grammar-constraint error "
+                "-- those propagate as PAWSchemaError and are never wrapped here. Run "
+                "`paw-kit doctor` to diagnose environment issues (checks llama_cpp "
+                "importability, GPU offload support, and local model cache)."
             ) from exc
         return out if isinstance(out, str) else str(out)
 

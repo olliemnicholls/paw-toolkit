@@ -126,6 +126,34 @@ def check_llama_cpp() -> CheckResult:
     )
 
 
+@_guarded("llguidance")
+def check_llguidance() -> CheckResult:
+    """Is `llguidance` importable, and what version.
+
+    `llguidance` is the byte-level masking engine `paw_kit.schema.constraint` builds a
+    matcher from, and what `ProgramAsWeightsBackend.applies_grammar_constraint`
+    partly depends on (the other half is `constrained_decoding=True`, the default, and
+    the vocabulary object built from the loaded model verifying successfully). WARNs
+    (never FAILs) when absent: inference still works, just without the shape
+    guarantee -- `paw_kit.schema.load` falls back to post-hoc Pydantic validation with
+    fail-open instead, exactly as if `constrained_decoding=False` had been passed.
+    """
+    try:
+        import llguidance
+    except Exception as exc:
+        return CheckResult(
+            "llguidance",
+            "WARN",
+            f"not importable: {exc}",
+            "Grammar-constrained decoding is unavailable; ProgramAsWeightsBackend "
+            "falls back to post-hoc validation with fail-open instead (one warning at "
+            "construction). Install the 'paw' extra (pip install 'paw-kit[paw]') to "
+            "enable it.",
+        )
+    version = getattr(llguidance, "__version__", "unknown")
+    return CheckResult("llguidance", "PASS", f"version {version}", "")
+
+
 def check_gpu_visible(timeout_s: float = _DEFAULT_GPU_TIMEOUT_S) -> CheckResult:
     """Is an NVIDIA GPU visible via `nvidia-smi`. Never FAILs -- CPU-only is a WARN,
     not an error, since inference still works (just much slower)."""
@@ -468,6 +496,10 @@ def run_checks(
 
     results: List[CheckResult] = [sdk_result]
     results.append(_skipped("llama_cpp") if sdk_missing else check_llama_cpp())
+    # llguidance is a separate package (declared in the `paw` extra alongside the SDK,
+    # not bundled BY it), so it is checked unconditionally -- unlike llama_cpp, its
+    # absence is not implied by the SDK being missing.
+    results.append(check_llguidance())
     results.append(check_gpu_visible())
     results.append(check_api_key())
 

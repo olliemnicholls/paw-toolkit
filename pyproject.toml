@@ -94,7 +94,19 @@ Measurements = "https://github.com/olliemnicholls/paw-toolkit/blob/main/measurem
 # needed. Floor is the version actually tested against; ceiling follows PAW-DEPS-01's 0.x
 # convention (next *minor*, since a 0.x minor bump may break).
 paw = [
-    "programasweights>=0.4.4,<0.5.0",
+    # Floor raised to 0.4.6 (PR #6): the version that added the public
+    # `logits_processor` hook ProgramAsWeightsBackend.infer() now calls -- below it,
+    # passing that kwarg to `function()`'s returned callable is a TypeError.
+    "programasweights>=0.4.6,<0.5.0",
+    # llguidance: the byte-level masking engine paw_kit.schema.constraint builds a
+    # matcher from. PAW-DEPS-01: both bounds required.
+    "llguidance>=1.8,<2",
+    # numpy: llguidance's own bitmask helper (llguidance.numpy.apply_token_bitmask_inplace)
+    # needs it declared explicitly, not just pulled in transitively via
+    # llama-cpp-python -- PAW-DEPS-01 requires both bounds on every declared dependency,
+    # and tests/test_pyproject_deps.py enforces it. 1.20 is llama-cpp-python's own
+    # floor; verified against numpy 2.5.2 in this checkout.
+    "numpy>=1.20,<3",
 ]
 # `real` means "a backend that really runs a model", and that is the upstream SDK.
 real = [

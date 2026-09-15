@@ -85,6 +85,37 @@ def test_llama_cpp_gpu_offload_raises_is_warn(monkeypatch: pytest.MonkeyPatch) -
     assert "native crash" in result.detail
 
 
+# ---------------------------------------------------------------- check_llguidance
+
+
+def test_llguidance_importable_pass() -> None:
+    pytest.importorskip("llguidance")
+    result = doctor.check_llguidance()
+    assert result.status == "PASS"
+    assert "version" in result.detail
+
+
+def test_llguidance_not_importable_is_warn_not_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "llguidance", None)
+    result = doctor.check_llguidance()
+    assert result.status == "WARN"
+    assert "not importable" in result.detail
+    assert "paw-kit[paw]" in result.remedy
+
+
+def test_llguidance_check_runs_unconditionally_even_when_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlike `check_llama_cpp` (bundled BY the SDK, so `run_checks` skips it when the
+    SDK is missing), `llguidance` is a separate `paw`-extra package: `run_checks` must
+    still call it directly, not report it as skipped, when the SDK is absent."""
+    monkeypatch.setitem(sys.modules, "programasweights", None)
+    results = doctor.run_checks(offline=True)
+    by_name = {r.name: r for r in results}
+    assert "llguidance" in by_name
+    assert "skipped (SDK not installed)" not in by_name["llguidance"].detail
+
+
 # ---------------------------------------------------------------- check_gpu_visible
 
 
@@ -599,6 +630,7 @@ def test_run_checks_returns_all_expected_check_names(fast_cached_programs: None)
     assert names == {
         "programasweights SDK",
         "llama_cpp",
+        "llguidance",
         "GPU",
         "PAW_API_KEY",
         "Upstream service health",
@@ -723,7 +755,7 @@ def test_cli_doctor_real_checks_offline(fast_cached_programs: None, tmp_path: Pa
     result = runner.invoke(app, ["doctor", "--offline", "--json"])
     payload = json.loads(result.stdout)
     assert isinstance(payload, list)
-    assert len(payload) == 8
+    assert len(payload) == 9
     for entry in payload:
         assert set(entry.keys()) == {"name", "status", "detail", "remedy"}
         assert entry["status"] in ("PASS", "WARN", "FAIL")

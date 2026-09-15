@@ -24,15 +24,25 @@ runs on. It resolves from PyPI directly; the `--extra-index-url` in upstream's o
 is not needed. No API key is required to *run* an already-compiled program, only to
 compile a new one.
 
-Two things to know before the first real call:
+`paw-kit[real]` also pulls `llguidance`, the engine `ProgramAsWeightsBackend` uses for
+grammar-constrained decoding (on by default; pass `constrained_decoding=False` to opt
+out). Its prebuilt wheels cover Python 3.11-3.13 on Linux (glibc >= 2.31), macOS and
+Windows; on anything else, installing it needs a Rust toolchain to build from source.
+On a host where it is not importable, `ProgramAsWeightsBackend` warns once and falls
+back to unconstrained decoding with post-hoc validation after generation -- it does not
+fail to install or fail at inference time.
+
+Three things to know before the first real call:
 
 - The `llama-cpp-python` wheel this pulls from PyPI is **CPU-only**, which is roughly 90x
   slower per call than a CUDA build. See [GPU support](#gpu-support) below.
 - The first call to any program downloads the ~600 MB base model into the SDK's cache.
+- Grammar-constrained decoding guarantees output *shape* (it parses as your schema), not
+  field-value correctness -- post-generation validation and fallback still run regardless.
 
-Run `paw-kit doctor` before the first real call. It checks the SDK import, the API key,
-the CUDA state of `llama-cpp-python`, the compile service's health, and the local model
-cache, each with a one-line remedy. With `--offline` it skips the network checks; with
+Run `paw-kit doctor` before the first real call. It checks the SDK import, whether
+`llguidance` is importable, the API key, the CUDA state of `llama-cpp-python`, the
+compile service's health, and the local model cache, each with a one-line remedy. With `--offline` it skips the network checks; with
 `--adapter a.paw` it also says whether that adapter can run with no network at all.
 Without the SDK installed the SDK-dependent checks are reported as skipped warnings
 rather than failures.
