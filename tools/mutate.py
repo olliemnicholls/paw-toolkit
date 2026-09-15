@@ -132,6 +132,11 @@ TARGETS: dict[str, Target] = {
         skip_kinds=("int",),
     ),
     "paw_kit/schema/logits_processor.py": Target("tests/test_schema.py"),
+    # constraint.py (constrained-decoding-real-backend, Phase 1): the llguidance-backed
+    # successor to logits_processor.py, which Phase 2 of the same track deletes -- until
+    # that merges, the default set below has SEVEN modules, not six; see
+    # tools/README-mutate.md's "Module coverage" section for the same note.
+    "paw_kit/schema/constraint.py": Target("tests/test_schema_constraint.py"),
     # --- available via --modules, NOT in the baseline ---------------------------------
     "paw_kit/jit/agreement.py": Target(
         "tests/test_jit_agreement.py tests/test_jit_shadow.py", default=False

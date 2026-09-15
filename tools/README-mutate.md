@@ -190,9 +190,15 @@ harness errors.
 
 ## Module coverage
 
-The default set is the six modules where a wrong answer is silent rather than loud:
+The default set is the modules where a wrong answer is silent rather than loud:
 `test/matching.py`, `test/runner.py`, `test/compare.py`, `test/active.py`,
-`schema/grammar.py`, `schema/logits_processor.py`.
+`schema/grammar.py`, `schema/logits_processor.py`, `schema/constraint.py`. That is
+seven, not six, as of `constrained-decoding-real-backend`'s Phase 1:
+`schema/constraint.py` (the llguidance-backed masking engine) was added with its own
+test selection (`tests/test_schema_constraint.py`) before `schema/logits_processor.py`
+is deleted -- so a masking-engine target is never dropped from the gate mid-track. The
+count returns to six once that track's Phase 2 removes `schema/logits_processor.py` and
+its baseline entry.
 
 `jit/agreement.py`, `jit/shadow.py`, `jit/decorator.py` and `jit/db.py` are configured but
 **not** in the default set or the baseline — they are slow (20–40 s per test run), and
