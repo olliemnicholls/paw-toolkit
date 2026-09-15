@@ -37,6 +37,7 @@ from typing import Literal
 from paw_kit.schema.constraint import (
     INITIAL_LEXER_FUEL,
     PROBES,
+    ConstraintUnavailable,
     Vocabulary,
     _GTokenizerAdapter,
     build_constraint,
@@ -200,7 +201,11 @@ def test_construction_time_check_computes_initial_mask_before_reading_is_error()
 
     vocab = Vocabulary(tokens=TOKENS, eos_token_id=EOS, special_token_ids=(EOS,), encode=enc)
     pat = pydantic_to_regex(Kind)
-    with pytest.raises(PAWSchemaError, match="llguidance grammar construction failed"):
+    # ConstraintUnavailable, not plain PAWSchemaError: this is a construction-time
+    # refusal (Change 2) -- a property of `pat`/`vocab`, not of one call, and
+    # ProgramAsWeightsBackend.infer() catches this subclass specifically to degrade
+    # PER SCHEMA rather than propagate a refusal that would recur on every call.
+    with pytest.raises(ConstraintUnavailable, match="llguidance grammar construction failed"):
         build_constraint(pat, vocab)
 
 
@@ -211,9 +216,11 @@ def test_construction_time_check_computes_initial_mask_before_reading_is_error()
 def test_empty_pattern_refused_as_eos_only_at_construction() -> None:
     """A pattern matching only the empty string admits nothing but EOS as its first
     token -- refused at construction, independent of the encoder-ordering check
-    above (round 3's J-3: this check catches a case the encoder check does not)."""
+    above (round 3's J-3: this check catches a case the encoder check does not). Also
+    `ConstraintUnavailable` (Change 2): this is a construction-time refusal, a property
+    of the pattern, not of one call."""
     vocab = make_vocabulary()
-    with pytest.raises(PAWSchemaError, match="EOS as the first token"):
+    with pytest.raises(ConstraintUnavailable, match="EOS as the first token"):
         build_constraint(r"", vocab)
 
 
@@ -314,14 +321,19 @@ def test_prompt_offset_first_call_does_not_raise_and_consumes_nothing() -> None:
 def test_consume_token_false_raises_paw_schema_error_and_writes_rust_warning(capfd) -> None:
     vocab = make_vocabulary()
     pat = pydantic_to_regex(Simple)  # starts with '{'
-    c = build_constraint(pat, vocab)
+    c = build_constraint(pat, vocab)  # construction itself succeeds -- not ConstraintUnavailable
     scores = np.zeros(N_VOCAB, dtype=np.float32)
 
     prompt_ids = canonical_encode("x")
     c(prompt_ids, scores)  # establishes the prompt offset
     bad_token = tid(b"z")  # illegal first token: the grammar demands '{'
-    with pytest.raises(PAWSchemaError, match="rejected token"):
+    # Mid-generation (Change 2): a refused token during the walk is NOT a property of
+    # the pattern alone (partial output may already exist), so this stays plain
+    # PAWSchemaError -- never ConstraintUnavailable, which is reserved for
+    # construction-time refusals build_constraint() itself raises.
+    with pytest.raises(PAWSchemaError, match="rejected token") as excinfo:
         c(prompt_ids + [bad_token], scores)
+    assert not isinstance(excinfo.value, ConstraintUnavailable)
 
     # llguidance's error state is quiet by construction on stdout/stderr redirection
     # from Python's own `warnings` module -- it is a Rust-side `Warning:` line on fd 2,
@@ -362,6 +374,11 @@ def test_post_mask_is_error_raises_paw_schema_error_on_a_later_step() -> None:
         except PAWSchemaError as exc:
             raised = True
             assert "error state while computing the mask" in str(exc)
+            # Mid-generation (Change 2): not ConstraintUnavailable -- construction
+            # already succeeded; this failure surfaces only once the walk reaches the
+            # literal the encoder is wrong on, so it is not a property of the pattern
+            # alone and must stay plain PAWSchemaError.
+            assert not isinstance(exc, ConstraintUnavailable)
             break
     assert raised, "expected a post-mask is_error() to raise PAWSchemaError"
 
@@ -491,14 +508,17 @@ def test_initial_lexer_fuel_refuses_a_13000_member_pydantic_literal() -> None:
     fuel) is comfortably past that boundary, so this stays a clean refusal rather than
     a knife-edge one as the exact boundary drifts with any future re-measurement. A
     2,000-member `Literal` (the old bound's refusal case) now easily admits -- it needs
-    on the order of 8.3-8.5 fuel/member, ~17,000 total, well under 100,000."""
+    on the order of 8.3-8.5 fuel/member, ~17,000 total, well under 100,000. Also
+    `ConstraintUnavailable` (Change 2): a fuel refusal at construction is a property of
+    the pattern, so `ProgramAsWeightsBackend.infer()` catches this subclass to degrade
+    that grammar per-schema rather than raising on every call."""
     vals = tuple(f"opt{i}" for i in range(13000))
     model = create_model("L13000", x=(Literal[vals], ...))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         pat = pydantic_to_regex(model)
     vocab = make_vocabulary()
-    with pytest.raises(PAWSchemaError, match="llguidance grammar construction failed"):
+    with pytest.raises(ConstraintUnavailable, match="llguidance grammar construction failed"):
         build_constraint(pat, vocab)
 
 

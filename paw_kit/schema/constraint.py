@@ -116,11 +116,21 @@ masking failure" invariant:
    truncation on other strings): its measured consequence is an over-restricted mask,
    never an admitted illegal token, because the mask can only ever be a subset of what
    the true grammar state allows.
-2. **A masking failure is loud, not silent.** `consume_token()` returning `False`, or
-   `is_error()` becoming set after any step, raises `PAWSchemaError` carrying
-   `get_error()`'s text -- which then propagates through `ProgramAsWeightsBackend.infer()`
-   unwrapped and reaches `paw.load`'s fail-open fallback as itself, per the track's
-   safety invariants.
+2. **A masking failure is loud, not silent -- and it degrades at the right grain.**
+   Two distinct failure shapes, two distinct exceptions. A grammar that cannot even be
+   started -- `is_error()` set right after the initial mask (fuel exceeded, or a
+   raising encoder surfacing as described in point 1), or an initial allowed token set
+   that is empty or EOS-only -- is a property of the *pattern*, not of any one call, so
+   `build_constraint` raises `ConstraintUnavailable` (a `PAWSchemaError` subclass) for
+   these three cases: `ProgramAsWeightsBackend.infer()` catches it specifically and
+   degrades *that grammar* to unconstrained decoding with one warning, rather than
+   re-discovering an unfixable refusal on every subsequent call for the same schema
+   (the Track-D money-leak class). A failure discovered mid-generation --
+   `consume_token()` returning `False`, or `is_error()` becoming set after a later step
+   -- is not a property of the pattern alone (partial output may already exist, and a
+   different token sequence might not have failed), so it stays plain `PAWSchemaError`,
+   propagates through `ProgramAsWeightsBackend.infer()` unwrapped, and reaches
+   `paw.load`'s fail-open fallback as itself, per the track's safety invariants.
 """
 
 from __future__ import annotations
@@ -128,6 +138,28 @@ from __future__ import annotations
 from typing import Any, Callable, List, Optional, Sequence, Union
 
 from paw_kit.schema.exceptions import PAWSchemaError
+
+
+class ConstraintUnavailable(PAWSchemaError):
+    """A `PAWSchemaError` raised for exactly one reason: `build_constraint` could not
+    even START this grammar -- fuel/grammar refused at construction (`is_error()` set
+    right after the initial mask, which is also how a raising encoder surfaces per the
+    module docstring's point 1), or the initial allowed token set is empty or EOS-only.
+    These three are properties of the *pattern*, not of any particular call: the same
+    grammar refused this way on one call will be refused the same way on every call for
+    as long as the schema is unchanged, which is what makes this a per-SCHEMA condition
+    rather than a per-call one.
+
+    This is deliberately a DIFFERENT exception from the plain `PAWSchemaError` a
+    mid-generation failure raises (`consume_token()` returning `False`, or `is_error()`
+    becoming set after a later step) -- see `_Constraint.__call__`, which never raises
+    this subclass. `ProgramAsWeightsBackend.infer()` catches this subclass alone to
+    degrade *that grammar* to unconstrained decoding with one warning (never a raise on
+    every call for a schema that can never construct); it does NOT catch plain
+    `PAWSchemaError`, which must keep propagating and failing open through `paw.load`'s
+    fallback, because a mid-generation failure may have already produced partial output
+    that this call's local path cannot be trusted to have produced correctly.
+    """
 
 # The bound this module's docstring documents and justifies (see above). Deliberately
 # the only `LLParserLimits` field set: the other six are left at their library
@@ -383,10 +415,21 @@ def build_constraint(pattern: str, vocabulary: Vocabulary) -> _Constraint:
     At construction: computes the initial bitmask **before** reading `is_error()` (see
     module docstring, point 1 -- reading `is_error()` first would silently lose the one
     check that catches a raising encoder before any token has been generated), then
-    raises `PAWSchemaError` if `is_error()` is set, and again if the initial allowed
-    token set is empty or contains only EOS -- a grammar with no legal first token is
-    unusable and, per round 3's measurement, this second check exists specifically to
-    catch it independent of the raising-encoder case above.
+    raises `ConstraintUnavailable` if `is_error()` is set, and again if the initial
+    allowed token set is empty or contains only EOS -- a grammar with no legal first
+    token is unusable and, per round 3's measurement, this second check exists
+    specifically to catch it independent of the raising-encoder case above.
+
+    All three of these are `ConstraintUnavailable`, not plain `PAWSchemaError`: they are
+    properties of `pattern` (and, for the raising-encoder case, of the vocabulary), so a
+    grammar refused this way is refused identically on every future call -- the caller
+    (`ProgramAsWeightsBackend.infer()`) catches this subclass specifically to degrade
+    *that grammar* to unconstrained decoding rather than propagating a refusal that
+    would otherwise recur, unwarned differently, on every single call for this schema
+    (the Track-D money-leak class this exists to close). A failure discovered
+    mid-generation -- `_Constraint.__call__`'s `consume_token()` returning `False`, or
+    `is_error()` becoming set after a later step -- is NOT a property of the pattern
+    alone (partial output already exists) and stays plain `PAWSchemaError`.
     """
     try:
         import llguidance as lg
@@ -409,7 +452,7 @@ def build_constraint(pattern: str, vocabulary: Vocabulary) -> _Constraint:
     # module docstring point 1 (K-2). Do not reorder these two statements.
     initial_mask = matcher.compute_bitmask()
     if matcher.is_error():
-        raise PAWSchemaError(
+        raise ConstraintUnavailable(
             f"llguidance grammar construction failed for pattern {pattern!r}: "
             f"{matcher.get_error()}"
         )
@@ -417,12 +460,12 @@ def build_constraint(pattern: str, vocabulary: Vocabulary) -> _Constraint:
     n_vocab = len(vocabulary.tokens)
     initial_allowed = _mask_allowed_ids(initial_mask, n_vocab)
     if not initial_allowed:
-        raise PAWSchemaError(
+        raise ConstraintUnavailable(
             f"llguidance grammar for pattern {pattern!r} has an empty initial "
             "allowed token set -- nothing could ever be generated."
         )
     if initial_allowed == {vocabulary.eos_token_id}:
-        raise PAWSchemaError(
+        raise ConstraintUnavailable(
             f"llguidance grammar for pattern {pattern!r} allows only EOS as the "
             "first token -- nothing could ever be generated."
         )

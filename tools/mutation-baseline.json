@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "generated": "2026-09-15T19:30:51+0100",
-  "commit": "5de13823e34713ff4cc90617c5627623be0d5e79",
+  "generated": "2026-09-15T20:33:15+0100",
+  "commit": "10c1842e50d1ea7204a4d23dcede03989594b855",
   "note": "Surviving mutants per module, measured by tools/mutate.py. A survivor is a semantic change the suite does not notice. Counts are full-suite survivors: a mutant that survives its module's fast test selection is re-run against the whole suite, and only then counted. Regenerate with `uv run --no-sync python tools/mutate.py --write-baseline tools/mutation-baseline.json`; see tools/README-mutate.md.",
   "totals": {
-    "mutations": 455,
+    "mutations": 456,
     "survivors": 69
   },
   "modules": {
@@ -843,13 +843,13 @@
       ]
     },
     "paw_kit/schema/constraint.py": {
-      "mutations": 12,
+      "mutations": 13,
       "survivors": 2,
       "survivors_detail": [
         {
-          "id": "paw_kit/schema/constraint.py:236:32:int:0>1",
+          "id": "paw_kit/schema/constraint.py:360:32:int:0>1",
           "fingerprint": "paw_kit/schema/constraint.py|int|0>1|0",
-          "line": 236,
+          "line": 360,
           "col": 32,
           "kind": "int",
           "old": "0",
@@ -859,9 +859,9 @@
           "source_line": "self._next_index: int = 0"
         },
         {
-          "id": "paw_kit/schema/constraint.py:253:15:bool:or>and",
+          "id": "paw_kit/schema/constraint.py:377:15:bool:or>and",
           "fingerprint": "paw_kit/schema/constraint.py|bool|or>and|not ok or self._matcher.is_error()",
-          "line": 253,
+          "line": 377,
           "col": 15,
           "kind": "bool",
           "old": "or",

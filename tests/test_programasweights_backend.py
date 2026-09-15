@@ -1647,6 +1647,7 @@ import math
 import sys
 
 from paw_kit import load
+from paw_kit.schema.constraint import ConstraintUnavailable
 from paw_kit.schema.exceptions import PAWSchemaError
 from paw_kit.schema.grammar import pydantic_to_regex
 from pydantic import BaseModel
@@ -1958,3 +1959,112 @@ def test_cd_paw_schema_error_reaches_infer_unwrapped_not_runtimeerror(
         backend.infer(out_path, "hello", grammar_constraint=pat)
     assert "GPU offload" not in str(excinfo.value)
     assert "paw-kit doctor" not in str(excinfo.value)
+    # This is a mid-generation failure (consume_token() rejects a sampled token), not a
+    # construction-time refusal -- so it must be plain PAWSchemaError, not the
+    # ConstraintUnavailable subclass infer() specifically catches to degrade per-schema
+    # (Change 2).
+    assert not isinstance(excinfo.value, ConstraintUnavailable)
+    assert type(excinfo.value) is PAWSchemaError
+
+
+def _make_over_budget_pattern(n_fields: int) -> str:
+    """A pattern `build_constraint` refuses AT CONSTRUCTION with `ConstraintUnavailable`
+    (fuel exceeded): `n_fields` `Field(ge=0, le=255)` int fields cost a flat ~2,574 fuel
+    each past the first (Change 1's re-derivation, `constraint.py`'s module docstring),
+    so 39+ fields exceed `INITIAL_LEXER_FUEL=100_000`."""
+    from pydantic import Field, create_model
+
+    model = create_model(
+        f"OverBudget{n_fields}",
+        **{f"f{i}": (int, Field(ge=0, le=255)) for i in range(n_fields)},
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return pydantic_to_regex(model)
+
+
+def test_cd_construction_time_refusal_degrades_per_schema_warns_once_across_calls(
+    key: None, tmp_path: Path
+) -> None:
+    """Change 2: a grammar refused AT CONSTRUCTION (`ConstraintUnavailable` -- fuel
+    exceeded here) degrades PER SCHEMA, not per call and not per instance: exactly one
+    UserWarning across three calls with the SAME over-budget pattern, `infer()` returns
+    the LOCAL output every time (never raises, never reaches a teacher/fallback), `fn`
+    is called with NO `logits_processor`, and `applies_grammar_constraint` stays `True`
+    throughout -- the engine works, only this one grammar is refused."""
+    pytest.importorskip("llguidance")
+    sdk = ConstrainedFakeSDK(scripted_output='{"s": "hi"}')
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+    assert backend.applies_grammar_constraint is True
+
+    pat = _make_over_budget_pattern(40)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(3):
+            result = backend.infer(out_path, "hello", grammar_constraint=pat)
+            assert result != ""
+            assert sdk.fn.last_processor is None
+
+    matching = [
+        w for w in caught
+        if issubclass(w.category, UserWarning)
+        and "grammar-constrained decoding is unavailable" in str(w.message)
+    ]
+    assert len(matching) == 1, f"expected exactly one warning, got {len(matching)}: {matching}"
+    assert backend.applies_grammar_constraint is True
+
+
+def test_cd_construction_time_refusal_different_pattern_warns_again_once(
+    key: None, tmp_path: Path
+) -> None:
+    """A DIFFERENT refused pattern gets its own warning: the warn-once set is keyed
+    per-grammar (a hash of the pattern text), not a single instance-wide latch."""
+    pytest.importorskip("llguidance")
+    sdk = ConstrainedFakeSDK(scripted_output='{"s": "hi"}')
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+
+    pat1 = _make_over_budget_pattern(40)
+    pat2 = _make_over_budget_pattern(45)
+    assert pat1 != pat2
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        backend.infer(out_path, "hello", grammar_constraint=pat1)
+        backend.infer(out_path, "hello", grammar_constraint=pat2)
+
+    matching = [
+        w for w in caught
+        if issubclass(w.category, UserWarning)
+        and "grammar-constrained decoding is unavailable" in str(w.message)
+    ]
+    assert len(matching) == 2, f"expected two distinct-grammar warnings, got {matching}"
+    assert backend.applies_grammar_constraint is True
+
+
+def test_cd_construction_time_refusal_engine_level_is_constraint_unavailable() -> None:
+    """Engine-level check (no backend involved): `build_constraint` itself raises
+    `ConstraintUnavailable` -- an instance of `PAWSchemaError` -- on an over-budget
+    grammar."""
+    pytest.importorskip("llguidance")
+    from paw_kit.schema.constraint import Vocabulary, build_constraint
+
+    llm = _FakeLlamaModel()
+    vocab = Vocabulary(
+        tokens=llm.tokens,
+        eos_token_id=llm.eos,
+        special_token_ids=(llm.eos,),
+        encode=llm.encode,
+    )
+    pat = _make_over_budget_pattern(40)
+    with pytest.raises(ConstraintUnavailable):
+        build_constraint(pat, vocab)
+    # And it IS a PAWSchemaError, per Change 2's contract.
+    try:
+        build_constraint(pat, vocab)
+    except ConstraintUnavailable as exc:
+        assert isinstance(exc, PAWSchemaError)

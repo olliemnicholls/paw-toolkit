@@ -139,7 +139,11 @@ Two things worth knowing before you leave it on:
 
 If `llguidance` is not installed, the backend warns once at construction and runs
 unconstrained with post-hoc validation instead. See [install](./install.md) for which
-platforms have a prebuilt wheel.
+platforms have a prebuilt wheel. A schema too large to construct a grammar for (an
+enormous `Literal` or a schema with many bounded numeric fields) behaves the same way at
+the level of that one schema: one warning, and every call for that schema runs
+unconstrained with post-hoc validation, without disabling constrained decoding for any
+other schema on the same backend instance.
 
 ## Bringing your own runtime
 

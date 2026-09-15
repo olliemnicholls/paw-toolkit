@@ -36,10 +36,21 @@ Three honest limitations, all reflecting upstream SDK behavior as of September 2
    `constrained_decoding=False` to opt out (e.g. an adapter compiled for a different
    schema than the one it is now being asked for, where forcing shape produces
    syntactically valid but semantically poor output; see `measurements/README.md`).
-   When `llguidance` is not importable, or the vocabulary object built from the loaded
-   model fails its own verification, this backend degrades to unconstrained decoding
-   with one `UserWarning` naming the cause, never a silent no-op and never a raise on
-   every call -- see `applies_grammar_constraint` and `infer()`.
+   Three distinct failure modes, three distinct degradations, never a raise on every
+   call for any of them: (a) `llguidance` is not importable, or the vocabulary object
+   built from the loaded model fails its own verification -- this **instance**
+   degrades to unconstrained decoding for every schema, with one `UserWarning` at
+   construction or model load naming the cause (`applies_grammar_constraint` becomes
+   `False`); (b) a grammar is refused AT CONSTRUCTION -- fuel/grammar limits exceeded,
+   or an empty/EOS-only initial mask (`paw_kit.schema.constraint.ConstraintUnavailable`)
+   -- this degrades **that one schema's grammar**, not the instance: the flag stays
+   `True`, one `UserWarning` names the pattern and reason, and every call for that same
+   grammar runs unconstrained thereafter (`infer()`); (c) a failure discovered
+   **during generation** -- `consume_token()` rejects a sampled token, or the matcher
+   enters an error state after a later step -- is not a property of the grammar alone
+   (partial output may already exist), so it is never silently degraded: it raises
+   plain `PAWSchemaError`, propagated unwrapped through `infer()`, and reaches
+   `paw.load`'s ordinary fail-open fallback like any other local-execution failure.
 3. **`is_available()` only proves SDK importability.** `is_available()` verifies that
    the `programasweights` package is importable (or an injected double is present), but
    proves nothing about whether the underlying llama.cpp runtime actually works, whether
@@ -81,6 +92,7 @@ keeps working (and its test suite keeps running) without it installed.
 from __future__ import annotations
 
 from collections import OrderedDict
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -103,7 +115,7 @@ from paw_kit.backend.manifest_lineage import (
     select_folded_examples,
     sha256_text,
 )
-from paw_kit.schema.constraint import Vocabulary, build_constraint
+from paw_kit.schema.constraint import ConstraintUnavailable, Vocabulary, build_constraint
 from paw_kit.schema.exceptions import PAWSchemaError
 
 # Public compiler names as documented in the upstream README. `paw-4b-qwen3-0.6b` is
@@ -128,6 +140,14 @@ MANIFEST_BACKEND_NAME = "programasweights"
 MANIFEST_VERSION = 3
 _MAX_MANIFEST_BYTES = 64 * 1024
 _MAX_CACHED_FUNCTIONS = 8  # each holds a loaded llama.cpp model; keep this small
+# How many distinct grammars' "ConstraintUnavailable at construction" UserWarning this
+# instance remembers already having emitted (`infer()`'s warn-once, keyed on a hash of
+# the pattern text -- see `_warn_constraint_unavailable_once`). Bounded like
+# `_MAX_CACHED_FUNCTIONS` above for the same reason: an unbounded set would leak memory
+# for a long-lived instance driven by many distinct schemas. Losing an old entry to
+# eviction and warning again for a schema not seen in a while is an acceptable
+# degradation -- it costs one extra log line, never a raise and never a teacher call.
+_MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS = 64
 
 # Upstream does not publish an enum of job states. These are the terminal states we
 # treat as failure; anything else with a `program_id` set is treated as success. Adjust
@@ -180,8 +200,12 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             **and** whether `llguidance` is actually importable; requesting it without
             the engine installed emits one `UserWarning` naming the `paw` extra at
             construction, not a raise, and the instance degrades to unconstrained
-            decoding. Pass `False` to opt out even when the engine is available (e.g.
-            an adapter being asked for a schema it was not compiled for).
+            decoding. A grammar refused at construction for a *particular* schema
+            (fuel/grammar limits, an empty/EOS-only initial mask) degrades only that
+            schema, per call, with its own one-time warning -- see `infer()` and
+            `_warn_constraint_unavailable_once` -- without touching this flag. Pass
+            `False` to opt out even when the engine is available (e.g. an adapter being
+            asked for a schema it was not compiled for).
         max_spec_examples: How many traced/gold examples to fold into the spec text at
             compile time (see module docstring, limitation 1). `0` disables it.
         poll_interval_s / compile_timeout_s: Polling cadence and ceiling for async compiles.
@@ -286,6 +310,12 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
             "OrderedDict[str, Tuple[Tuple[int, int, int], str, Callable[..., str], "
             "Optional[Vocabulary]]]"
         ) = OrderedDict()
+        # `infer()`'s warn-once set for `ConstraintUnavailable` (a grammar refused AT
+        # CONSTRUCTION -- fuel/grammar refused, or an empty/EOS-only initial mask):
+        # keyed on a hash of the pattern text, bounded to
+        # `_MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS` distinct grammars, LRU-evicted
+        # the same shape as `_functions` above. See `_warn_constraint_unavailable_once`.
+        self._constraint_unavailable_warned: "OrderedDict[str, None]" = OrderedDict()
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ plumbing
@@ -970,6 +1000,53 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         fn, _vocabulary = self._get_function_and_vocabulary(adapter_path)
         return fn
 
+    def _warn_constraint_unavailable_once(self, pattern: str, exc: BaseException) -> None:
+        """`infer()`'s degrade-per-schema path for `ConstraintUnavailable` (see
+        `constraint.py`'s module docstring and `ConstraintUnavailable`'s own
+        docstring): a grammar refused AT CONSTRUCTION is a property of `pattern`, not
+        of one call, so re-warning on every call for a schema that can never construct
+        would flood the log exactly the way S-14's own warn-once mitigates for a
+        mid-generation failure -- except this is a DIFFERENT condition (construction,
+        not generation) with a DIFFERENT remedy (skip building the constraint for this
+        grammar, don't retry-and-warn on every call), so it gets its own bounded
+        warn-once state rather than reusing S-14's per-bound-function one, which lives
+        in `loader.py` and knows nothing about grammar patterns.
+
+        Keyed on a hash of the pattern text, not the text itself: the whole point of
+        `ConstraintUnavailable` is that the pattern can be enormous (an oversized
+        `Literal`/alternation is exactly the refused case), so storing pattern text
+        verbatim as a dict key would defeat the purpose of bounding this set at all.
+        Bounded to `_MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS` distinct grammars,
+        LRU-evicted like `_functions`; losing an old entry and warning again later for
+        a schema not seen in a while costs one extra log line, never a raise and never
+        a teacher call, so correctness does not depend on this cache remembering
+        forever. Does not itself retry the build -- the caller decides that -- and a
+        retry that raises `ConstraintUnavailable` again is fine: this method just makes
+        sure it does not warn a second time for the same (still-cached) pattern.
+        """
+        key = hashlib.sha256(pattern.encode("utf-8")).hexdigest()
+        with self._lock:
+            already_warned = key in self._constraint_unavailable_warned
+            if already_warned:
+                self._constraint_unavailable_warned.move_to_end(key)
+            else:
+                self._constraint_unavailable_warned[key] = None
+                while len(self._constraint_unavailable_warned) > _MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS:
+                    self._constraint_unavailable_warned.popitem(last=False)
+        if already_warned:
+            return
+        warnings.warn(
+            "ProgramAsWeightsBackend: grammar-constrained decoding is unavailable for "
+            f"this schema ({type(exc).__name__}: {exc}); this call, and every other "
+            "call for this same grammar, proceeds UNCONSTRAINED -- output is still "
+            "validated after generation by paw_kit.schema.load (fail-open on "
+            "mismatch). Other schemas on this backend instance are unaffected; this "
+            "instance's applies_grammar_constraint stays True. Further calls for this "
+            "same grammar do not warn again.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     def infer(self, adapter_path: str, input_text: str, grammar_constraint: Optional[str] = None) -> str:
         fn, vocabulary = self._get_function_and_vocabulary(adapter_path)
         call_kwargs: Dict[str, Any] = {}
@@ -985,8 +1062,19 @@ class ProgramAsWeightsBackend(AbstractPAWBackend):
         if grammar_constraint is not None and self.applies_grammar_constraint and vocabulary is not None:
             import llama_cpp  # bundled by the SDK; only imported when actually needed
 
-            constraint = build_constraint(grammar_constraint, vocabulary)
-            call_kwargs["logits_processor"] = llama_cpp.LogitsProcessorList([constraint])
+            try:
+                constraint = build_constraint(grammar_constraint, vocabulary)
+            except ConstraintUnavailable as exc:
+                # A construction-time refusal degrades PER SCHEMA, not per call: the
+                # instance flag stays True (the engine works; only this grammar is
+                # refused), exactly one warning fires for this pattern, and this call
+                # (and every other call for the same grammar) runs unconstrained --
+                # `call_kwargs` simply never gains a `logits_processor` key. Not
+                # catching plain `PAWSchemaError` here: a mid-generation failure must
+                # still propagate below and reach `paw.load`'s fallback as itself.
+                self._warn_constraint_unavailable_once(grammar_constraint, exc)
+            else:
+                call_kwargs["logits_processor"] = llama_cpp.LogitsProcessorList([constraint])
 
         try:
             out = fn(input_text, **call_kwargs)
