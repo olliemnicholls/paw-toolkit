@@ -24,6 +24,8 @@ import time
 import warnings
 from typing import List, Union
 
+import interegular
+from interegular.fsm import anything_else
 import numpy as np
 import pytest
 
@@ -524,6 +526,99 @@ def test_known_good_sample_next_token_always_allowed_by_bitmask(name, model, ins
             f"bitmask (text so far: {text[: step + 10]!r})"
         )
         gen.append(next_id)
+
+
+# ---------------------------------------------------------------------------------
+# Corpus walk: a string-content state is actually visited, where one exists (Phase T)
+# ---------------------------------------------------------------------------------
+
+_STRING_CONTENT_WIDE_THRESHOLD = 40  # allowed-id count (excluding EOS) counted as "wide"
+
+
+def _pattern_has_a_string_content_region(pattern: str) -> bool:
+    """A schema has a free string-content region precisely when its compiled DFA has a
+    live state whose transition map uses `interegular`'s `anything_else` catch-all
+    symbol -- the shape an unconstrained JSON string body (`[^"\\\\...]`) compiles to.
+    A closed `Literal`/enum/fixed-`Field(pattern=...)` field never produces this
+    symbol: every transition out of its states names a specific character, never
+    "anything else". Reuses `tests/test_schema_spine.py`'s own `interegular`-based
+    machinery (that module already imports `interegular` and `anything_else` for
+    exactly this kind of DFA inspection) rather than hand-classifying each of the 38
+    spine cases.
+
+    `anything_else` is not itself a transition-map key: it is a sentinel passed
+    *into* `fsm.alphabet` to look up which concrete symbol id that FSM uses for its
+    catch-all bucket (`tests/test_schema_spine.py`'s `accepted_strings` does the same
+    lookup) -- `anything_else in transitions` would always be `False` and silently
+    detect nothing.
+    """
+    fsm = interegular.parse_pattern(pattern).to_fsm()
+    catch_all_symbol = fsm.alphabet[anything_else]
+    for state, transitions in fsm.map.items():
+        if fsm.islive(state) and catch_all_symbol in transitions:
+            return True
+    return False
+
+
+@pytest.mark.parametrize("name,model,instances", SPINE_CASES, ids=SPINE_IDS)
+def test_corpus_walk_reaches_a_string_content_state_where_one_exists(name, model, instances) -> None:
+    """For every `SPINE_CASES` regex, walk the real matcher along a generated valid
+    instance's tokens (the known-good-sample machinery above) and, where the schema's
+    compiled DFA has a free string-content region
+    (`_pattern_has_a_string_content_region`), assert the walk actually visits a state
+    admitting a WIDE set of next tokens there -- not merely the one character the
+    sample happens to emit next.
+
+    This is the region Motivation's spike never entered: `Triage`'s three closed
+    `Literal` fields and no free string field meant its FSM walk never needed to visit
+    a string-content state at all, which is exactly why the byte-vs-continuation-byte
+    hole (Motivation) went unmeasured by the published 15/15 result. Every spine case
+    with a genuinely open string body is walked here and required to actually reach
+    one; a case with no such region (a closed `Literal`, a fixed `Field(pattern=...)`,
+    a plain scalar) is walked too but makes no claim, since the region does not exist
+    for it to reach.
+
+    Walks EVERY instance the case provides, not just `instances[0]`: `nullable`'s
+    `Optional[str]` field has a free string-content region in its DFA, but its first
+    instance is `Nullable(maybe=None)`, whose JSON never enters it -- only
+    `Nullable(maybe="x")`, the case's second instance, actually does. "Reached" is
+    true for the case as a whole if ANY of its instances' walks visits a wide state.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            pat = pydantic_to_regex(model)
+        except PAWSchemaError as exc:
+            pytest.skip(f"{name}: pydantic_to_regex refused ({exc})")
+
+    if not _pattern_has_a_string_content_region(pat):
+        pytest.skip(f"{name}: schema has no free string-content region to reach")
+
+    reached = False
+    walked_any = False
+    for instance in instances:
+        ids = canonical_encode(instance.model_dump_json())
+        if not ids:
+            continue
+        walked_any = True
+        c = build_constraint(pat, make_vocabulary())
+        scores = np.zeros(N_VOCAB, dtype=np.float32)
+        prompt_ids = canonical_encode("unrelated model input")
+        gen = list(prompt_ids)
+        for next_id in ids:
+            out = c(gen, scores)
+            allowed = _allowed_from_masked(out)
+            if len(allowed - {EOS}) >= _STRING_CONTENT_WIDE_THRESHOLD:
+                reached = True
+            gen.append(next_id)
+
+    if not walked_any:
+        pytest.skip(f"{name}: every instance encodes to zero tokens")
+    assert reached, (
+        f"{name}: schema has a free string-content region ({pat!r}) but the corpus "
+        "walk never visited a state admitting a wide set of next tokens there, "
+        f"across any of its {len(instances)} instance(s)"
+    )
 
 
 # ---------------------------------------------------------------------------------

@@ -10,9 +10,20 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Two jobs, both required, because grammar-constrained decoding's engine (`llguidance`)
+# is optional and this project's behaviour genuinely differs with and without it (the
+# real backend degrades to post-hoc validation only, with one warning, when it is
+# absent -- see docs/testing.md and docs/real-backend.md). `test` (the original matrix)
+# is the engine-ABSENT case: `uv sync --dev` installs no extras at all, so `llguidance`
+# is never on the path -- this was already CI's only exercised configuration before
+# `constrained-decoding-real-backend` (decisions.md §3, H-10). `test-engine-present`
+# adds the other one: after the same no-extras `uv sync --dev`, it installs ONLY
+# `llguidance`/`numpy` on top (never the whole `paw` extra, which pulls in
+# `programasweights` and would build `llama-cpp-python` from sdist on a GitHub-hosted
+# runner with no CUDA toolchain -- slow at best, and not what this job exists to check).
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
+    name: Test (Python ${{ matrix.python-version }}, engine absent)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -51,3 +62,36 @@ jobs:
           uv run paw-inspect --help
           uv run paw-clean --help
           uv run paw-serve --help
+
+  test-engine-present:
+    name: Test (Python ${{ matrix.python-version }}, engine present)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One Python version, not the full matrix: this job exists to prove the
+        # engine-present configuration is green, not to re-run the whole compatibility
+        # grid a second time. Matches this project's own dev checkout.
+        python-version: ["3.12"]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install Dependencies (no extras)
+        run: uv sync --dev
+
+      - name: Install the masking engine only (not the whole `paw` extra)
+        run: uv pip install "llguidance>=1.8,<2" "numpy>=1.20,<3"
+
+      - name: Run Test Suite with Coverage
+        run: uv run pytest --cov=paw_kit --cov-report=term-missing

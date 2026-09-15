@@ -142,3 +142,26 @@ form. It is advice, not a gate.
 An `Optional`/defaulted field gives the model a representable "not applicable" — it can
 emit `null` — but under grammar-constrained decoding the key itself is still always
 emitted; "optional" means nullable, not omittable.
+
+## Running paw-kit's own suite in both engine configurations
+
+paw-kit's own test suite (`.venv/bin/python -m pytest -q -p no:cacheprovider`) needs to
+pass in two configurations, because grammar-constrained decoding's engine
+(`llguidance`) is optional: with it importable, and with it absent (the backend then
+degrades to post-hoc validation only, with one warning — see
+[real-backend](./real-backend.md)). A checkout with `llguidance` already installed in
+`.venv` — as this project's own dev environment has it, for local iteration on
+`paw_kit.schema.constraint` — exercises the engine-present configuration by default,
+so the engine-absent one has to be forced rather than assumed:
+
+```bash
+PYTHONPATH=tests/_no_llguidance .venv/bin/python -m pytest -q -p no:cacheprovider
+```
+
+`tests/_no_llguidance/sitecustomize.py` sets `sys.modules["llguidance"] = None` before
+any test module imports, which is what a genuinely absent `llguidance` looks like to
+every call site that checks for it (`import llguidance` and
+`importlib.util.find_spec("llguidance")` both fail identically) — reproducing the
+no-extras install CI's own engine-absent job runs, without uninstalling anything from
+`.venv`. Tests that need the engine skip cleanly in this configuration
+(`pytest.importorskip("llguidance")`); nothing should fail in either configuration.
