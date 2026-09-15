@@ -29,13 +29,14 @@ The tool cannot tell these apart; a human reads the survivor and decides. The re
 baseline therefore is not a list of bugs, it is a **ratchet**: whatever the current level
 of unasserted behaviour is, a change must not make it worse on the modules it touches.
 
-At the baseline commit the answer is **81 of 260 mutations survive** — roughly one in
-three semantic changes to the most safety-relevant modules goes unnoticed by 627 passing
-tests. That gap is the reason this tool is checked in.
-
-(The throwaway harness this tool was ported from reported 75. The 81 are a strict
-superset: the six extra are mutants that that run scored as killed by a test
-failure the mutant did not cause. See *Attributable kills* below.)
+At the baseline commit the answer is **69 of 455 mutations survive** — roughly one in
+seven semantic changes to the most safety-relevant modules goes unnoticed by the
+suite. That gap is the reason this tool is checked in. (An earlier baseline, before
+`constrained-decoding-real-backend` replaced `schema/logits_processor.py` with
+`schema/constraint.py` in the default set, reported 81 of 260; the two numbers are not
+directly comparable, since the mutated module set and mutation count both changed. See
+*Attributable kills* below for what a phase-2 "survives the full suite" verdict means
+and how a kill is confirmed, not assumed.)
 
 
 ## Timeouts
