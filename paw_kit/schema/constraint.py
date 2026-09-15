@@ -257,6 +257,17 @@ class _Constraint:
                 )
 
         raw_mask = self._matcher.compute_bitmask()
+        # A masking failure is not only a consume_token() rejection: the encoder is
+        # also consulted lazily *during* mask computation itself (module docstring,
+        # point 1 / K-2) -- e.g. resolving a grammar literal's forced-byte spelling
+        # that no consume_token() call has driven yet. is_error() must therefore be
+        # checked again here, separately from the loop above, or a failure that only
+        # surfaces at mask-computation time would be silently missed.
+        if self._matcher.is_error():
+            raise PAWSchemaError(
+                "llguidance grammar constraint entered an error state while "
+                f"computing the mask: {self._matcher.get_error()}"
+            )
         self.masked_per_step.append(_count_masked(raw_mask, self._n_vocab))
 
         # Mask applied to a CONTIGUOUS COPY of the scores -- never the caller's own

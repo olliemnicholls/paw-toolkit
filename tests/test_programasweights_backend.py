@@ -208,8 +208,11 @@ def test_vocabulary_build_failure_warns_once_and_disables_grammar_constraint(
     emitted (naming the vocabulary, not the old "cannot apply grammar_constraint"
     message this backend used to emit unconditionally), and `infer()` must still
     return the LOCAL (unconstrained) output rather than raising -- never a raise on
-    every call, per the track's "No money leak" invariant.
+    every call, per the track's "No money leak" invariant. Needs llguidance actually
+    importable -- this is route (iii-a), which only exists to test once route (i)
+    (engine absent) has already been ruled out.
     """
+    pytest.importorskip("llguidance")
     backend = ProgramAsWeightsBackend(sdk=FakeSDK())
     out = str(tmp_path / "t.paw")
     backend.compile("spec", [], out)
@@ -1618,3 +1621,340 @@ def test_d1_honest_availability_and_doctor_routing(key: None, tmp_path: Path) ->
         broken_callable_backend.infer(out2, "test")
     assert isinstance(exc_info2.value.__cause__, RuntimeError)
     assert "llama_decode failed" in str(exc_info2.value.__cause__)
+
+
+# ============================================================================
+# Phase T: constrained-decoding-real-backend -- backend-level integration tests
+#
+# These exercise infer()/paw.load with a FAKE model that carries the minimal
+# llama_cpp.Llama surface _build_vocabulary needs (n_vocab, token_eos, detokenize,
+# tokenize) and a fake fn that applies logits_processor exactly like the real SDK's
+# guarded_processor (runtime_llamacpp.py:504-523): catch, discard the poisoned token,
+# re-raise unwrapped after the loop. Engine-present tests need llguidance importable
+# (it is, in this dev checkout); the one engine-absent test (money route i) forces
+# absence via `monkeypatch.setitem(sys.modules, "llguidance", None)` -- the same
+# reproducible mechanism used throughout this suite for programasweights/llama_cpp
+# (see tests/test_doctor.py) -- rather than assuming anything about the environment.
+#
+# `math.isfinite`, not numpy, is used to inspect a returned masked-scores array: this
+# keeps every test in this file numpy-independent except where the real constraint
+# engine itself is exercised (which already depends on numpy transitively, lazily, and
+# only when llguidance is actually importable).
+# ============================================================================
+
+import logging
+import math
+import sys
+
+from paw_kit import load
+from paw_kit.schema.exceptions import PAWSchemaError
+from paw_kit.schema.grammar import pydantic_to_regex
+from pydantic import BaseModel
+
+
+class _CDSimpleModel(BaseModel):
+    s: str
+
+
+def _cd_build_tokens() -> "Tuple[List[bytes], int]":
+    tokens: List[bytes] = [bytes([i]) for i in range(256)]
+    tokens.append(b"\xc3\xa9")  # dedicated 2-byte token, unused by these tests directly
+    eos = len(tokens)
+    tokens.append(b"<eos>")
+    return tokens, eos
+
+
+class _FakeLlamaModel:
+    """Minimal llama_cpp.Llama-shaped fake: exactly the surface
+    `ProgramAsWeightsBackend._build_vocabulary` and a driven generation loop need."""
+
+    def __init__(self) -> None:
+        self.tokens, self.eos = _cd_build_tokens()
+        self._by_bytes: Dict[bytes, int] = {}
+        for i, b in enumerate(self.tokens):
+            if b and b not in self._by_bytes:
+                self._by_bytes[b] = i
+        self._maxlen = max(len(b) for b in self._by_bytes)
+
+    def n_vocab(self) -> int:
+        return len(self.tokens)
+
+    def token_eos(self) -> int:
+        return self.eos
+
+    def detokenize(self, ids: "List[int]") -> bytes:
+        return b"".join(self.tokens[i] for i in ids)
+
+    def tokenize(self, data: bytes, add_bos: bool = False, special: bool = False) -> "List[int]":
+        out: "List[int]" = []
+        i = 0
+        while i < len(data):
+            for ln in range(min(self._maxlen, len(data) - i), 0, -1):
+                tid = self._by_bytes.get(data[i:i + ln])
+                if tid is not None:
+                    out.append(tid)
+                    i += ln
+                    break
+            else:  # pragma: no cover -- unreachable, every single byte has a token
+                i += 1
+        return out
+
+    def encode(self, x: "str | bytes") -> "List[int]":
+        if isinstance(x, str):
+            x = x.encode("utf-8")
+        return self.tokenize(x)
+
+
+class _ConstrainedFakeFn:
+    """Simulates `PawFunction.__call__`/`_generate`'s shape closely enough for Phase
+    T's masking-effect and prompt-offset assertions: applies `logits_processor` at
+    every generation step, picks the scripted token when the mask allows it (else the
+    lowest allowed id, i.e. a "model" that mostly cooperates with the grammar), and
+    propagates a processor exception unwrapped after the loop -- exactly like
+    `runtime_llamacpp.py`'s `guarded_processor` (catch, discard the poisoned token,
+    re-raise once control returns to Python).
+    """
+
+    def __init__(self, llm: _FakeLlamaModel, scripted_output: str) -> None:
+        self._llm = llm
+        self._scripted_ids = llm.encode(scripted_output)
+        self.last_processor: Any = None
+
+    def __call__(
+        self,
+        input_text: str,
+        max_tokens: "int | None" = None,
+        temperature: float = 0.0,
+        logits_processor: Any = None,
+    ) -> str:
+        context = list(self._llm.encode(input_text))
+        processor = logits_processor[0] if logits_processor else None
+        self.last_processor = processor
+        n_vocab = self._llm.n_vocab()
+        limit = max_tokens if max_tokens is not None else len(self._scripted_ids) + 1
+        output: "List[int]" = []
+        processor_error: "BaseException | None" = None
+        for i in range(limit):
+            scores = [0.0] * n_vocab
+            if processor is not None:
+                try:
+                    masked = processor(context, scores)
+                except BaseException as exc:  # noqa: BLE001 -- mirrors guarded_processor
+                    processor_error = exc
+                    break
+                allowed = [idx for idx, v in enumerate(masked) if math.isfinite(v)]
+                if i < len(self._scripted_ids) and self._scripted_ids[i] in allowed:
+                    token = self._scripted_ids[i]
+                else:
+                    token = allowed[0] if allowed else self._llm.eos
+            else:
+                token = self._scripted_ids[i] if i < len(self._scripted_ids) else self._llm.eos
+            if token == self._llm.eos:
+                break
+            output.append(token)
+            context.append(token)
+        if processor_error is not None:
+            raise processor_error
+        return self._llm.detokenize(output).decode("utf-8", errors="replace")
+
+
+class _AlwaysRejectingFakeFn:
+    """A `fn` whose "model" ignores the mask entirely and emits a fixed, grammar-
+    incompatible token sequence every time -- so the constraint's `consume_token()`
+    fails on every call, deterministically. Used for money route (iii-b): S-14's
+    fallback-counting and warn-once mitigation for a constraint that fails on every
+    single call."""
+
+    def __init__(self, llm: _FakeLlamaModel, bad_output: str = "not json at all") -> None:
+        self._llm = llm
+        self._bad_ids = llm.encode(bad_output)
+
+    def __call__(
+        self,
+        input_text: str,
+        max_tokens: "int | None" = None,
+        temperature: float = 0.0,
+        logits_processor: Any = None,
+    ) -> str:
+        context = list(self._llm.encode(input_text))
+        processor = logits_processor[0] if logits_processor else None
+        output: "List[int]" = []
+        processor_error: "BaseException | None" = None
+        for tok in self._bad_ids:
+            if processor is not None:
+                try:
+                    processor(context, [0.0] * self._llm.n_vocab())
+                except BaseException as exc:  # noqa: BLE001 -- mirrors guarded_processor
+                    processor_error = exc
+                    break
+            output.append(tok)
+            context.append(tok)
+        if processor_error is not None:
+            raise processor_error
+        return self._llm.detokenize(output).decode("utf-8", errors="replace")
+
+
+class ConstrainedFakeSDK(FakeSDK):
+    """A FakeSDK whose `function()` returns a callable carrying a real (fake)
+    `_llm`, so `_build_vocabulary` succeeds and grammar-constrained decoding actually
+    engages -- unlike the base `FakeSDK`, whose plain closure has no `_llm` at all
+    (that absence is what money route iii-a's own test already covers)."""
+
+    def __init__(self, scripted_output: str = '{"s": "hi"}', **kw: Any) -> None:
+        super().__init__(**kw)
+        self.llm = _FakeLlamaModel()
+        self.fn = _ConstrainedFakeFn(self.llm, scripted_output)
+
+    def function(self, program_id: str, **kw: Any):
+        self.function_calls.append({"program_id": program_id, **kw})
+        return self.fn
+
+
+class RejectingFakeSDK(FakeSDK):
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.llm = _FakeLlamaModel()
+        self.fn = _AlwaysRejectingFakeFn(self.llm)
+
+    def function(self, program_id: str, **kw: Any):
+        self.function_calls.append({"program_id": program_id, **kw})
+        return self.fn
+
+
+def test_cd_masking_effect_end_to_end_via_infer(key: None, tmp_path: Path) -> None:
+    """A masking effect, not merely a successful generation (per the track's
+    safety invariants: the `Llama.sample()` reuse hazard means every "constraint
+    applied" assertion here is on invocation/masked-count, not generation success)."""
+    pytest.importorskip("llguidance")
+    sdk = ConstrainedFakeSDK(scripted_output='{"s": "hi"}')
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+    assert backend.applies_grammar_constraint is True
+
+    pat = pydantic_to_regex(_CDSimpleModel)
+    result = backend.infer(out_path, "hello", grammar_constraint=pat)
+
+    assert result != ""
+    processor = sdk.fn.last_processor
+    assert processor is not None
+    assert processor.invocations > 0
+    assert len(processor.masked_per_step) == processor.invocations
+    assert all(m > 0 for m in processor.masked_per_step)
+
+
+def test_cd_prompt_offset_full_generation_returns_local_output_no_fallback(
+    key: None, tmp_path: Path
+) -> None:
+    """H-2: a full generation through a fake fn that passes the prompt (the SDK's own
+    loop, simulated by `_ConstrainedFakeFn`) returns LOCAL output with no fallback
+    call -- the prompt-offset bookkeeping does not mistake prompt tokens for illegal
+    generated ones."""
+    pytest.importorskip("llguidance")
+    sdk = ConstrainedFakeSDK(scripted_output='{"s": "hi"}')
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+
+    fallback_calls: List[str] = []
+
+    def fallback(text: str) -> _CDSimpleModel:
+        fallback_calls.append(text)
+        return _CDSimpleModel(s="FALLBACK")
+
+    fn = load(out_path, _CDSimpleModel, backend=backend, fallback_provider=fallback)
+    result = fn("a reasonably long unrelated prompt, so the offset is not trivially zero")
+
+    assert result == _CDSimpleModel(s="hi")
+    assert fallback_calls == []
+
+
+def test_cd_money_route_i_engine_absent_flag_false_warns_once_no_teacher_call(
+    monkeypatch: pytest.MonkeyPatch, key: None, tmp_path: Path
+) -> None:
+    """Money route (i): forcing llguidance absent via
+    `monkeypatch.setitem(sys.modules, "llguidance", None)` (the same mechanism
+    `tests/test_doctor.py` uses for `programasweights`/`llama_cpp`; verified this
+    makes both `importlib.util.find_spec` and a plain `import` fail). The instance
+    flag goes False, exactly one UserWarning fires at construction naming the `paw`
+    extra, and `paw.load` calls `infer()` with `grammar_constraint=None` -- returning
+    the LOCAL (unconstrained) output, never the teacher's."""
+    monkeypatch.setitem(sys.modules, "llguidance", None)
+
+    with pytest.warns(UserWarning, match="llguidance"):
+        sdk = ConstrainedFakeSDK(scripted_output='{"s": "hi"}')
+        backend = ProgramAsWeightsBackend(sdk=sdk)
+    assert backend.applies_grammar_constraint is False
+
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+
+    teacher_calls: List[str] = []
+
+    def fallback(text: str) -> _CDSimpleModel:
+        teacher_calls.append(text)
+        return _CDSimpleModel(s="teacher")
+
+    with pytest.warns(UserWarning, match="cannot apply grammar_constraint"):
+        fn = load(out_path, _CDSimpleModel, backend=backend, fallback_provider=fallback)
+    result = fn("hello")
+
+    assert result == _CDSimpleModel(s="hi")  # local output
+    assert teacher_calls == []
+    assert sdk.fn.last_processor is None  # no logits_processor was ever built/passed
+
+
+def test_cd_money_route_iii_b_constraint_raising_every_call_counted_and_warned_once(
+    key: None, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S-14 / money route (iii-b): a constraint that raises on every single call is
+    counted by `get_local_fallback_count()` and logged (via `logger.warning`, not
+    `warnings.warn` -- `caplog`, not `pytest.warns`) exactly once, with later
+    occurrences dropping to DEBUG."""
+    pytest.importorskip("llguidance")
+    sdk = RejectingFakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+    assert backend.applies_grammar_constraint is True
+
+    teacher_calls: List[str] = []
+
+    def fallback(text: str) -> _CDSimpleModel:
+        teacher_calls.append(text)
+        return _CDSimpleModel(s="teacher")
+
+    fn = load(out_path, _CDSimpleModel, backend=backend, fallback_provider=fallback)
+
+    with caplog.at_level(logging.WARNING, logger="paw_kit.schema.loader"):
+        for text in ("a", "b", "c"):
+            result = fn(text)
+            assert result == _CDSimpleModel(s="teacher")
+
+    assert teacher_calls == ["a", "b", "c"]
+    assert fn.get_local_fallback_count() == 3
+    warning_records = [
+        r for r in caplog.records
+        if r.name == "paw_kit.schema.loader" and r.levelno == logging.WARNING
+    ]
+    assert len(warning_records) == 1
+
+
+def test_cd_paw_schema_error_reaches_infer_unwrapped_not_runtimeerror(
+    key: None, tmp_path: Path
+) -> None:
+    """The safety invariant this whole track hinges the remedy-string rewrite on:
+    `infer()` lets `PAWSchemaError` from the constraint through its `RuntimeError`
+    wrapper unwrapped, so a grammar/masking failure is never mistaken for (and never
+    sent to check) a GPU-offload/environment problem."""
+    pytest.importorskip("llguidance")
+    sdk = RejectingFakeSDK()
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+
+    pat = pydantic_to_regex(_CDSimpleModel)
+    with pytest.raises(PAWSchemaError) as excinfo:
+        backend.infer(out_path, "hello", grammar_constraint=pat)
+    assert "GPU offload" not in str(excinfo.value)
+    assert "paw-kit doctor" not in str(excinfo.value)
