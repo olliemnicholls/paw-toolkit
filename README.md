@@ -140,6 +140,11 @@ paw-serve adapter.paw --port 8000         HTTP server (--warm to pay the cold lo
 paw-clean [--dry-run]                     remove cached adapters and trace DB
 ```
 
+## Contributing
+
+Changing paw-kit's own code? See [CONTRIBUTING.md](CONTRIBUTING.md) for dev-process
+notes (e.g. running the test suite in both engine configurations).
+
 ## Relationship to upstream
 
 This is an independent project and is not affiliated with the paper's authors or
