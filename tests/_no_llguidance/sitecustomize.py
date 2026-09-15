@@ -29,7 +29,7 @@ Usage, from the repository root:
 
     PYTHONPATH=tests/_no_llguidance .venv/bin/python -m pytest -q -p no:cacheprovider
 
-See `docs/testing.md` for the two configurations this project's suite is run in, and
+See `CONTRIBUTING.md` for the two configurations this project's suite is run in, and
 `.github/workflows/ci.yml` for how CI exercises both without this shim (the
 engine-absent job is `uv sync --dev` with no extras; the engine-present job installs
 only `llguidance`/`numpy` on top of that, never the whole `paw` extra).

@@ -13,7 +13,7 @@ concurrency:
 # Two jobs, both required, because grammar-constrained decoding's engine (`llguidance`)
 # is optional and this project's behaviour genuinely differs with and without it (the
 # real backend degrades to post-hoc validation only, with one warning, when it is
-# absent -- see docs/testing.md and docs/real-backend.md). `test` (the original matrix)
+# absent -- see CONTRIBUTING.md and docs/real-backend.md). `test` (the original matrix)
 # is the engine-ABSENT case: `uv sync --dev` installs no extras at all, so `llguidance`
 # is never on the path -- this was already CI's only exercised configuration before
 # `constrained-decoding-real-backend` (decisions.md §3, H-10). `test-engine-present`
