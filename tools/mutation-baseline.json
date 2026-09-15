@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "generated": "2026-09-15T20:33:15+0100",
-  "commit": "10c1842e50d1ea7204a4d23dcede03989594b855",
+  "commit": "1c7fc64464e495346abfb8fdb9665f53f3f955f9",
   "note": "Surviving mutants per module, measured by tools/mutate.py. A survivor is a semantic change the suite does not notice. Counts are full-suite survivors: a mutant that survives its module's fast test selection is re-run against the whole suite, and only then counted. Regenerate with `uv run --no-sync python tools/mutate.py --write-baseline tools/mutation-baseline.json`; see tools/README-mutate.md.",
   "totals": {
     "mutations": 456,
