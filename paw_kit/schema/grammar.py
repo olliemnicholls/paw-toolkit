@@ -279,36 +279,87 @@ def _extract_pattern_from_field(field_info: FieldInfo) -> Optional[Tuple[str, in
 #
 # An integer range is rendered by enumerating it. That is only reasonable for a small
 # range; beyond this many values the alternation is longer than it is useful, so a wider
-# range is warned about instead. The engine that walks the rendered grammar
-# (`paw_kit.schema.constraint`, `constrained-decoding-real-backend`) is lazy and bounds
-# construction by `INITIAL_LEXER_FUEL` (10,000) rather than by a character-length or
-# DFA-state cap, so an oversized enumeration's actual failure mode today is spending
-# more of that fuel budget than the project allows, not blowing up a compiled DFA.
-# PROVISIONAL (Phase 2): re-derived in Phase 4 -- this paragraph only corrects the
-# engine model the justification names; it does not re-measure 256 against
-# `constraint.INITIAL_LEXER_FUEL`'s headroom. 256 covers the realistic cases in the
-# meantime -- a percentage, a rating, a small enum-like code, a byte.
+# range is warned about instead. 256 covers the realistic cases -- a percentage, a
+# rating, a small enum-like code, a byte.
+#
+# Re-derived 2026-09-15 against the engine that actually walks this grammar
+# (`paw_kit.schema.constraint`), which is lazy, builds no DFA, and bounds construction
+# by `INITIAL_LEXER_FUEL` (10,000). Measured on the real 151,936-token vocabulary, as
+# the minimum `initial_lexer_fuel` at which `LLMatcher` construction plus its initial
+# mask succeeds:
+#
+#   one int field, ge=0 le=n-1, through this compiler        raw alternation alone
+#     n=2      76        n=128   1,322                        n=256     2,550  (9.96/member)
+#     n=16    182        n=256   2,612                        n=1,024  10,242 (10.00/member)
+#     n=64    674        n=257     102 <- bound dropped        n=4,096  40,985 (10.01/member)
+#
+# So an integer enumeration costs about **10 fuel per member** -- slightly more than a
+# string `Literal` of the same arity, which the same run put at 8.3-8.5 per member
+# asymptotically (400 members 3,387; 2,000 members 16,667), matching the figure
+# `constraint.py`'s module docstring quotes. One field at the cap costs
+# **2,612 -- 26% of the whole grammar's budget**. The cap is doing its job at n=257: the
+# bound is dropped and warned about, and the field falls back to the unbounded integer
+# rendering at 102 fuel.
+#
+# **The budget is for the WHOLE grammar, and this constant is not safe against that.**
+# Measured, same day, on a model whose only fields are int ranges at the cap:
+#
+#   1 field   2,612      3 fields   7,760  <- last one that fits
+#   2 fields  5,186      4 fields  10,334  <- REFUSED at INITIAL_LEXER_FUEL=10,000
+#                        5 fields  12,908
+#
+# Four `Field(ge=0, le=255)` int fields in one model is an ordinary schema, and
+# `build_constraint` refuses it with `PAWSchemaError` at construction. That is a
+# fail-open, not invalid output -- `infer()` propagates it unwrapped, `paw.load` routes
+# to the fallback, `get_local_fallback_count()` counts it and S-14 warns once -- but it
+# is a fail-open on *every* call for that model, which is the money-leak class
+# (`decisions.md` §1). **This value is left at 256 deliberately and not tuned here**:
+# lowering it silently narrows what this compiler will enforce, and the number that is
+# actually mis-set may be `INITIAL_LEXER_FUEL` rather than this one. Neither is a change
+# a comment re-derivation gets to make; it needs its own track, with the two constants
+# argued together.
 _MAX_ENUMERATED_INT_RANGE = 256
 
-# ... and the same question for a LENGTH bound, where the answer is much sharper. A DFA
-# has no loop for `X{m,n}`: it unrolls, costing roughly n * |DFA(X)| states under a
-# character-level DFA engine. That is invisible in the rendered regex -- `{0,19}` and
-# `*` are the same three characters. `constrained-decoding-real-backend` replaced that
-# engine (`logits_processor.RegexLogitsProcessor`, which capped a whole compiled
-# grammar at `_MAX_FSM_STATES` = 10,000 states and 3 s) with `paw_kit.schema.constraint`,
-# which is lazy and bounds construction by `INITIAL_LEXER_FUEL` (10,000) instead --
-# measured there: a `Literal` costs roughly 8.3-8.5 fuel per member asymptotically, the
-# `Contact` schema used throughout that track's evidence needs 763, and the worst of
-# `tests/test_schema_spine.py`'s 38 `SPINE_CASES` needs 1,266 (7.90x headroom under
-# 10,000) -- a materially different cost shape than the state-count table below.
-# PROVISIONAL (Phase 2): re-derived in Phase 4 -- the table below, and the "five `str`
-# fields" figure after it, were measured against the deleted character-level engine's
-# state count and 3 s timeout, neither of which bounds construction under the
-# fuel-based engine. The unrolling constants this whole comment justifies
-# (`_MAX_UNROLLED_STRING_LENGTH`, `_MAX_UNROLLED_COLLECTION_ITEMS`,
-# `_MAX_UNROLLED_COLLECTION_CHARS`) are kept at their existing values pending
-# re-measurement against `INITIAL_LEXER_FUEL`; only the engine model above is corrected
-# here. Historical measurement, against the deleted engine:
+# ... and the same question for a LENGTH bound, where the answer used to be much
+# sharper and, re-derived 2026-09-15, is no longer the same question at all.
+#
+# The old argument: a DFA has no loop for `X{m,n}`, so it unrolls, costing roughly
+# n * |DFA(X)| states under a character-level DFA engine -- invisible in the rendered
+# regex, since `{0,19}` and `*` are the same three characters. That is why these three
+# constants exist, and it was true of the engine they were measured against
+# (`logits_processor.RegexLogitsProcessor`, capped at `_MAX_FSM_STATES` = 10,000 states
+# and a 3 s compile timeout), which `constrained-decoding-real-backend` deleted.
+#
+# **Under the engine that replaced it, a length bound costs nothing.**
+# `paw_kit.schema.constraint` is lazy: it builds no DFA, and `{0,n}` stays a repetition
+# in the lexer instead of being unrolled. Measured on the real 151,936-token vocabulary
+# as minimum `initial_lexer_fuel`, with this compiler's own budget lifted so the bounds
+# were actually rendered rather than warned about:
+#
+#   str, max_length=32 / 512 / 100,000       643 fuel each -- and 643 unbounded
+#   List[nested], max_items=8 / 20 / 1,000   988 fuel each -- and 988 unbounded
+#   five `str` fields, max_length=32         963 fuel      -- and 963 unbounded
+#   the realistic invoice model below        3,900 unrolled vs 3,902 with the bounds
+#                                            dropped (2.56x headroom either way)
+#
+# The number does not move. Whatever these constants are protecting today, it is not
+# the decoder's construction budget, and the state-count table they were derived from
+# describes an engine that no longer exists. For the cost shape that *does* bind under
+# this engine, see `_MAX_ENUMERATED_INT_RANGE` above: an enumeration costs about 10 fuel
+# per member and four 256-value int fields already exceed `INITIAL_LEXER_FUEL`. A length
+# bound is free; an enumerated alternation is not.
+#
+# **What these constants are now.** A rendering policy, not a decoder budget: past them
+# this compiler declines to render the bound and warns, naming the budget, exactly like
+# a constraint that is inexpressible for semantic reasons. That behaviour is shipped,
+# tested and user-visible (the warning text names the numbers), and the fuel measurement
+# above is a reason the limits could be *raised*, never a reason they are unsafe. Raising
+# them changes what `pydantic_to_regex` enforces for callers who set a bound today, which
+# is a semantics change and needs its own track -- so the values stand, and this comment
+# no longer claims a decoder cost it cannot demonstrate.
+#
+# Historical measurement, against the deleted character-level engine, kept as the record
+# of why the numbers are what they are:
 #
 #   str, max_length=64               653 states   0.12 s
 #   str, max_length=256            2,573 states   1.45 s
@@ -317,26 +368,14 @@ _MAX_ENUMERATED_INT_RANGE = 256
 #   List[str], max_items=8           132 states   0.02 s
 #   List[nested model], max_items=8  2,116 states 1.51 s
 #   List[nested model], max_items=20 7,496 states 19.07 s  <- past both budgets
+#   five `str` fields, max_length=64 3,262 states 3.12 s   <- past the compile timeout
+#   five `str` fields, max_length=32 1,662 states 0.85 s   <- hence 32
 #
-# (A string costs about ten states per character rather than one under that engine,
-# because each position carried the S-2 escape alternation -- not applicable to the
-# fuel-based engine's cost model.)
-#
-# So a bound that is trivial to WRITE can make a schema that used to compile fail to
-# compile -- turning a working call into a raise, which the parent track's fail-open
-# invariant forbids. Above these limits the bound is therefore warned about, with the
-# budget named, exactly like a constraint that is inexpressible for semantic reasons.
-# The limits are deliberately well inside the decoder's budget, because the budget is
-# for the WHOLE grammar and a model has more than one field. Measured on five `str`
-# fields in one model against the deleted engine: at max_length=64 they cost 3,262
-# states and 3.12 s, which was already past that engine's compile timeout; at
-# max_length=32, 1,662 states and 0.85 s. Hence 32 (not yet re-measured against the fuel
-# engine -- see the PROVISIONAL note above). What makes a bounded string expensive under
-# that measurement is the S-2 escape alternation -- every permitted
-# character position carries `\\(["\\/bfnrt]|uXXXX)` -- so dropping escapes from inside a
-# length-bounded string would buy an order of magnitude. That narrows the grammar
-# further (no quote, backslash or newline inside a bounded string at all) and no finding
-# asked for it, so it is recorded as an option rather than taken.
+# (A string cost about ten states per character rather than one under that engine,
+# because each position carried the S-2 escape alternation `\\(["\\/bfnrt]|uXXXX)`.
+# Dropping escapes from inside a length-bounded string would have bought an order of
+# magnitude there; under the fuel engine there is nothing to buy, so the option lapses
+# rather than being taken.)
 _MAX_UNROLLED_STRING_LENGTH = 32
 _MAX_UNROLLED_COLLECTION_ITEMS = 8
 # Note for a mutation-gate reader: `len(unbounded_regex) >= _MAX_UNROLLED_COLLECTION_CHARS`
@@ -346,12 +385,15 @@ _MAX_UNROLLED_COLLECTION_ITEMS = 8
 # 73, ... and 317, 319, 321, ...). An even budget is therefore never hit exactly and the
 # two comparisons agree on every input this compiler can produce.
 #
-# The item count is the dominant lever -- at eight items every collection this compiler
-# can render measured between 122 and 2,122 states and under a second, including a list
-# of nested models. This second limit is the backstop for an element whose rendering is
-# enormous in its own right (a deeply nested model), where eight copies would be
-# ruinous however few they are. The collection's unbounded rendering embeds its entry
-# regex twice, so it is roughly "an entry of 500 characters or less".
+# The item count was the dominant lever under the deleted engine -- at eight items every
+# collection this compiler can render measured between 122 and 2,122 states and under a
+# second, including a list of nested models. This second limit is the backstop for an
+# element whose rendering is enormous in its own right (a deeply nested model), where
+# eight copies would be ruinous however few they are. The collection's unbounded
+# rendering embeds its entry regex twice, so it is roughly "an entry of 500 characters
+# or less". Under the fuel engine neither lever costs anything (see the re-derivation
+# above: `List[nested]` needs 988 fuel at 8, 20 and 1,000 items alike), so this limit is
+# likewise a rendering policy today rather than a decoder bound.
 _MAX_UNROLLED_COLLECTION_CHARS = 1000
 
 _FieldConstraints = namedtuple(

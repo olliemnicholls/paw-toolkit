@@ -2332,16 +2332,19 @@ def test_an_alias_equal_to_its_own_field_name_is_not_a_collision_S_5() -> None:
 
 
 def test_a_length_bound_past_the_unrolling_budget_warns_rather_than_compiling_S_9() -> None:
-    """A `{m,n}` has no loop in a DFA: it unrolls, and that lands on the decoder's caps.
+    """Past the unrolling budget, a length bound is warned about rather than rendered.
 
-    Measured on this compiler's own output: five `str` fields at `max_length=64` cost
-    3,262 FSM states and 3.12 s, already past `_FSM_TIMEOUT_SECONDS`; a
-    `List[nested model]` at `max_items=20` costs 7,496 states and 19 s. Both would turn
-    a schema that compiles today into a `PAWSchemaError` from `_compile_fsm_safe` --
-    a new raise on a path the caller depends on, which the parent track's fail-open
-    invariant forbids. Past the budget the bound is warned about instead, and the
-    warning names the budget so the reader can tell this apart from a constraint that
-    is inexpressible for semantic reasons.
+    The budget's original justification was a decoder cost: under the deleted
+    character-level engine five `str` fields at `max_length=64` cost 3,262 FSM states
+    and 3.12 s, past that engine's compile timeout, and a `List[nested model]` at
+    `max_items=20` cost 7,496 states and 19 s -- so a bound that is trivial to write
+    could turn a working call into a raise. Re-derived 2026-09-15 against the engine
+    that replaced it, a length bound costs no construction fuel at all (`grammar.py`'s
+    re-derivation beside `_MAX_UNROLLED_STRING_LENGTH`: 643 fuel at `max_length` 32,
+    512 and 100,000 alike, and 643 unbounded). What this test pins is therefore the
+    *behaviour* -- warn, name the budget, and fall back to the unbounded rendering --
+    which is user-visible and shipped, not the cost argument that first produced the
+    numbers.
     """
     import re as _re
 
