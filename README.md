@@ -41,8 +41,10 @@ a frontier API, and who want evidence before they trust it:
   an adversarial fuzzer, an active-learning loop that sends failing inputs to a teacher
   for labels and recompiles, a per-case diff of two adapters, and an LLM judge. Use it to 
   find out what a compiled function gets wrong before you ship it.
-- **`paw.load` (paw.schema)**: bind an adapter to a Pydantic model. Output is validated
-  and, on failure, routed to a fallback.
+- **`paw.load` (paw.schema)**: bind an adapter to a Pydantic model. On the real backend
+  every generation step is masked to your schema by default, so the output parses — a
+  shape guarantee, not a correctness one, and `constrained_decoding=False` turns it off.
+  Output is validated after generation either way and, on failure, routed to a fallback.
 - **`paw-serve`**: expose any adapter as a local HTTP service speaking the OpenAI Chat
   Completions and Anthropic Messages wire formats. `paw-kit export docker` scaffolds a
   container for it.

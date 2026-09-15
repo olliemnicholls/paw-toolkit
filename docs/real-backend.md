@@ -108,15 +108,38 @@ The measured figures are on the [results page](./results.md). The shape of them:
   the fuzzer has found a fabricated answer. `paw-kit lint-spec` checks a spec for the
   common authoring mistakes.
 
-## Two upstream limitations
+## One upstream limitation
 
-1. **The upstream compiler takes a spec, not a dataset.** It generates its own examples
-   with teacher models. paw-kit's traced calls and active-learning labels can only reach it
-   as few-shot demonstrations appended to the spec text (`max_spec_examples`). Whether that
-   helps depends on the task, and `paw-test compare` is how to find out.
-2. **No grammar-constrained decoding.** The SDK's callable has no grammar or logits hook,
-   so paw-kit cannot constrain generation to a schema. `paw.load` validates output after
-   generation with Pydantic and falls back on failure.
+**The upstream compiler takes a spec, not a dataset.** It generates its own examples with
+teacher models. paw-kit's traced calls and active-learning labels can only reach it as
+few-shot demonstrations appended to the spec text (`max_spec_examples`). Whether that
+helps depends on the task, and `paw-test compare` is how to find out.
+
+## Grammar-constrained decoding
+
+On by default. When you bind an adapter with `paw.load`, every generation step is masked
+so a token that would leave your schema's language cannot be sampled. Pass
+`constrained_decoding=False` to `ProgramAsWeightsBackend` to turn it off.
+
+What it guarantees is **shape**: the output parses as your model. It says nothing about
+whether the field values are right, and it does not replace post-generation validation --
+Pydantic validation and fail-open fallback run on every call either way, because a
+generation cut short at `max_tokens` or at the context window is still an invalid object.
+
+Two things worth knowing before you leave it on:
+
+- It costs **0.8 ms per generated token** (measured on an RTX 3080: 132 ms per call
+  constrained against 116 ms unconstrained, on a 20-token answer).
+- If the adapter was compiled for a *different* schema than the one you are asking for,
+  masking makes the answer well-formed rather than right, and a wrong-but-valid answer
+  no longer fails validation, so it no longer falls back to your teacher. A phone-number
+  adapter asked for a triage schema will return a triage-shaped object with the wrong
+  values in it. That is the case `constrained_decoding=False` exists for; shadow mode and
+  the audit window are how you catch it if you leave it on.
+
+If `llguidance` is not installed, the backend warns once at construction and runs
+unconstrained with post-hoc validation instead. See [install](./install.md) for which
+platforms have a prebuilt wheel.
 
 ## Bringing your own runtime
 

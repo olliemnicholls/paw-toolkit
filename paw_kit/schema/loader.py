@@ -57,9 +57,10 @@ def load(
     """Load a compiled PAW adapter and bind it to a strict Pydantic response schema.
 
     For backends that enforce grammar constraints (`applies_grammar_constraint = True`),
-    compiles the schema to a regex and passes it as `grammar_constraint`. For backends
-    that do not (including shipped backends; see the README's "what is real" table),
-    regex compilation is skipped entirely. What this function always enforces is
+    compiles the schema to a regex and passes it as `grammar_constraint`.
+    `ProgramAsWeightsBackend` does this by default; `MockPAWBackend` does not, and for a
+    backend that does not, regex compilation is skipped entirely. Masking guarantees
+    output *shape* only. What this function always enforces, with or without it, is
     post-generation Pydantic validation: output that fails to parse as `response_model`
     is routed to `fallback_provider`, or raised as `PAWSchemaError` if none is configured.
 

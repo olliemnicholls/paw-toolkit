@@ -28,10 +28,10 @@ keywords = [
 # is the authoritative declaration.
 #
 # "Development Status :: 3 - Alpha" is the honest rating and matches the README's own
-# status box. It is not 4/Beta: the package has never been released, one of its three
-# advertised subsystems (grammar-constrained decoding) is not applied by any shipped
-# backend, and semantic correctness measured 60-90% depending on task. See
-# `measurements/README.md` before raising this.
+# status box. It is not 4/Beta: the package has never been released, grammar-constrained
+# decoding has been applied by a shipped backend and measured end to end on exactly two
+# real adapters on one machine, and semantic correctness measured 60-90% depending on
+# task. See `measurements/README.md` before raising this.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

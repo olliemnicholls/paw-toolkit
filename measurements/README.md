@@ -208,6 +208,25 @@ the same review, also fixed the same day: the import was dead and nothing in `pa
 ever actually applied it. The wiring that made the numbers above possible lives entirely
 in this script, not in the shipped library; `real.py`'s docstring now says so.
 
+> **Note, 2026-09-15 (Track 15).** The numbers above stand as measured and the script
+> that produced them, `scripts/measure_schema_real_model.py`, is **deleted**: it drove
+> `RegexLogitsProcessor` directly against a bare HuggingFace Qwen2.5-0.5B-Instruct, and
+> that class no longer exists. The committed artifact is the record. Two things about
+> this section to carry forward rather than re-read literally:
+>
+> - **The 15/15-vs-0/15 contrast has no successor on a compiled PAW adapter.** It was
+>   produced against an un-fine-tuned instruct model asked nicely for JSON. Re-run
+>   through the shipped backend on an adapter compiled for its own schema, the same
+>   comparison is 15/15 versus 15/15 and 60/60 versus 60/60, byte-identical — see the
+>   2026-09-15 section at the end of this file. The null is the result.
+> - **The engine that made these numbers had a hole this schema never reached.** The
+>   character-level FSM walked a byte-level BPE vocabulary, so in both vocabularies built
+>   for it, 1,456 tokens decoding to `U+FFFD` were admitted by the JSON string-content
+>   class (1,447 not standalone-valid UTF-8). This section's `Triage` has three closed
+>   `Literal` sets and no free string field, and 0 of its 121 live FSM states admit any of
+>   them — which is why the result stands. Any schema here with a free `str` field would
+>   not have. The replacement engine is byte-level and the hole is structurally closed.
+
 ## Semantic correctness, for real: does it mean the right thing, not just look right
 
 > **What this measurement led to.** The 60% agreement figure below is why
@@ -1928,6 +1947,31 @@ the output *shaped*; it cannot make it *answerable*.
 structural validity only — no semantic judging was run on the constrained outputs, so
 "4/5 parse" says nothing about whether `kind: "mobile"` is the right classification.
 
+> **Note, 2026-09-15 (Track 15).** The hook is no longer private and this experiment is no
+> longer how the mechanism is reached. `programasweights==0.4.6` (PR #6) made
+> `logits_processor` a public kwarg on the callable, `ProgramAsWeightsBackend.infer()`
+> passes it, and `scripts/measure_constrained_decoding_upstream.py` — which
+> monkeypatched `PawFunction._llm.sample` — is **deleted**. The section's own "defensible
+> near-term ask" ("a small, additive upstream change that would turn this from a
+> private-attribute hack into a supported integration") is what shipped.
+>
+> Three of its numbers do not carry forward, because the engine changed:
+>
+> - **4/5 is now 5/5.** Re-run on the same phone-extractor adapter with the same five
+>   inputs through the public hook and the byte-level engine, every case parses as
+>   `Contact`, including `"no phone number here at all"` — which stalled mid-object here.
+>   It now completes as `{"area_code": 0, "number": "", "kind": "unknown"}`. The
+>   limitation the section describes was an artefact of that engine exhausting its token
+>   budget, not of constrained decoding as such; the *semantic* point it was making (a
+>   schema with no representable "not applicable" case) is unaffected, and `"unknown"` is
+>   this schema's version of that case.
+> - **The warm-up cost is gone.** `get_allowed_tokens`' 50.85 s across 30 FSM states has
+>   no counterpart: the replacement engine is lazy and builds no state→allowed-token map
+>   at all. Per-call matcher construction is 1.3 ms.
+> - **The `kind: "mobile"` observation stands and is worth keeping.** Masking made the
+>   output shaped and left one field unanchored. That is the whole of what any parse-rate
+>   number here claims, then and now.
+
 ## Shadow mode, for real: the gate holds, the audit window is noisier than the design says
 
 `docs/shadow-mode.md` makes four claims that had never been run on hardware: a
@@ -2173,6 +2217,168 @@ inside `traces.db`. `paw-kit report` exited 0 on all seven and created nothing.
   process. Every rate here is a single draw from a distribution with a standard deviation of
   about 0.11.
 
+## Constrained decoding on the backend users run: the null is the result, and the cost was not where it looked
+
+`scripts/measure_constrained_decoding.py` replaces both deleted constrained-decoding
+scripts. It drives the shipped path — `ProgramAsWeightsBackend.infer(adapter, input,
+grammar_constraint=pydantic_to_regex(model, anchors=False))`, which is the same call
+`paw_kit.schema.load` makes — through the public `logits_processor` hook that arrived in
+`programasweights==0.4.6`. Artifact:
+`measurements/constrained-decoding-3080-20260915-185048.json`.
+
+**Setup, and what is real in it.** RTX 3080, `offline=True`, `n_gpu_layers=-1`,
+`programasweights` 0.4.6, `llguidance` 1.8.0, `llama-cpp-python` 0.3.19, numpy 2.5.2,
+vocabulary 151,936 tokens, `INITIAL_LEXER_FUEL=10,000`. Two real compiled adapters,
+`measurements/triage_semantic_agreement-paw-4b-qwen3-0.6b.paw` (whose recorded spec's
+categories match the `Literal` `Triage` exactly) and
+`measurements/phone_extractor-paw-4b-qwen3-0.6b.paw`. **Both are `.paw` manifests present
+on this machine only** — `*.paw` is gitignored, so a fresh clone needs a paid compile for
+any part of this, as for this document's whole existing evidence base. **Zero paid calls,
+zero teacher calls, no network.** Inputs: the 15 `TICKETS` moved out of the deleted
+`measure_schema_real_model.py`, and the committed 60-ticket double-labelled fixture
+`measurements/finetune-triage-tickets.json`. Instrumentation is two wrappers that capture
+and time the constraint object `infer()` builds; neither changes what `infer()` does.
+
+### 1. Constrained versus unconstrained, on an adapter compiled for its own schema
+
+| | 15 `TICKETS` | 60-ticket fixture |
+|---|---|---|
+| byte-identical pairs | **15/15** | **60/60** |
+| discordant pairs | **0** | **0** |
+| valid against the `Literal` `Triage` (both arms) | 15/15 | 60/60 |
+| values inside the `Literal` sets (both arms) | 15/15 | 60/60 |
+| emitted-token counts equal across arms | 15/15 | 60/60 |
+
+**The null is the result, not a failed measurement.** On an adapter compiled for its own
+schema there is nothing for masking to fix, and it fixes nothing. That is the number that
+belongs beside "masking guarantees shape only": it is what the guarantee is worth when the
+model was already going to produce the right shape.
+
+Because the arms are byte-identical, **every per-arm statistic is identical by
+construction**, so the artifact records agreement with the committed teacher labels
+**once**: full exact (all three fields) against `teacher_label_1` is **31/60 (51.7%)**, and
+against `teacher_label_2` **30/60**. That is a property of this adapter and carries no
+information whatsoever about masking. It is not a per-arm comparison and must never be
+quoted as one. (Note for anyone re-deriving it: "32/60" is a *different* statistic — the
+urgency-within-1 figure — and the two have been confused once already.)
+
+### 2. Evidence the constraint is applied at all
+
+Section 1 cannot distinguish an applied constraint from an inert one, so the artifact
+records two signals only a working constraint can produce, and a control where the
+contrast still exists.
+
+| | |
+|---|---|
+| constrained calls | 85 |
+| calls where the processor ran on every generation step | **85/85** |
+| calls with a vacuous masking record (processor never invoked) | **0** |
+| masking steps | 1,878 |
+| steps that masked **zero** logits | **0** |
+| masked per step, triage arms | min 151,570, mean 151,809.0, max 151,935 of 151,936 |
+| masked per step, `Contact` arms | min 5,016, mean 120,638 (phone) / 112,022 (triage) |
+
+A note on the first row, because the obvious phrasing is wrong: the processor invocation
+count is **one more** than the emitted-token count on an EOS-terminated call. The SDK's
+decode loop calls `sample()` once per iteration and breaks *without emitting* when the
+sampled token is EOS, so EOS is generated under the mask and then discarded. "Invocations
+== generated tokens" would fail on every normal call; what is asserted is the relation.
+The emitted count comes from the model's own KV-cache position, not from re-tokenizing the
+returned string.
+
+**Positive controls**, where the contrast survives:
+
+| Control | Constrained | Unconstrained |
+|---|---|---|
+| `Contact` on the phone extractor, 5 inputs | **5/5** valid `Contact` | **0/5** (bare strings like `(555) 666-7777`, and `''` on the no-number input) |
+| `Contact` forced onto the triage adapter, 5 tickets | **5/5** valid `Contact` | **0/5** (well-formed *Triage* JSON) |
+
+The second control is the one to read carefully. Its constrained outputs are valid and
+semantically poor — `{"area_code": 1, "number": "INV-9821", "kind": "unknown"}` for a
+double-billing ticket — and that is the documented evidence for what masking does to
+fail-open: a wrong-but-well-formed answer no longer fails validation, so it no longer
+reaches the teacher. Whitespace as emitted varies between runs; these are illustrative.
+
+### 3. The byte-level property, measured where it can be measured
+
+At the matcher, on `Contact` (which has a free `str` field, unlike `Triage`), under
+llama.cpp's own tokenizer and the vocabulary object the backend built for the loaded
+model:
+
+| State | Result |
+|---|---|
+| at a string-content state | **51/51** lone UTF-8 lead bytes admitted; **0/64** lone continuation bytes; closing `"` allowed (the string may end here) |
+| after consuming one lone lead byte (`0xC3`) | allowed set collapses to **101** tokens: **64/64** continuation bytes, **0** lead bytes, closing `"` **forbidden** |
+| after the character completes (`0xC3 0xA9` = `é`) | closing `"` allowed again |
+| after a complete object | allowed set is exactly `{151645}` (EOS); `is_accepting` and `is_stopped` both true |
+
+This is the direct evidence for the claim that the replacement engine closes the hole the
+character-level FSM had: UTF-8 well-formedness inside a string field is structural here,
+not bolted on.
+
+End to end, a **`U+FFFD` scan** of every returned string in every arm: **0 of 170**
+contain the replacement character.
+
+**What that scan can and cannot prove**, stated because the stronger check is the one a
+reader will assume was made. It can show that no returned string contains the character
+the SDK substitutes for bytes it could not decode. It **cannot** show the generated bytes
+were well-formed UTF-8: the SDK returns `output_bytes.decode("utf-8", errors="replace")`,
+so paw-kit never sees raw token bytes, and a Python `str` is valid Unicode by
+construction — a round-trip check on the returned value *cannot fail* and would be
+recording nothing. It is not airtight in the other direction either: a grammar that
+legitimately admitted the replacement character's own bytes would false-positive. **A
+byte-exact end-to-end check is unavailable** without the SDK exposing its output tokens,
+and none was made.
+
+### 4. Per-token cost — and the reason the first run of this script failed its own budget
+
+| | |
+|---|---|
+| processor time per invocation | **0.640 ms** (median 0.714, max 2.180, n=945) |
+| end to end, constrained | **132.4 ms** per call |
+| end to end, unconstrained | **115.7 ms** per call |
+| emitted tokens per call | 20 |
+| **overhead per generated token** | **0.834 ms** |
+| `roadmap.md` Milestone 2a budget | `<2 ms` per token — **met** |
+| per-call constraint build | 1.301 ms |
+| `llguidance` tokenizer build | 258.93 ms, **once per model** |
+
+**The first run of this script missed that budget by 6.5x, and the engine was not the
+reason.** As first measured: 377.1 ms per constrained call against 114.8 ms unconstrained,
+**13.118 ms per generated token**. The cause was `build_constraint` rebuilding the
+`llguidance` `LLTokenizer` on every call — **249.13 ms of a 251.65 ms build**, against
+1.35 ms for the matcher and its initial mask and 0.01 ms for `grammar_from_regex`. That
+object walks the whole 151,936-token table and depends only on the vocabulary, never on
+the pattern or on any parse state; the design always counted it as a per-model cost
+(*"0.553 s per model: 0.293 s detokenize + 0.260 s tokenizer"*), and the code paid it per
+call.
+
+Why nobody caught it earlier, since this is the kind of thing that should have shown up in
+review: the four Phase 0 rounds that measured cost built the tokenizer **once, outside
+their own probe loops**, and drove their own processor rather than `build_constraint`.
+They were measuring the engine, and the engine was fine. The shipped path's cost had never
+been measured until this script ran. The fix caches the tokenizer on the `Vocabulary`,
+which the backend already builds once per model and evicts with it; the **matcher** stays
+strictly per call, because an `LLMatcher` dies on error. The as-found numbers are kept in
+the artifact's `findings` section.
+
+### What this section does and does not show
+
+- It **does** show that the shipped backend applies the mask on every generation step of
+  every call measured, that the byte-level property holds at the matcher, and that the
+  cost is inside the project's published budget.
+- It **does** show that on an adapter compiled for its own schema, masking changes
+  nothing — and that where an adapter is asked for a schema it was not compiled for,
+  masking produces valid output with wrong values.
+- It **does not** show anything about semantic correctness, in either direction. No number
+  here compares the arms on rightness, and the arms are byte-identical, so no such number
+  could exist on this instrument.
+- It **does not** prove UTF-8 well-formedness end to end. See section 3.
+- **Scope limits**: two adapters, two schemas, one machine, one run, greedy decoding
+  (`temperature=0.0` by SDK default). The 60-ticket fixture's own limitation — its fresh
+  tickets were generated by the same teacher model that labels them — is recorded with the
+  fixture and applies to the agreement figure in section 1.
+
 ## Reproducing
 
 ```bash
@@ -2198,6 +2404,18 @@ uv run python scripts/measure_constrained_decoding_upstream.py --label your-mach
 # teacher API calls; needs the program already in the SDK cache)
 uv run python scripts/measure_shadow_mode.py --label your-machine-name
 ```
+
+> **Note, 2026-09-15 (Track 15).** The constrained-decoding line in the block above is
+> **dead**: `scripts/measure_constrained_decoding_upstream.py` is deleted, along with
+> `scripts/measure_schema_real_model.py`. One script replaces both reproduction paths and
+> drives the shipped backend rather than a private hook or a bare HuggingFace model:
+>
+> ```bash
+> # grammar-constrained decoding through the public 0.4.6 logits_processor hook, on two
+> # real compiled adapters (needs no PAW_API_KEY, makes no network or teacher call --
+> # runs offline against already-cached programs)
+> uv run python scripts/measure_constrained_decoding.py --label your-machine-name
+> ```
 
 **A note on cost, because we went looking and found nothing to report**: the upstream
 `programasweights` SDK has no `/account`, `/usage`, or `/billing` endpoint anywhere in
@@ -2235,6 +2453,17 @@ cluster's policy) — the actual measurement run needs to go through the batch s
 `pip`/`uv` caches and the downloaded base model (~600MB, one-time, in
 `~/.cache/programasweights/`) add up faster than you'd expect on a small quota.
 
+> **Note, 2026-09-15 (Track 15).** The `paw-kit[measure]` extra **no longer exists**. It
+> carried torch, transformers, peft, safetensors and accelerate for one consumer,
+> `scripts/measure_schema_real_model.py`, which is deleted; nothing else in the project
+> imported any of them. The torch-versus-`llama-cpp-python` CUDA conflict described just
+> above is therefore no longer reachable through a paw-kit extra, and the advice in that
+> paragraph now applies only if you install torch yourself into the same environment for
+> some other reason. What the constrained-decoding measurement needs instead is
+> `paw-kit[paw]`, which pulls `llguidance` alongside the SDK — no torch, no GPU compiler
+> toolchain, and prebuilt wheels on Python 3.11-3.13 for Linux (glibc >= 2.31), macOS and
+> Windows.
+
 ---
 
 ## Note, 2026-09-09 (Track 13)
@@ -2257,6 +2486,18 @@ Two consequences for anything in this file that is still load-bearing:
   `--extra torch`).
 
 See `conductor/decisions.md` §3 for why an in-process runtime is out of scope by design.
+
+> **Note, 2026-09-15 (Track 15).** The first bullet above — "**No backend shipped in
+> `paw_kit` applies grammar-constrained decoding**" — was true when it was written and is
+> no longer true. `ProgramAsWeightsBackend` applies it, by default, through the public
+> `logits_processor` hook that shipped in `programasweights==0.4.6` on 2026-09-13. The
+> reasoning in that bullet was sound for its date: the premise it rested on was upstream's
+> public surface, and upstream changed it. `MockPAWBackend` still ignores
+> `grammar_constraint`, and `paw.load` still validates after generation and falls back on
+> failure, both of which the bullet also says and both of which remain true. The second
+> bullet's reproduction instruction (`uv sync --extra measure`) is dead — see the note in
+> "Reproducing" above. `conductor/decisions.md` §2 is amended accordingly; §3 is unchanged
+> and still says why an in-process runtime is out of scope.
 
 ---
 

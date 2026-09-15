@@ -140,8 +140,9 @@ abstain, a schema with every field required, an over-long spec, and examples in 
 form. It is advice, not a gate.
 
 An `Optional`/defaulted field gives the model a representable "not applicable" — it can
-emit `null` — but under grammar-constrained decoding the key itself is still always
-emitted; "optional" means nullable, not omittable.
+emit `null` — but the key itself is still always emitted: "optional" means nullable, not
+omittable. On the real backend that is the default behaviour, not an opt-in, because
+grammar-constrained decoding is on unless you pass `constrained_decoding=False`.
 
 ## Running paw-kit's own suite in both engine configurations
 
