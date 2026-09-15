@@ -2131,3 +2131,62 @@ def test_cd_construction_time_refusal_engine_level_is_constraint_unavailable() -
         build_constraint(pat, vocab)
     except ConstraintUnavailable as exc:
         assert isinstance(exc, PAWSchemaError)
+
+
+
+def test_p10_warn_once_lru_bounded_at_64_evicts_oldest_and_rewarns(
+    key: None, tmp_path: Path
+) -> None:
+    """P-10: `_constraint_unavailable_warned` (keyed on a hash of the pattern text)
+    is an LRU bounded at `_MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS` (64), evicted
+    the same shape as `_functions`. The two existing tests around
+    `_warn_constraint_unavailable_once` cover "same pattern warns once" and
+    "a second, different pattern warns again" -- neither drives enough DISTINCT
+    refused patterns to prove the set is actually *bounded*, only that it is not
+    keyed process-wide. Here: 65 distinct over-budget patterns (one construction-time
+    `ConstraintUnavailable` refusal each, via `_make_over_budget_pattern`) warn once
+    each (65 warnings total) -- then the 65th refusal must have evicted the 1st
+    (nothing repeats, so eviction is strict LRU-by-insertion-order), so re-driving
+    the 1st pattern warns a SECOND time, while the most-recently-seen (65th) pattern
+    does not warn again. A leak here would mean this dict grows without bound on a
+    long-lived instance driven by many distinct schemas."""
+    pytest.importorskip("llguidance")
+    from paw_kit.backend.programasweights import _MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS
+
+    assert _MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS == 64
+
+    sdk = ConstrainedFakeSDK(scripted_output='{"s": "hi"}')
+    backend = ProgramAsWeightsBackend(sdk=sdk)
+    out_path = str(tmp_path / "t.paw")
+    backend.compile("spec", [], out_path)
+    assert backend.applies_grammar_constraint is True
+
+    # 65 distinct patterns: distinct field counts -> distinct rendered regex text,
+    # each refused at construction (fuel exceeded well past the 100,000 budget).
+    patterns = [_make_over_budget_pattern(40 + i) for i in range(65)]
+    assert len(set(patterns)) == 65
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for pat in patterns:
+            result = backend.infer(out_path, "hello", grammar_constraint=pat)
+            assert result != ""
+
+    matching = [
+        w for w in caught
+        if issubclass(w.category, UserWarning)
+        and "grammar-constrained decoding is unavailable" in str(w.message)
+    ]
+    assert len(matching) == 65, f"expected 65 first-sight warnings, got {len(matching)}"
+    assert backend.applies_grammar_constraint is True  # engine still works throughout
+
+    # Bounded at 64: pattern[0] must have been evicted by the time pattern[64] (the
+    # 65th distinct pattern) was inserted, so re-driving pattern[0] warns AGAIN.
+    with pytest.warns(UserWarning, match="grammar-constrained decoding is unavailable"):
+        backend.infer(out_path, "hello", grammar_constraint=patterns[0])
+
+    # The most-recently-seen pattern (patterns[-1]) is still cached and must NOT
+    # warn a second time.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        backend.infer(out_path, "hello", grammar_constraint=patterns[-1])
