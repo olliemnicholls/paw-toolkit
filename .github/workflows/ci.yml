@@ -49,8 +49,29 @@ jobs:
       - name: Run Test Suite with Coverage
         run: uv run pytest --cov=paw_kit --cov-report=term-missing
 
+      # A smoke test that the CLI runs a suite end to end -- NOT an assertion that this
+      # example passes. `examples/date_normalizer/suite.yaml` says in its own comments
+      # "Expect this suite to fail against the mock adapter": its fuzz cases have no answer
+      # key and the mock adapter echoes its input, so `check` correctly exits 1. This step
+      # asserted exit 0, so it could only ever have been green while `check` was reporting
+      # a pass rate it had not computed -- the defect fixed in `paw-test check compared
+      # nothing to expected`. Exit 0 or 1 are both real outcomes here; anything else (2 is
+      # usage/IO, >2 or a traceback is a crash) still fails the build, and the summary line
+      # must appear so that a silent no-op cannot pass.
       - name: Verify CLI Suite Execution
-        run: uv run paw-test check examples/date_normalizer/suite.yaml
+        run: |
+          # `set +e` around the pipeline on purpose: GitHub runs this block under
+          # `bash -e`, which would abort the step on the documented exit 1 before
+          # the status could be read. PIPESTATUS[0] is `check`'s own code, not tee's.
+          set +e
+          uv run paw-test check examples/date_normalizer/suite.yaml | tee /tmp/check.out
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "::error::paw-test check exited $status (expected 0 for a pass or 1 for failed assertions)"
+            exit 1
+          fi
+          grep -q "Pass rate:" /tmp/check.out
 
       - name: Verify Package Distribution Build
         run: uv build
