@@ -26,10 +26,15 @@ from typing import List, Union
 
 import interegular
 from interegular.fsm import anything_else
-import numpy as np
 import pytest
 
+# Both guards must precede every engine-only import below. `numpy` reaches this
+# checkout only through the `paw` extra that also carries `llguidance` (it is that
+# engine's own bitmask helper), so a configuration without the engine has no numpy
+# either -- importing it above this line made the whole module a collection ERROR
+# instead of a skip in exactly the engine-absent configuration CI runs.
 llguidance = pytest.importorskip("llguidance")
+np = pytest.importorskip("numpy")
 
 from pydantic import BaseModel, create_model
 from typing import Literal

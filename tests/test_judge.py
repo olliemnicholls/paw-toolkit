@@ -1,6 +1,7 @@
 """Tests for paw_kit.test.judge and `paw-test judge`."""
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -411,8 +412,12 @@ def test_judge_cli_out_at_a_directory_is_refused_cleanly_C_12(tmp_path: Path) ->
 
     assert result.exit_code == 2
     assert result.exception is None or isinstance(result.exception, SystemExit)
-    assert "is a directory" in result.output
-    assert "--out" in result.output
+    # De-wrapped and de-colorized: Typer renders this usage panel through Rich,
+    # which colorizes on a CI runner and hard-wraps to the ambient console width.
+    # The assertion is about what the error says, not how it is laid out.
+    plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
+    assert "is a directory" in plain
+    assert "--out" in plain
 
 
 def test_judge_cli_exits_2_without_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

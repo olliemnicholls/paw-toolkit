@@ -24,6 +24,23 @@ def strip_ansi(text: str) -> str:
     """
     return _ANSI_RE.sub("", text)
 
+
+def plain(text: str) -> str:
+    """Strip ANSI codes *and* collapse every run of whitespace to a single space.
+
+    Rich hard-wraps to the console width, and under CliRunner that width is the
+    ambient one (80 on a CI runner). Where a wrapped line contains an interpolated
+    path, the break lands at a column that depends on how long that path happens
+    to be -- so a `pytest-of-runner` temp path splits `"... is not valid UTF-8"`
+    across a newline and fails an assertion that passes locally under a shorter
+    username, for no reason connected to what the test is checking.
+
+    Every assertion using this one is about what the CLI *says*, never about how
+    it is laid out, so the fix is to compare against de-wrapped text rather than
+    to pin a width the user's terminal does not have to agree with.
+    """
+    return " ".join(_ANSI_RE.sub("", text).split())
+
 runner = CliRunner()
 
 VALID_SUITE_YAML = """
@@ -54,7 +71,7 @@ def test_cli_check_missing_file() -> None:
     """Verify check exits with code 1 when suite file is missing."""
     result = runner.invoke(app, ["check", "non_existent_suite.yaml"])
     assert result.exit_code == 1
-    assert "does not exist" in result.output
+    assert "does not exist" in plain(result.output)
 
 
 def test_cli_check_invalid_yaml(tmp_path: Path) -> None:
@@ -475,8 +492,10 @@ def test_cli_check_adapter_flag_rejects_path_outside_cwd(tmp_path: Path, monkeyp
 def test_cli_check_help_mentions_adapter_override() -> None:
     result = runner.invoke(app, ["check", "--help"])
     assert result.exit_code == 0
-    assert "--adapter" in result.output
-    assert "adapter_path" in result.output
+    # `plain`, not the raw output: Typer renders its help through Rich, which
+    # colorizes on a CI runner even where the app's own output there is plain.
+    assert "--adapter" in plain(result.output)
+    assert "adapter_path" in plain(result.output)
 
 
 def test_cli_check_rejects_adapter_path_outside_cwd_PAW_CLI_02(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -745,7 +764,7 @@ def test_cli_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Non-existent
     res_empty = runner.invoke(app, ["clean", "--cache-dir", str(cache_dir)])
     assert res_empty.exit_code == 0
-    assert "does not exist" in res_empty.output
+    assert "does not exist" in plain(res_empty.output)
 
     cache_dir.mkdir()
     f1 = cache_dir / "trace.db"
@@ -1805,7 +1824,7 @@ def test_cli_lint_spec_file_rejects_non_utf8_cleanly_C_8(tmp_path: Path):
     result = runner.invoke(app, ["lint-spec", "--file", str(spec_file)])
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
-    assert "not valid UTF-8" in strip_ansi(result.output)
+    assert "not valid UTF-8" in plain(result.output)
 
 
 def test_cli_lint_spec_examples_file_rejects_non_utf8_cleanly_C_8(tmp_path: Path):
@@ -1815,7 +1834,7 @@ def test_cli_lint_spec_examples_file_rejects_non_utf8_cleanly_C_8(tmp_path: Path
     result = runner.invoke(app, ["lint-spec", "do it", "--examples", str(examples_file)])
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
-    assert "not valid UTF-8" in strip_ansi(result.output)
+    assert "not valid UTF-8" in plain(result.output)
 
 
 def test_cli_lint_spec_json_output(tmp_path: Path):
@@ -2126,7 +2145,7 @@ def test_h1_check_refuses_a_missing_adapter_on_the_read_only_path(
         encoding="utf-8",
     )
     result = runner.invoke(paw_test_app, ["check", "suite.yaml"])
-    out = strip_ansi(result.stdout)
+    out = plain(result.stdout)
     assert result.exit_code == 1, out
     assert "does not exist" in out
     # The normal first-compile case is untouched: with auto-recompile on, an absent

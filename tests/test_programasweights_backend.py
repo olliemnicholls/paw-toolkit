@@ -1642,9 +1642,11 @@ def test_d1_honest_availability_and_doctor_routing(key: None, tmp_path: Path) ->
 # only when llguidance is actually importable).
 # ============================================================================
 
+import importlib.util
 import logging
 import math
 import sys
+import types
 
 from paw_kit import load
 from paw_kit.schema.constraint import ConstraintUnavailable
@@ -1822,7 +1824,41 @@ class RejectingFakeSDK(FakeSDK):
         return self.fn
 
 
-def test_cd_masking_effect_end_to_end_via_infer(key: None, tmp_path: Path) -> None:
+@pytest.fixture
+def llama_cpp_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ProgramAsWeightsBackend.infer()` imports `llama_cpp` for one reason: to wrap
+    the built constraint in `LogitsProcessorList` before handing it to the SDK. A real
+    deployment always has it (the SDK bundles it), but CI's engine-present job installs
+    the masking engine *without* the `paw` extra on purpose, so there that import raised
+    `ModuleNotFoundError` and every constrained-decoding test below fell open to the
+    teacher instead of exercising the wiring it exists to check -- leaving the
+    default-on masking path, the one this track found four money-leak routes in,
+    unguarded in the only configuration CI runs.
+
+    With the real module importable this fixture does nothing at all. Without it, a
+    stub supplies the single attribute `infer()` touches. `LogitsProcessorList` is a
+    plain `list` subclass upstream and the fake SDK reads `logits_processor[0]`, so
+    `list` is faithful for what these tests assert -- they are testing our wiring, not
+    llama.cpp. `pytest.importorskip` would have been the smaller change and the wrong
+    one: it turns the CI signal off rather than on.
+    """
+    if importlib.util.find_spec("llama_cpp") is not None:
+        return
+    stub = types.ModuleType("llama_cpp")
+    stub.LogitsProcessorList = list
+    # `monkeypatch.setitem`, not `mock.patch.dict(sys.modules, ...)`: patch.dict
+    # restores the whole mapping on exit, which EVICTS any module first imported
+    # inside the window. `llguidance` is a pyo3 extension that refuses to
+    # initialise twice in one process ("cannot load module more than once per
+    # process"), so evicting it here poisoned whichever later test imported it
+    # next -- a failure that only appeared when the suite ran in its usual random
+    # order, never in isolation. setitem restores exactly this one key.
+    monkeypatch.setitem(sys.modules, "llama_cpp", stub)
+
+
+def test_cd_masking_effect_end_to_end_via_infer(
+    key: None, tmp_path: Path, llama_cpp_present: None
+) -> None:
     """A masking effect, not merely a successful generation (per the track's
     safety invariants: the `Llama.sample()` reuse hazard means every "constraint
     applied" assertion here is on invocation/masked-count, not generation success)."""
@@ -1845,7 +1881,7 @@ def test_cd_masking_effect_end_to_end_via_infer(key: None, tmp_path: Path) -> No
 
 
 def test_cd_prompt_offset_full_generation_returns_local_output_no_fallback(
-    key: None, tmp_path: Path
+    key: None, tmp_path: Path, llama_cpp_present: None
 ) -> None:
     """H-2: a full generation through a fake fn that passes the prompt (the SDK's own
     loop, simulated by `_ConstrainedFakeFn`) returns LOCAL output with no fallback
@@ -2005,7 +2041,7 @@ def test_cd_money_route_iii_b_constraint_raising_every_call_counted_and_warned_o
 
 
 def test_cd_paw_schema_error_reaches_infer_unwrapped_not_runtimeerror(
-    key: None, tmp_path: Path
+    key: None, tmp_path: Path, llama_cpp_present: None
 ) -> None:
     """The safety invariant this whole track hinges the remedy-string rewrite on:
     `infer()` lets `PAWSchemaError` from the constraint through its `RuntimeError`
@@ -2047,7 +2083,7 @@ def _make_over_budget_pattern(n_fields: int) -> str:
 
 
 def test_cd_construction_time_refusal_degrades_per_schema_warns_once_across_calls(
-    key: None, tmp_path: Path
+    key: None, tmp_path: Path, llama_cpp_present: None
 ) -> None:
     """Change 2: a grammar refused AT CONSTRUCTION (`ConstraintUnavailable` -- fuel
     exceeded here) degrades PER SCHEMA, not per call and not per instance: exactly one
@@ -2081,7 +2117,7 @@ def test_cd_construction_time_refusal_degrades_per_schema_warns_once_across_call
 
 
 def test_cd_construction_time_refusal_different_pattern_warns_again_once(
-    key: None, tmp_path: Path
+    key: None, tmp_path: Path, llama_cpp_present: None
 ) -> None:
     """A DIFFERENT refused pattern gets its own warning: the warn-once set is keyed
     per-grammar (a hash of the pattern text), not a single instance-wide latch."""
@@ -2135,7 +2171,7 @@ def test_cd_construction_time_refusal_engine_level_is_constraint_unavailable() -
 
 
 def test_p10_warn_once_lru_bounded_at_64_evicts_oldest_and_rewarns(
-    key: None, tmp_path: Path
+    key: None, tmp_path: Path, llama_cpp_present: None
 ) -> None:
     """P-10: `_constraint_unavailable_warned` (keyed on a hash of the pattern text)
     is an LRU bounded at `_MAX_WARNED_CONSTRAINT_UNAVAILABLE_GRAMMARS` (64), evicted
