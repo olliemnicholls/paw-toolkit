@@ -5,11 +5,12 @@
 A reliability and migration harness for Program-as-Weights (PAW) neural functions.
 
 [![CI](https://github.com/olliemnicholls/paw-toolkit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/olliemnicholls/paw-toolkit/actions/workflows/ci.yml?query=branch%3Amain)
+[![PyPI](https://img.shields.io/pypi/v/paw-kit.svg)](https://pypi.org/project/paw-kit/)
 [![Python Version](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.04199-b31b1b.svg)](https://arxiv.org/abs/2609.04199)
 
-> **Status: early alpha, one maintainer, not on PyPI.** The real backend has been run end
+> **Status: early alpha, one maintainer.** The real backend has been run end
 > to end against the upstream service. The demo and examples run on a deterministic mock,
 > so the workflow can be tried with no GPU and no API key. Every measured number is on the
 > [results page](./docs/results.md).
@@ -56,22 +57,23 @@ The line between what is measured and what is mocked is drawn in
 ## Install
 
 ```bash
-git clone https://github.com/olliemnicholls/paw-toolkit
-cd paw-toolkit
-uv sync                # or: pip install -e .
+pip install paw-kit      # or: uv add paw-kit
+paw-kit demo             # no GPU, no network, no API key
 ```
 
-For a real backend: `uv sync --extra real`, set `PAW_API_KEY`, and run `paw-kit doctor`.
+For a real backend: `pip install 'paw-kit[real]'`, set `PAW_API_KEY`, and run `paw-kit doctor`.
 The PyPI `llama-cpp-python` wheel is CPU-only, which costs ~90x in latency; the first call
 downloads a ~600 MB base model. Details in [`docs/install.md`](./docs/install.md).
 
 ## Try the workflow with no hardware
 
 ```bash
-uv run paw-kit demo                  # ticket triage: trace, threshold, compile, hot-swap
-uv run paw-kit demo --scenario pii   # schema-validated extraction with fallback
-uv run python examples/triage_ticket/run.py
+paw-kit demo                  # ticket triage: trace, threshold, compile, hot-swap
+paw-kit demo --scenario pii   # schema-validated extraction with fallback
 ```
+
+The longer worked examples live in the repository rather than the package, so they need a
+clone: `python examples/triage_ticket/run.py`.
 
 The same thing in code. Compilation triggers at the end of call 3; from call 4 the
 decorator routes to the adapter. The status is printed explicitly because, with the mock,

@@ -1,12 +1,17 @@
 # Install
 
-Not on PyPI yet. From source:
+```bash
+pip install paw-kit    # or: uv add paw-kit
+paw-kit demo           # no GPU, no network, no API key
+```
+
+From source instead, to run the test suite or the measurement scripts:
 
 ```bash
 git clone https://github.com/olliemnicholls/paw-toolkit
 cd paw-toolkit
 uv sync                # or: pip install -e .
-uv run paw-kit demo    # no GPU, no network, no API key
+uv run paw-kit demo
 ```
 
 ## The real backend
@@ -15,7 +20,7 @@ For a real backend, install the `real` extra and get an API key from
 [programasweights.com/settings](https://programasweights.com/settings):
 
 ```bash
-uv sync --extra real   # or: pip install -e '.[real]'
+pip install 'paw-kit[real]'   # from source: uv sync --extra real
 export PAW_API_KEY=paw_sk_...
 ```
 
