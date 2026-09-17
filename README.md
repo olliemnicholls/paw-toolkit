@@ -4,6 +4,7 @@
 
 A reliability and migration harness for Program-as-Weights (PAW) neural functions.
 
+[![CI](https://github.com/olliemnicholls/paw-toolkit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/olliemnicholls/paw-toolkit/actions/workflows/ci.yml?query=branch%3Amain)
 [![Python Version](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.04199-b31b1b.svg)](https://arxiv.org/abs/2609.04199)
